@@ -1,6 +1,3 @@
-# Example production Docker Compose setup for Dagu with OpenTelemetry, Prometheus, and Grafana
-version: "3.9"
-
 services:
   # OpenTelemetry stack for tracing (from docs/features/opentelemetry-testing.md)
   jaeger:
@@ -14,10 +11,11 @@ services:
     image: otel/opentelemetry-collector:latest
     command: ["--config=/etc/otel-collector.yaml"]
     volumes:
-      - ./otel-collector.yaml:/etc/otel-collector.yaml:ro
+      - ./otel-collector.yaml:/etc/otel-collector.yaml
     ports:
       - "4317:4317" # OTLP gRPC
       - "4318:4318" # OTLP HTTP
+      - "8889:8889" # Prometheus exporter
     depends_on:
       - jaeger
     networks: [dagu-net]
@@ -26,7 +24,7 @@ services:
   prometheus:
     image: prom/prometheus:latest
     volumes:
-      - ./prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yml
     ports:
       - "9090:9090"
     depends_on:
@@ -48,7 +46,7 @@ services:
       - "50055:50055"
     volumes:
       - dagu-data:/var/lib/dagu
-      - ./dags:/var/lib/dagu/dags:ro
+      - ./dags:/var/lib/dagu/dags
     networks: [dagu-net]
 
   # Dagu scheduler service (reads DAGs and enqueues runs)
@@ -69,7 +67,7 @@ services:
       - "8090:8090" # Scheduler health
     volumes:
       - dagu-data:/var/lib/dagu
-      - ./dags:/var/lib/dagu/dags:ro
+      - ./dags:/var/lib/dagu/dags
     networks: [dagu-net]
 
   # Dagu web UI / API server
@@ -91,7 +89,7 @@ services:
       - "8080:8080"
     volumes:
       - dagu-data:/var/lib/dagu
-      - ./dags:/var/lib/dagu/dags:ro
+      - ./dags:/var/lib/dagu/dags
     networks: [dagu-net]
 
   # Dagu worker (polls coordinator and executes tasks)
@@ -110,7 +108,7 @@ services:
     volumes:
       - dagu-data:/var/lib/dagu
       # Workers typically don't need DAG definitions, but sharing is harmless
-      - ./dags:/var/lib/dagu/dags:ro
+      - ./dags:/var/lib/dagu/dags
     networks: [dagu-net]
 
   # Grafana: visualize Prometheus metrics
@@ -125,7 +123,7 @@ services:
       - prometheus
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/provisioning:/etc/grafana/provisioning
     networks: [dagu-net]
 
 volumes:

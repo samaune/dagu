@@ -1,0 +1,13 @@
+steps:
+  # Fetch sample users from a public mock API
+  - executor:
+      type: http
+      config:
+        silent: true
+    command: GET https://reqres.in/api/users
+    output: API_RESPONSE
+   
+  # Extract user emails from the JSON response
+  - executor: jq
+    command: '.data[] | .email'
+    script: ${API_RESPONSE}
