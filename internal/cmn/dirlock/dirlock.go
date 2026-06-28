@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dagucloud/dagu/internal/cmn/fileutil"
 )
 
 // Error types for lock operations
@@ -94,6 +96,8 @@ type dirLock struct {
 
 var _ DirLock = (*dirLock)(nil)
 
+const lockOwnerFileName = "owner"
+
 // New creates a new directory lock instance
 func New(directory string, opts *LockOptions) DirLock {
 	// Set default options if not provided
@@ -126,7 +130,7 @@ func (l *dirLock) Heartbeat(_ context.Context) error {
 	}
 
 	// Verify we still own the lock by checking the fence token
-	tokenPath := filepath.Join(l.lockPath, "owner")
+	tokenPath := filepath.Join(l.lockPath, lockOwnerFileName)
 	data, err := os.ReadFile(tokenPath) //nolint:gosec // path is constructed from lock directory, not user input
 	if err != nil {
 		l.isHeld = false
@@ -161,11 +165,11 @@ func (l *dirLock) TryLock() error {
 		// Lock exists, check if it's stale
 		if l.isStaleInfo(info) {
 			// This is detection-based, not prevention-based: two contenders may
-			// both observe a stale lock and one RemoveAll can race with the
+			// both observe a stale lock and one cleanup can race with the
 			// other's new lock creation. The fence token lets us detect ownership
 			// loss on the next Heartbeat/IsHeldByMe check and self-fence safely.
 			// Remove stale lock
-			if err := os.RemoveAll(l.lockPath); err != nil && !os.IsNotExist(err) {
+			if err := removeLockDir(l.lockPath); err != nil && !os.IsNotExist(err) {
 				if isRetryableLockStateError(err) {
 					return ErrLockConflict
 				}
@@ -202,9 +206,9 @@ func (l *dirLock) TryLock() error {
 		hostname = "unknown-host"
 	}
 	token := newFenceToken(hostname)
-	tokenPath := filepath.Join(l.lockPath, "owner")
+	tokenPath := filepath.Join(l.lockPath, lockOwnerFileName)
 	if err := os.WriteFile(tokenPath, []byte(token), 0600); err != nil {
-		_ = os.RemoveAll(l.lockPath)
+		_ = removeLockDir(l.lockPath)
 		return fmt.Errorf("failed to write lock token: %w", err)
 	}
 	l.fenceToken = token
@@ -217,7 +221,8 @@ func isRetryableLockStateError(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "cannot access the file") ||
+	return strings.Contains(msg, "access is denied") ||
+		strings.Contains(msg, "cannot access the file") ||
 		strings.Contains(msg, "sharing violation") ||
 		strings.Contains(msg, "used by another process")
 }
@@ -263,7 +268,7 @@ func (l *dirLock) Unlock() error {
 	}
 
 	// Verify we still own the lock before removing
-	tokenPath := filepath.Join(l.lockPath, "owner")
+	tokenPath := filepath.Join(l.lockPath, lockOwnerFileName)
 	data, err := os.ReadFile(tokenPath) //nolint:gosec // path is constructed from lock directory, not user input
 	if err != nil {
 		l.isHeld = false
@@ -276,7 +281,7 @@ func (l *dirLock) Unlock() error {
 	}
 
 	// We still own the lock — safe to remove.
-	if err := os.RemoveAll(l.lockPath); err != nil && !os.IsNotExist(err) {
+	if err := removeLockDir(l.lockPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove lock directory: %w", err)
 	}
 
@@ -304,7 +309,7 @@ func (l *dirLock) IsHeldByMe() bool {
 	}
 
 	// Verify the fence token still matches
-	tokenPath := filepath.Join(l.lockPath, "owner")
+	tokenPath := filepath.Join(l.lockPath, lockOwnerFileName)
 	data, err := os.ReadFile(tokenPath) //nolint:gosec // path is constructed from lock directory, not user input
 	if err != nil || string(data) != l.fenceToken {
 		l.isHeld = false
@@ -337,10 +342,33 @@ func (l *dirLock) Info() (*LockInfo, error) {
 // ForceUnlock forcibly removes a lock (administrative operation)
 func ForceUnlock(directory string) error {
 	lockPath := filepath.Join(directory, ".dagu_lock")
-	if err := os.RemoveAll(lockPath); err != nil && !os.IsNotExist(err) {
+	if err := removeLockDir(lockPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to force unlock: %w", err)
 	}
 	return nil
+}
+
+func removeLockDir(lockPath string) error {
+	releasedPath := releasedLockPath(lockPath)
+	if err := fileutil.Rename(lockPath, releasedPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	// The live lock name is released after the rename. Cleanup failures should
+	// not keep other lock contenders blocked on a lock this process no longer
+	// owns.
+	_ = fileutil.RemoveAll(releasedPath)
+	return nil
+}
+
+func releasedLockPath(lockPath string) string {
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err == nil {
+		return fmt.Sprintf("%s.releasing.%d.%s", lockPath, os.Getpid(), hex.EncodeToString(suffix[:]))
+	}
+	return fmt.Sprintf("%s.releasing.%d.%d", lockPath, os.Getpid(), time.Now().UnixNano())
 }
 
 // isStaleInfo checks if a lock is stale based on file info

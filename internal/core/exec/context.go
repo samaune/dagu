@@ -9,36 +9,57 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/dagucloud/dagu/internal/cmn/config"
-	"github.com/dagucloud/dagu/internal/cmn/eval"
 	"github.com/dagucloud/dagu/internal/cmn/logger"
 	"github.com/dagucloud/dagu/internal/cmn/stringutil"
+	cmnvalue "github.com/dagucloud/dagu/internal/cmn/value"
 	"github.com/dagucloud/dagu/internal/core"
-	coordinatorv1 "github.com/dagucloud/dagu/proto/coordinator/v1"
+	"github.com/dagucloud/dagu/internal/dagstate"
 )
 
 // Context contains the execution metadata for a dag-run.
 type Context struct {
 	DAGRunID           string
 	RootDAGRun         DAGRunRef
+	AttemptID          string
+	TriggerType        core.TriggerType
+	TriggerActor       string
+	RunStartedAt       string
+	ScheduleTime       string
 	DAG                *core.DAG
 	DB                 Database
 	BaseEnv            *config.BaseEnv
-	EnvScope           *eval.EnvScope // Unified environment scope - THE single source for all env vars
+	EnvScope           *cmnvalue.EnvScope // Unified environment scope for runtime variables
 	CoordinatorCli     Dispatcher
+	DAGRunStore        DAGRunStore
+	QueueStore         QueueStore
+	StateStore         dagstate.Store
+	DAGRunLogDir       string
+	DAGRunArtifactDir  string
+	ProfileName        string
+	ProfileResolvedAt  string
+	ProfileEntries     []RuntimeProfileEntry
 	Shell              string               // Default shell for this DAG (from DAG.Shell)
 	LogEncodingCharset string               // Character encoding for log files (e.g., "utf-8", "shift_jis", "euc-jp")
 	LogWriterFactory   LogWriterFactory     // For remote log streaming (nil = use local files)
 	DefaultExecMode    config.ExecutionMode // Server-level default execution mode (local or distributed)
 }
 
+// RuntimeProfileEntry is non-secret metadata about a profile key injected into a run.
+type RuntimeProfileEntry struct {
+	// Key is the injected environment variable name.
+	Key string `json:"key"`
+	// Kind is the profile entry type, such as variable or secret.
+	Kind string `json:"kind"`
+}
+
 // LogWriterFactory creates log writers for step stdout/stderr.
 // It abstracts where logs are written, allowing for:
 // - Local file-based storage (default)
-// - Remote streaming to coordinator (shared-nothing mode)
+// - Remote streaming to coordinator
 type LogWriterFactory interface {
 	// NewStepWriter creates a writer for a step's log output.
 	// stepName identifies the step, streamType should be StreamTypeStdout or StreamTypeStderr.
@@ -145,6 +166,8 @@ type RunStatus struct {
 	Params string
 	// Outputs is the outputs of the dag-run.
 	Outputs map[string]string
+	// OutputValues contains typed outputs published through stdout.outputs or outputs.write.
+	OutputValues map[string]any
 	// Status is the execution status of the dag-run.
 	Status core.Status
 	// PendingStepRetries contains any step retries that are waiting to be scheduled
@@ -159,6 +182,7 @@ func (r *RunStatus) MarshalJSON() ([]byte, error) {
 		DAGRunID           string             `json:"dagRunId,omitempty"`
 		Params             string             `json:"params,omitempty"`
 		Outputs            map[string]string  `json:"outputs,omitzero"`
+		OutputValues       map[string]any     `json:"outputValues,omitzero"`
 		Status             string             `json:"status"`
 		PendingStepRetries []PendingStepRetry `json:"pendingStepRetries,omitempty"`
 	}{
@@ -166,29 +190,10 @@ func (r *RunStatus) MarshalJSON() ([]byte, error) {
 		DAGRunID:           r.DAGRunID,
 		Params:             r.Params,
 		Outputs:            r.Outputs,
+		OutputValues:       r.OutputValues,
 		Status:             r.Status.String(),
 		PendingStepRetries: r.PendingStepRetries,
 	}, "", "  ")
-}
-
-// Dispatcher defines the interface for coordinator operations
-type Dispatcher interface {
-	// Dispatch sends a task to the coordinator
-	Dispatch(ctx context.Context, task *coordinatorv1.Task) error
-
-	// Cleanup cleans up any resources used by the coordinator client
-	Cleanup(ctx context.Context) error
-
-	// GetDAGRunStatus retrieves the status of a DAG run from the coordinator.
-	// Used by parent DAGs to poll status of remote sub-DAGs.
-	// For sub-DAG queries, provide rootRef to look up the status under the root DAG run.
-	// Returns (nil, nil) if the DAG run is not found.
-	GetDAGRunStatus(ctx context.Context, dagName, dagRunID string, rootRef *DAGRunRef) (*coordinatorv1.GetDAGRunStatusResponse, error)
-
-	// RequestCancel requests cancellation of a DAG run through the coordinator.
-	// Used in shared-nothing mode for sub-DAG cancellation where the parent
-	// worker cannot directly access the sub-DAG's attempt.
-	RequestCancel(ctx context.Context, dagName, dagRunID string, rootRef *DAGRunRef) error
 }
 
 // contextOptions holds optional configuration for NewContext.
@@ -196,14 +201,29 @@ type contextOptions struct {
 	db                 Database
 	rootDAGRun         DAGRunRef
 	params             []string
+	defaultEnvs        []string
 	envs               []string
 	coordinator        Dispatcher
+	defaultSecretEnvs  []string
 	secretEnvs         []string
 	logEncodingCharset string
 	logWriterFactory   LogWriterFactory
 	defaultExecMode    config.ExecutionMode
+	dagRunStore        DAGRunStore
+	queueStore         QueueStore
+	stateStore         dagstate.Store
+	dagRunLogDir       string
+	dagRunArtifactDir  string
+	profileName        string
+	profileResolvedAt  string
+	profileEntries     []RuntimeProfileEntry
 	workDir            string
 	artifactDir        string
+	attemptID          string
+	triggerType        core.TriggerType
+	triggerActor       string
+	runStartedAt       string
+	scheduleTime       string
 }
 
 // ContextOption configures optional parameters for NewContext.
@@ -223,10 +243,52 @@ func WithRootDAGRun(ref DAGRunRef) ContextOption {
 	}
 }
 
+// WithAttemptID sets the DAG-run attempt identifier for value resolution.
+func WithAttemptID(attemptID string) ContextOption {
+	return func(o *contextOptions) {
+		o.attemptID = attemptID
+	}
+}
+
+// WithTriggerType sets the DAG-run trigger type for value resolution.
+func WithTriggerType(triggerType core.TriggerType) ContextOption {
+	return func(o *contextOptions) {
+		o.triggerType = triggerType
+	}
+}
+
+// WithTriggerActor sets the attributable trigger actor for value resolution.
+func WithTriggerActor(actor string) ContextOption {
+	return func(o *contextOptions) {
+		o.triggerActor = actor
+	}
+}
+
+// WithRunStartedAt sets the recorded DAG-run start timestamp for value resolution.
+func WithRunStartedAt(startedAt string) ContextOption {
+	return func(o *contextOptions) {
+		o.runStartedAt = startedAt
+	}
+}
+
+// WithScheduleTime sets the logical schedule time for value resolution.
+func WithScheduleTime(scheduleTime string) ContextOption {
+	return func(o *contextOptions) {
+		o.scheduleTime = scheduleTime
+	}
+}
+
 // WithParams sets runtime parameters.
 func WithParams(params []string) ContextOption {
 	return func(o *contextOptions) {
 		o.params = params
+	}
+}
+
+// WithDefaultEnvVars sets low-precedence inherited environment variables.
+func WithDefaultEnvVars(envs ...string) ContextOption {
+	return func(o *contextOptions) {
+		o.defaultEnvs = append(o.defaultEnvs, envs...)
 	}
 }
 
@@ -241,6 +303,13 @@ func WithEnvVars(envs ...string) ContextOption {
 func WithCoordinator(cli Dispatcher) ContextOption {
 	return func(o *contextOptions) {
 		o.coordinator = cli
+	}
+}
+
+// WithDefaultSecrets sets low-precedence inherited secret environment variables.
+func WithDefaultSecrets(secrets []string) ContextOption {
+	return func(o *contextOptions) {
+		o.defaultSecretEnvs = append([]string(nil), secrets...)
 	}
 }
 
@@ -273,6 +342,41 @@ func WithDefaultExecMode(mode config.ExecutionMode) ContextOption {
 	}
 }
 
+// WithDAGRunStore sets the dag-run store for executors that persist DAG runs.
+func WithDAGRunStore(store DAGRunStore) ContextOption {
+	return func(o *contextOptions) {
+		o.dagRunStore = store
+	}
+}
+
+// WithQueueStore sets the queue store for executors that enqueue DAG runs.
+func WithQueueStore(store QueueStore) ContextOption {
+	return func(o *contextOptions) {
+		o.queueStore = store
+	}
+}
+
+// WithStateStore sets the persistent DAG state store for state actions.
+func WithStateStore(store dagstate.Store) ContextOption {
+	return func(o *contextOptions) {
+		o.stateStore = store
+	}
+}
+
+// WithDAGRunLogDir sets the base log directory for newly persisted DAG runs.
+func WithDAGRunLogDir(dir string) ContextOption {
+	return func(o *contextOptions) {
+		o.dagRunLogDir = dir
+	}
+}
+
+// WithDAGRunArtifactDir sets the base artifact directory for newly persisted DAG runs.
+func WithDAGRunArtifactDir(dir string) ContextOption {
+	return func(o *contextOptions) {
+		o.dagRunArtifactDir = dir
+	}
+}
+
 // WithWorkDir sets the per-DAG-run working directory path.
 func WithWorkDir(dir string) ContextOption {
 	return func(o *contextOptions) {
@@ -284,6 +388,15 @@ func WithWorkDir(dir string) ContextOption {
 func WithArtifactDir(dir string) ContextOption {
 	return func(o *contextOptions) {
 		o.artifactDir = dir
+	}
+}
+
+// WithRuntimeProfile sets the selected profile metadata for this run context.
+func WithRuntimeProfile(name, resolvedAt string, entries []RuntimeProfileEntry) ContextOption {
+	return func(o *contextOptions) {
+		o.profileName = name
+		o.profileResolvedAt = resolvedAt
+		o.profileEntries = append([]RuntimeProfileEntry(nil), entries...)
 	}
 }
 
@@ -303,34 +416,20 @@ func NewContext(
 		opt(options)
 	}
 
-	// Build environment variables
-	envs := map[string]string{
-		EnvKeyDAGRunLogFile: logFile,
-		EnvKeyDAGRunID:      dagRunID,
-		EnvKeyDAGName:       dag.Name,
-	}
+	defaultEnvs := stringutil.KeyValuesToMap(options.defaultEnvs)
+	defaultSecretEnvs := stringutil.KeyValuesToMap(options.defaultSecretEnvs)
+	params := stringutil.KeyValuesToMap(options.params)
+	managedEnvs := buildManagedDAGRunEnvs(ctx, dag, dagRunID, logFile, options)
+	selectedEnvs := stringutil.KeyValuesToMap(options.envs)
 
-	// DAG_DOCS_DIR: per-DAG docs directory from global config
-	cfg := config.GetConfig(ctx)
-	if cfg.Paths.DocsDir != "" {
-		envs[EnvKeyDAGDocsDir] = filepath.Join(cfg.Paths.DocsDir, dag.Name)
-	}
+	baseForDAGEnv := make(map[string]string)
+	maps.Copy(baseForDAGEnv, defaultEnvs)
+	maps.Copy(baseForDAGEnv, defaultSecretEnvs)
+	maps.Copy(baseForDAGEnv, params)
+	maps.Copy(baseForDAGEnv, managedEnvs)
 
-	maps.Copy(envs, stringutil.KeyValuesToMap(options.params))
-	maps.Copy(envs, stringutil.KeyValuesToMap(dag.Env))
-	maps.Copy(envs, stringutil.KeyValuesToMap(options.envs))
-
-	// Set runtime-managed env vars after merges so user-defined params/env cannot override them.
-	if options.workDir != "" {
-		envs[EnvKeyDAGRunWorkDir] = options.workDir
-	}
-	if options.artifactDir != "" {
-		envs[EnvKeyDAGRunArtifactsDir] = options.artifactDir
-	}
-	if dag.ParamsJSON != "" {
-		envs[EnvKeyDAGParamsJSONCompat] = dag.ParamsJSON
-		envs[EnvKeyDAGParamsJSON] = dag.ParamsJSON
-	}
+	runBuiltinContext := buildDAGRunBuiltinContext(dag, dagRunID, managedEnvs, options)
+	evaluatedDAGEnvs := evaluateDAGEnvRuntime(ctx, dag, params, baseForDAGEnv, managedEnvs, runBuiltinContext)
 
 	secretEnvs := stringutil.KeyValuesToMap(options.secretEnvs)
 
@@ -338,29 +437,156 @@ func NewContext(
 	// Seed the lowest-precedence layer from filtered BaseEnv so workflow step
 	// subprocesses stay isolated from arbitrary host env inherited by parent-
 	// spawned dagu start/retry/restart commands.
-	// Precedence (highest to lowest): Secrets > DAG Env > Params > BaseEnv
-	scope := eval.NewEnvScope(nil, false)
+	// Precedence (highest to lowest): secrets > managed run env >
+	// execution env > DAG env > params > defaults > BaseEnv.
+	scope := cmnvalue.NewEnvScope(nil, false)
 	if baseEnv := config.GetBaseEnv(ctx); baseEnv != nil {
-		scope = scope.WithEntries(stringutil.KeyValuesToMap(baseEnv.AsSlice()), eval.EnvSourceOS)
+		scope = scope.WithEntries(stringutil.KeyValuesToMap(baseEnv.AsSlice()), cmnvalue.EnvSourceOS)
 	}
-	scope = scope.WithEntries(envs, eval.EnvSourceDAGEnv)
+	scope = scope.WithEntries(defaultEnvs, cmnvalue.EnvSourceDAGEnv)
+	scope = scope.WithEntries(defaultSecretEnvs, cmnvalue.EnvSourceSecret)
+	scope = scope.WithEntries(params, cmnvalue.EnvSourceParam)
+	scope = scope.WithEntries(managedEnvs, cmnvalue.EnvSourceDAGEnv)
+	scope = scope.WithEntries(evaluatedDAGEnvs, cmnvalue.EnvSourceDAGEnv)
+	scope = scope.WithEntries(selectedEnvs, cmnvalue.EnvSourceDAGEnv)
+	// Managed DAG-run envs are generated by Dagu and must remain stable even
+	// when params, DAG env, or execution-scoped env vars reuse those names.
+	scope = scope.WithEntries(managedEnvs, cmnvalue.EnvSourceDAGEnv)
 	if len(secretEnvs) > 0 {
-		scope = scope.WithEntries(secretEnvs, eval.EnvSourceSecret)
+		scope = scope.WithEntries(secretEnvs, cmnvalue.EnvSourceSecret)
 	}
 
 	return context.WithValue(ctx, dagCtxKey{}, Context{
 		RootDAGRun:         options.rootDAGRun,
+		AttemptID:          options.attemptID,
+		TriggerType:        options.triggerType,
+		TriggerActor:       options.triggerActor,
+		RunStartedAt:       options.runStartedAt,
+		ScheduleTime:       options.scheduleTime,
 		DAG:                dag,
 		DB:                 options.db,
 		EnvScope:           scope,
 		DAGRunID:           dagRunID,
 		BaseEnv:            config.GetBaseEnv(ctx),
 		CoordinatorCli:     options.coordinator,
+		DAGRunStore:        options.dagRunStore,
+		QueueStore:         options.queueStore,
+		StateStore:         options.stateStore,
+		DAGRunLogDir:       options.dagRunLogDir,
+		DAGRunArtifactDir:  options.dagRunArtifactDir,
+		ProfileName:        options.profileName,
+		ProfileResolvedAt:  options.profileResolvedAt,
+		ProfileEntries:     append([]RuntimeProfileEntry(nil), options.profileEntries...),
 		Shell:              dag.Shell,
 		LogEncodingCharset: options.logEncodingCharset,
 		LogWriterFactory:   options.logWriterFactory,
 		DefaultExecMode:    options.defaultExecMode,
 	})
+}
+
+func evaluateDAGEnvRuntime(
+	ctx context.Context,
+	dag *core.DAG,
+	runtimeParams map[string]string,
+	base map[string]string,
+	protected map[string]string,
+	runBuiltinContext cmnvalue.BuiltinContext,
+) map[string]string {
+	var envList []string
+	var params cmnvalue.Values
+	var paramDeclarations cmnvalue.Values
+	if dag != nil {
+		envList = dag.Env
+		params = dag.ParamValues()
+		paramDeclarations = dag.ParamDeclarations()
+	}
+	if len(runtimeParams) > 0 {
+		params = cmnvalue.Values{}
+		for key, value := range runtimeParams {
+			params[key] = value
+		}
+	}
+	if len(envList) == 0 {
+		return nil
+	}
+
+	// DAG env is primarily evaluated during DAG loading. This runtime pass only
+	// resolves values that depend on run-scoped variables unavailable at load time.
+	result := make(map[string]string, len(envList))
+	scope := cmnvalue.NewEnvScope(nil, false)
+	if baseEnv := config.GetBaseEnv(ctx); baseEnv != nil {
+		scope = scope.WithEntries(stringutil.KeyValuesToMap(baseEnv.AsSlice()), cmnvalue.EnvSourceOS)
+	}
+	scope = scope.WithEntries(base, cmnvalue.EnvSourceDAGEnv)
+
+	for _, entry := range envList {
+		key, value, found := strings.Cut(entry, "=")
+		if !found {
+			continue
+		}
+		if _, ok := protected[key]; ok {
+			continue
+		}
+
+		resolver := cmnvalue.NewResolver(
+			cmnvalue.StaticScope{Params: paramDeclarations},
+			cmnvalue.RuntimeScope{Params: params, Env: scope, BuiltinContext: runBuiltinContext},
+		)
+		evaluated, err := resolver.String(ctx, value, cmnvalue.RuntimeDAGEnvField("env."+key))
+		if err != nil {
+			evaluated = value
+		}
+		result[key] = evaluated
+		scope = scope.WithEntry(key, evaluated, cmnvalue.EnvSourceDAGEnv)
+	}
+
+	return result
+}
+
+func buildDAGRunBuiltinContext(
+	dag *core.DAG,
+	dagRunID string,
+	managedEnvs map[string]string,
+	options *contextOptions,
+) cmnvalue.BuiltinContext {
+	values := make(map[string]string)
+	if dag != nil && dag.Name != "" {
+		values["context.dag.name"] = dag.Name
+	}
+	addDAGRunBuiltinValue(values, "context.run.id", dagRunID)
+	addDAGRunBuiltinValue(values, "context.attempt.started_at", options.runStartedAt)
+	addDAGRunBuiltinValue(values, "context.run.scheduled_at", options.scheduleTime)
+	if rootDAGRunContextAvailable(options.rootDAGRun, dag, dagRunID) {
+		addDAGRunBuiltinValue(values, "context.run.root_name", options.rootDAGRun.Name)
+		addDAGRunBuiltinValue(values, "context.run.root_id", options.rootDAGRun.ID)
+	}
+	addDAGRunBuiltinValue(values, "context.attempt.id", options.attemptID)
+	addDAGRunBuiltinValue(values, "context.trigger.type", options.triggerType.String())
+	addDAGRunBuiltinValue(values, "context.trigger.actor", options.triggerActor)
+	addDAGRunBuiltinValue(values, "context.paths.log_file", managedEnvs[EnvKeyDAGRunLogFile])
+	addDAGRunBuiltinValue(values, "context.paths.work_dir", managedEnvs[EnvKeyDAGRunWorkDir])
+	addDAGRunBuiltinValue(values, "context.paths.artifacts_dir", managedEnvs[EnvKeyDAGRunArtifactsDir])
+	addDAGRunBuiltinValue(values, "context.paths.docs_dir", managedEnvs[EnvKeyDAGDocsDir])
+	addDAGRunBuiltinValue(values, "context.profile.name", options.profileName)
+	addDAGRunBuiltinValue(values, "context.profile.resolved_at", options.profileResolvedAt)
+	return cmnvalue.NewBuiltinContext(values)
+}
+
+func rootDAGRunContextAvailable(root DAGRunRef, dag *core.DAG, dagRunID string) bool {
+	if root.Zero() {
+		return false
+	}
+	if dag != nil && root.Name == dag.Name && root.ID == dagRunID {
+		return false
+	}
+	return true
+}
+
+func addDAGRunBuiltinValue(values map[string]string, path, value string) {
+	if value == "" {
+		return
+	}
+	values[path] = value
 }
 
 // WithContext returns a new context with the given DAGContext.
@@ -382,6 +608,19 @@ func GetContext(ctx context.Context) Context {
 		return Context{}
 	}
 	return execEnv
+}
+
+// LookupContext returns the DAGContext when one is present in ctx.
+func LookupContext(ctx context.Context) (Context, bool) {
+	value := ctx.Value(dagCtxKey{})
+	if value == nil {
+		return Context{}, false
+	}
+	execEnv, ok := value.(Context)
+	if !ok {
+		return Context{}, false
+	}
+	return execEnv, true
 }
 
 type dagCtxKey struct{}

@@ -7,12 +7,19 @@ import (
 	"errors"
 
 	"github.com/dagucloud/dagu/internal/cmn/stringutil"
+	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
 	"github.com/dagucloud/dagu/internal/runtime"
 )
 
 // ToNode converts a persistence Node back to a runtime Node
 func ToNode(n *exec.Node) *runtime.Node {
+	return ToNodeWithStep(n, n.Step)
+}
+
+// ToNodeWithStep converts a persistence Node back to a runtime Node using the
+// supplied step definition.
+func ToNodeWithStep(n *exec.Node, step core.Step) *runtime.Node {
 	startedAt, _ := stringutil.ParseTime(n.StartedAt)
 	finishedAt, _ := stringutil.ParseTime(n.FinishedAt)
 	retriedAt, _ := stringutil.ParseTime(n.RetriedAt)
@@ -28,30 +35,37 @@ func ToNode(n *exec.Node) *runtime.Node {
 	if n.Error != "" {
 		err = errors.New(n.Error)
 	}
-	return runtime.NewNode(n.Step, runtime.NodeState{
-		Status:            n.Status,
-		Stdout:            n.Stdout,
-		Stderr:            n.Stderr,
-		StartedAt:         startedAt,
-		FinishedAt:        finishedAt,
-		RetriedAt:         retriedAt,
-		RetryCount:        n.RetryCount,
-		DoneCount:         n.DoneCount,
-		Repeated:          n.Repeated,
-		Error:             err,
-		SubRuns:           children,
-		SubRunsRepeated:   childrenRepeated,
-		OutputVariables:   n.OutputVariables,
-		ChatMessages:      n.ChatMessages,
-		ToolDefinitions:   n.ToolDefinitions,
-		ApprovalInputs:    n.ApprovalInputs,
-		ApprovedAt:        n.ApprovedAt,
-		ApprovedBy:        n.ApprovedBy,
-		RejectedAt:        n.RejectedAt,
-		RejectedBy:        n.RejectedBy,
-		RejectionReason:   n.RejectionReason,
-		ApprovalIteration: n.ApprovalIteration,
-		PushBackInputs:    n.PushBackInputs,
+	return runtime.NewNode(step, runtime.NodeState{
+		Status:                 n.Status,
+		Stdout:                 n.Stdout,
+		Stderr:                 n.Stderr,
+		WorkingDir:             n.WorkingDir,
+		StartedAt:              startedAt,
+		FinishedAt:             finishedAt,
+		RetriedAt:              retriedAt,
+		RetryCount:             n.RetryCount,
+		DoneCount:              n.DoneCount,
+		Repeated:               n.Repeated,
+		SkippedByRetry:         n.SkippedByRetry,
+		Error:                  err,
+		SubRuns:                children,
+		SubRunsRepeated:        childrenRepeated,
+		OutputVariables:        n.OutputVariables,
+		OutputValue:            n.OutputValue,
+		OutputsValue:           n.OutputsValue,
+		StepOutputsValue:       n.StepOutputsValue,
+		ChatMessages:           n.ChatMessages,
+		ToolDefinitions:        n.ToolDefinitions,
+		ApprovalInputs:         n.ApprovalInputs,
+		ApprovedAt:             n.ApprovedAt,
+		ApprovedBy:             n.ApprovedBy,
+		RejectedAt:             n.RejectedAt,
+		RejectedBy:             n.RejectedBy,
+		RejectionReason:        n.RejectionReason,
+		ApprovalIteration:      n.ApprovalIteration,
+		PushBackInputs:         n.PushBackInputs,
+		PushBackHistory:        exec.ClonePushBackHistory(n.PushBackHistory),
+		PushBackPreviousStdout: n.PushBackPreviousStdout,
 	})
 }
 
@@ -70,29 +84,36 @@ func newNode(node runtime.NodeData) *exec.Node {
 		childrenRepeated[i] = exec.SubDAGRun(child)
 	}
 	return &exec.Node{
-		Step:              node.Step,
-		Stdout:            node.State.Stdout,
-		Stderr:            node.State.Stderr,
-		StartedAt:         stringutil.FormatTime(node.State.StartedAt),
-		FinishedAt:        stringutil.FormatTime(node.State.FinishedAt),
-		Status:            node.State.Status,
-		RetriedAt:         stringutil.FormatTime(node.State.RetriedAt),
-		RetryCount:        node.State.RetryCount,
-		DoneCount:         node.State.DoneCount,
-		Repeated:          node.State.Repeated,
-		Error:             errText,
-		SubRuns:           children,
-		SubRunsRepeated:   childrenRepeated,
-		OutputVariables:   node.State.OutputVariables,
-		ChatMessages:      node.State.ChatMessages,
-		ToolDefinitions:   node.State.ToolDefinitions,
-		ApprovalInputs:    node.State.ApprovalInputs,
-		ApprovedAt:        node.State.ApprovedAt,
-		ApprovedBy:        node.State.ApprovedBy,
-		RejectedAt:        node.State.RejectedAt,
-		RejectedBy:        node.State.RejectedBy,
-		RejectionReason:   node.State.RejectionReason,
-		ApprovalIteration: node.State.ApprovalIteration,
-		PushBackInputs:    node.State.PushBackInputs,
+		Step:                   node.Step,
+		Stdout:                 node.State.Stdout,
+		Stderr:                 node.State.Stderr,
+		WorkingDir:             node.State.WorkingDir,
+		StartedAt:              stringutil.FormatTime(node.State.StartedAt),
+		FinishedAt:             stringutil.FormatTime(node.State.FinishedAt),
+		Status:                 node.State.Status,
+		RetriedAt:              stringutil.FormatTime(node.State.RetriedAt),
+		RetryCount:             node.State.RetryCount,
+		DoneCount:              node.State.DoneCount,
+		Repeated:               node.State.Repeated,
+		SkippedByRetry:         node.State.SkippedByRetry,
+		Error:                  errText,
+		SubRuns:                children,
+		SubRunsRepeated:        childrenRepeated,
+		OutputVariables:        node.State.OutputVariables,
+		OutputValue:            node.State.OutputValue,
+		OutputsValue:           node.State.OutputsValue,
+		StepOutputsValue:       node.State.StepOutputsValue,
+		ChatMessages:           node.State.ChatMessages,
+		ToolDefinitions:        node.State.ToolDefinitions,
+		ApprovalInputs:         node.State.ApprovalInputs,
+		ApprovedAt:             node.State.ApprovedAt,
+		ApprovedBy:             node.State.ApprovedBy,
+		RejectedAt:             node.State.RejectedAt,
+		RejectedBy:             node.State.RejectedBy,
+		RejectionReason:        node.State.RejectionReason,
+		ApprovalIteration:      node.State.ApprovalIteration,
+		PushBackInputs:         node.State.PushBackInputs,
+		PushBackHistory:        exec.ClonePushBackHistory(node.State.PushBackHistory),
+		PushBackPreviousStdout: node.State.PushBackPreviousStdout,
 	}
 }

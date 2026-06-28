@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dagucloud/dagu/internal/cmn/fileutil"
 	"github.com/dagucloud/dagu/internal/cmn/logger"
 	"github.com/dagucloud/dagu/internal/cmn/logger/tag"
 	"github.com/dagucloud/dagu/internal/core"
@@ -42,7 +43,7 @@ type sqlExecutor struct {
 	stderr          io.Writer
 	cancelFunc      context.CancelFunc
 	advisoryRelease func() error
-	useGlobalPool   bool // true if using global pool manager (shared-nothing mode)
+	useGlobalPool   bool // true if using global pool manager
 	closed          bool // guard against double-close
 }
 
@@ -70,13 +71,11 @@ func newSQLExecutor(ctx context.Context, step core.Step, driverName string) (exe
 		return nil, fmt.Errorf("failed to parse sql config: %w", err)
 	}
 
-	// Check for global pool manager (shared-nothing mode)
 	var connMgr *ConnectionManager
 	var poolManager *GlobalPoolManager
 	var useGlobalPool bool
 
 	if pm := GetPoolManager(ctx); pm != nil && driverName == "postgres" {
-		// Use global pool for PostgreSQL in shared-nothing mode
 		db, err := pm.GetOrCreatePool(ctx, driver, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get pool from global manager: %w", err)
@@ -294,7 +293,7 @@ func (e *sqlExecutor) getQuery() (string, error) {
 		// Handle file:// prefix for external SQL files
 		if after, ok := strings.CutPrefix(e.step.Script, "file://"); ok {
 			filePath := after
-			content, err := os.ReadFile(filePath)
+			content, err := fileutil.ReadFile(filePath)
 			if err != nil {
 				return "", fmt.Errorf("failed to read sql file %q: %w", filePath, err)
 			}
@@ -515,16 +514,16 @@ func (e *sqlExecutor) executeSelectQuery(ctx context.Context, qe QueryExecutor, 
 					err = fmt.Errorf("failed to close output file: %w", closeErr)
 				}
 				// Try to remove temp file on close failure
-				_ = os.Remove(tmpFile)
+				_ = fileutil.Remove(tmpFile)
 				return
 			}
 			// Atomic rename only if close succeeded
-			if renameErr := os.Rename(tmpFile, e.cfg.OutputFile); renameErr != nil {
+			if renameErr := fileutil.ReplaceFile(tmpFile, e.cfg.OutputFile); renameErr != nil {
 				if err == nil {
 					err = fmt.Errorf("failed to rename output file: %w", renameErr)
 				}
 				// Try to remove temp file on rename failure
-				_ = os.Remove(tmpFile)
+				_ = fileutil.Remove(tmpFile)
 			}
 		}()
 		output = outputFile

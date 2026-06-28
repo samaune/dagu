@@ -12,35 +12,47 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dagucloud/dagu/api/v1"
 	"github.com/dagucloud/dagu/internal/agent"
 	"github.com/dagucloud/dagu/internal/agentoauth"
+	"github.com/dagucloud/dagu/internal/agentsnapshot"
 	"github.com/dagucloud/dagu/internal/auth"
 	"github.com/dagucloud/dagu/internal/cmn/config"
-	"github.com/dagucloud/dagu/internal/cmn/eval"
 	"github.com/dagucloud/dagu/internal/cmn/logger"
 	"github.com/dagucloud/dagu/internal/cmn/logger/tag"
+	cmnvalue "github.com/dagucloud/dagu/internal/cmn/value"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/baseconfig"
 	"github.com/dagucloud/dagu/internal/core/exec"
+	"github.com/dagucloud/dagu/internal/dagsettings"
+	incidentmodel "github.com/dagucloud/dagu/internal/incident"
+	"github.com/dagucloud/dagu/internal/launcher"
 	"github.com/dagucloud/dagu/internal/license"
+	notificationmodel "github.com/dagucloud/dagu/internal/notification"
+	profilepkg "github.com/dagucloud/dagu/internal/profile"
 	"github.com/dagucloud/dagu/internal/remotenode"
 	"github.com/dagucloud/dagu/internal/runtime"
+	secretpkg "github.com/dagucloud/dagu/internal/secret"
 	"github.com/dagucloud/dagu/internal/service/audit"
 	authservice "github.com/dagucloud/dagu/internal/service/auth"
 	"github.com/dagucloud/dagu/internal/service/coordinator"
 	"github.com/dagucloud/dagu/internal/service/eventstore"
 	"github.com/dagucloud/dagu/internal/service/frontend/api/pathutil"
 	frontendauth "github.com/dagucloud/dagu/internal/service/frontend/auth"
+	incidentservice "github.com/dagucloud/dagu/internal/service/incident"
+	notificationservice "github.com/dagucloud/dagu/internal/service/notification"
 	"github.com/dagucloud/dagu/internal/service/resource"
 	"github.com/dagucloud/dagu/internal/service/scheduler"
 	"github.com/dagucloud/dagu/internal/tunnel"
+	"github.com/dagucloud/dagu/internal/view"
 	"github.com/dagucloud/dagu/internal/workspace"
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	oapimiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -48,40 +60,82 @@ import (
 var _ api.StrictServerInterface = (*API)(nil)
 
 type API struct {
-	dagStore            exec.DAGStore
-	dagRunStore         exec.DAGRunStore
-	dagRunMgr           runtime.Manager
-	queueStore          exec.QueueStore
-	procStore           exec.ProcStore
-	dagRunLeaseStore    exec.DAGRunLeaseStore
-	remoteNodeResolver  *remotenode.Resolver
-	remoteNodeStore     remotenode.Store
-	logEncodingCharset  string
-	config              *config.Config
-	metricsRegistry     *prometheus.Registry
-	coordinatorCli      coordinator.Client
-	serviceRegistry     exec.ServiceRegistry
-	subCmdBuilder       *runtime.SubCmdBuilder
-	resourceService     *resource.Service
-	authService         AuthService
-	auditService        *audit.Service
-	eventService        *eventstore.Service
-	syncService         SyncService
-	tunnelService       *tunnel.Service
-	defaultExecMode     config.ExecutionMode
-	dagWritesDisabled   bool // True when git sync read-only mode is active
-	agentConfigStore    agent.ConfigStore
-	agentModelStore     agent.ModelStore
-	agentMemoryStore    agent.MemoryStore
-	agentSoulStore      agent.SoulStore
-	agentOAuthManager   *agentoauth.Manager
-	agentAPI            *agent.API
-	docStore            agent.DocStore
-	baseConfigStore     baseconfig.Store
-	licenseManager      *license.Manager
-	workspaceStore      workspace.Store
-	leaseStaleThreshold time.Duration
-	schedulerStateStore scheduler.WatermarkStore
+	dagStore             exec.DAGStore
+	dagRunStore          exec.DAGRunStore
+	dagRunMgr            runtime.Manager
+	queueStore           exec.QueueStore
+	procStore            exec.ProcStore
+	dagRunLeaseStore     exec.DAGRunLeaseStore
+	workerHeartbeatStore exec.WorkerHeartbeatStore
+	remoteNodeResolver   *remotenode.Resolver
+	remoteNodeStore      remotenode.Store
+	logEncodingCharset   string
+	config               *config.Config
+	metricsRegistry      *prometheus.Registry
+	coordinatorCli       coordinator.Client
+	serviceRegistry      exec.ServiceRegistry
+	subCmdBuilder        *launcher.SubCmdBuilder
+	resourceService      *resource.Service
+	authService          AuthService
+	auditService         *audit.Service
+	eventService         *eventstore.Service
+	incidentService      IncidentService
+	notificationService  NotificationService
+	syncService          SyncService
+	tunnelService        *tunnel.Service
+	defaultExecMode      config.ExecutionMode
+	dagWritesDisabled    bool // True when git sync read-only mode is active
+	agentConfigStore     agent.ConfigStore
+	agentModelStore      agent.ModelStore
+	agentMemoryStore     agent.MemoryStore
+	agentSoulStore       agent.SoulStore
+	agentOAuthManager    *agentoauth.Manager
+	agentAPI             *agent.API
+	docStore             agent.DocStore
+	baseConfigStore      baseconfig.Store
+	dagSettingsStore     dagsettings.Store
+	secretStore          secretpkg.Store
+	profileStore         profilepkg.Store
+	viewStore            view.Store
+	licenseManager       *license.Manager
+	apiKeyCreateMu       sync.Mutex
+	workspaceStore       workspace.Store
+	leaseStaleThreshold  time.Duration
+	schedulerStateStore  scheduler.WatermarkStore
+	dagMutationNotifier  func(fileName string)
+	docMutationNotifier  func()
+	snapshotStoreFactory agentsnapshot.StoreFactory
+	baseConfigFactory    WorkspaceBaseConfigStoreFactory
+}
+
+type WorkspaceBaseConfigStoreFactory func(dagsDir, workspaceName string) (baseconfig.Store, error)
+
+type NotificationService interface {
+	GetByDAGName(ctx context.Context, dagName string) (*notificationmodel.Settings, error)
+	Save(ctx context.Context, settings *notificationmodel.Settings, updatedBy string) (*notificationmodel.Settings, error)
+	DeleteByDAGName(ctx context.Context, dagName string) error
+	GetWorkspaceSettings(ctx context.Context) (*notificationmodel.WorkspaceSettings, error)
+	SaveWorkspaceSettings(ctx context.Context, settings *notificationmodel.WorkspaceSettings, updatedBy string) (*notificationmodel.WorkspaceSettings, error)
+	GetRouteSet(ctx context.Context, scope notificationmodel.RouteScope, workspace string) (*notificationmodel.RouteSet, error)
+	ListRouteSets(ctx context.Context) ([]*notificationmodel.RouteSet, error)
+	SaveRouteSet(ctx context.Context, routeSet *notificationmodel.RouteSet, updatedBy string) (*notificationmodel.RouteSet, error)
+	ListChannels(ctx context.Context) ([]*notificationmodel.Channel, error)
+	GetChannel(ctx context.Context, channelID string) (*notificationmodel.Channel, error)
+	SaveChannel(ctx context.Context, channel *notificationmodel.Channel, updatedBy string) (*notificationmodel.Channel, error)
+	DeleteChannel(ctx context.Context, channelID string) error
+	SendTest(ctx context.Context, dagName, targetID string, eventType eventstore.EventType) ([]notificationservice.TestResult, error)
+}
+
+type IncidentService interface {
+	ListProviders(ctx context.Context) ([]*incidentmodel.Provider, error)
+	GetProvider(ctx context.Context, providerID string) (*incidentmodel.Provider, error)
+	SaveProvider(ctx context.Context, provider *incidentmodel.Provider, updatedBy string) (*incidentmodel.Provider, error)
+	DeleteProvider(ctx context.Context, providerID string) error
+	GetPolicySet(ctx context.Context, scope incidentmodel.PolicyScope, workspaceName, dagName string) (*incidentmodel.PolicySet, error)
+	ListPolicySets(ctx context.Context) ([]*incidentmodel.PolicySet, error)
+	SavePolicySet(ctx context.Context, policySet *incidentmodel.PolicySet, updatedBy string) (*incidentmodel.PolicySet, error)
+	DeletePolicySet(ctx context.Context, scope incidentmodel.PolicyScope, workspaceName, dagName string) error
+	SendProviderTest(ctx context.Context, providerID string) (*incidentservice.TestResult, error)
 }
 
 // AuthService defines the interface for authentication operations.
@@ -111,6 +165,11 @@ type AuthService interface {
 	ListWebhooks(ctx context.Context) ([]*auth.Webhook, error)
 	DeleteWebhook(ctx context.Context, dagName string) error
 	RegenerateWebhookToken(ctx context.Context, dagName string) (*authservice.CreateWebhookResult, error)
+	EnableWebhookHMAC(ctx context.Context, dagName string, authMode auth.WebhookAuthMode, enforcementMode auth.WebhookHMACEnforcementMode) (*authservice.WebhookHMACSecretResult, error)
+	ConfigureWebhookHMAC(ctx context.Context, dagName string, authMode auth.WebhookAuthMode, enforcementMode auth.WebhookHMACEnforcementMode) (*auth.Webhook, error)
+	RegenerateWebhookHMACSecret(ctx context.Context, dagName string) (*authservice.WebhookHMACSecretResult, error)
+	DisableWebhookHMAC(ctx context.Context, dagName string) (*auth.Webhook, error)
+	AuthorizeWebhookRequest(ctx context.Context, dagName, token, signature string, body []byte) (*auth.Webhook, error)
 	ToggleWebhook(ctx context.Context, dagName string, enabled bool) (*auth.Webhook, error)
 	ValidateWebhookToken(ctx context.Context, dagName, token string) (*auth.Webhook, error)
 	HasWebhookStore() bool
@@ -143,6 +202,18 @@ func WithEventService(es *eventstore.Service) APIOption {
 	}
 }
 
+func WithNotificationService(ns NotificationService) APIOption {
+	return func(a *API) {
+		a.notificationService = ns
+	}
+}
+
+func WithIncidentService(is IncidentService) APIOption {
+	return func(a *API) {
+		a.incidentService = is
+	}
+}
+
 // WithSyncService returns an APIOption that sets the API's SyncService.
 func WithSyncService(ss SyncService) APIOption {
 	return func(a *API) {
@@ -161,6 +232,46 @@ func WithTunnelService(ts *tunnel.Service) APIOption {
 func WithBaseConfigStore(store baseconfig.Store) APIOption {
 	return func(a *API) {
 		a.baseConfigStore = store
+	}
+}
+
+func WithWorkspaceBaseConfigStoreFactory(factory WorkspaceBaseConfigStoreFactory) APIOption {
+	return func(a *API) {
+		a.baseConfigFactory = factory
+	}
+}
+
+func WithSnapshotStoreFactory(factory agentsnapshot.StoreFactory) APIOption {
+	return func(a *API) {
+		a.snapshotStoreFactory = factory
+	}
+}
+
+// WithSecretStore returns an APIOption that sets the secret registry store.
+func WithSecretStore(store secretpkg.Store) APIOption {
+	return func(a *API) {
+		a.secretStore = store
+	}
+}
+
+// WithProfileStore returns an APIOption that sets the runtime profile store.
+func WithProfileStore(store profilepkg.Store) APIOption {
+	return func(a *API) {
+		a.profileStore = store
+	}
+}
+
+// WithViewStore returns an APIOption that sets the saved view store.
+func WithViewStore(store view.Store) APIOption {
+	return func(a *API) {
+		a.viewStore = store
+	}
+}
+
+// WithDAGSettingsStore returns an APIOption that sets the DAG settings store.
+func WithDAGSettingsStore(store dagsettings.Store) APIOption {
+	return func(a *API) {
+		a.dagSettingsStore = store
 	}
 }
 
@@ -241,10 +352,34 @@ func WithSchedulerStateStore(store scheduler.WatermarkStore) APIOption {
 	}
 }
 
+// WithDAGMutationNotifier returns an APIOption that is called after successful
+// DAG definition mutations that should invalidate live DAG views.
+func WithDAGMutationNotifier(fn func(fileName string)) APIOption {
+	return func(a *API) {
+		a.dagMutationNotifier = fn
+	}
+}
+
+// WithDocMutationNotifier returns an APIOption that is called after successful
+// document mutations that should invalidate live document views.
+func WithDocMutationNotifier(fn func()) APIOption {
+	return func(a *API) {
+		a.docMutationNotifier = fn
+	}
+}
+
 // WithDAGRunLeaseStore sets the shared distributed run lease store.
 func WithDAGRunLeaseStore(store exec.DAGRunLeaseStore) APIOption {
 	return func(a *API) {
 		a.dagRunLeaseStore = store
+	}
+}
+
+// WithWorkerHeartbeatStore sets the shared worker heartbeat store used for
+// conservative distributed run auto-repair on single-run reads.
+func WithWorkerHeartbeatStore(store exec.WorkerHeartbeatStore) APIOption {
+	return func(a *API) {
+		a.workerHeartbeatStore = store
 	}
 }
 
@@ -287,7 +422,7 @@ func New(
 		procStore:           ps,
 		dagRunMgr:           drm,
 		logEncodingCharset:  cfg.UI.LogEncodingCharset,
-		subCmdBuilder:       runtime.NewSubCmdBuilder(cfg),
+		subCmdBuilder:       launcher.NewSubCmdBuilder(cfg),
 		config:              cfg,
 		coordinatorCli:      cc,
 		serviceRegistry:     sr,
@@ -300,12 +435,38 @@ func New(
 	for _, opt := range opts {
 		opt(a)
 	}
+	a.requireValidBaseConfigWiring()
 
 	// Set read-only mode flag based on git sync config
 	// When enabled with push disabled, DAG write operations are blocked
 	a.dagWritesDisabled = cfg.GitSync.Enabled && !cfg.GitSync.PushEnabled
 
 	return a
+}
+
+func (a *API) requireValidBaseConfigWiring() {
+	if a.baseConfigStore != nil && a.baseConfigFactory == nil {
+		panic("api: workspace base config store factory must be configured when base config store is configured")
+	}
+}
+
+func (a *API) notifyDAGMutation(fileName string) {
+	if a.dagMutationNotifier != nil {
+		a.dagMutationNotifier(fileName)
+	}
+}
+
+func (a *API) notifyDocMutation() {
+	if a.docMutationNotifier != nil {
+		a.docMutationNotifier()
+	}
+}
+
+func (a *API) webhookMaxPayloadSize() int {
+	if a.config == nil || a.config.Webhooks.MaxPayloadSize <= 0 {
+		return config.DefaultWebhookMaxPayloadSize
+	}
+	return a.config.Webhooks.MaxPayloadSize
 }
 
 func (a *API) ConfigureRoutes(ctx context.Context, r chi.Router) error {
@@ -324,11 +485,16 @@ func (a *API) ConfigureRoutes(ctx context.Context, r chi.Router) error {
 		return err
 	}
 
+	loginPath := pathutil.BuildPublicEndpointPath(mountedAPIPath, "auth/login")
+
 	r.Group(func(r chi.Router) {
+		r.Use(a.restAuditSeedMiddleware())
 		r.Use(frontendauth.ClientIPMiddleware())
+		r.Use(frontendauth.LoginRateLimitMiddleware(loginPath))
 		r.Use(frontendauth.Middleware(authOptions))
+		r.Use(a.restAuditSubjectMiddleware())
 		r.Use(WithRemoteNode(a.remoteNodeResolver, mountedAPIPath))
-		r.Use(WebhookRawBodyMiddleware())
+		r.Use(WebhookRequestContextMiddleware(a.webhookMaxPayloadSize()))
 
 		middlewares := []api.StrictMiddlewareFunc{validateDAGFileNameMiddleware}
 		options := api.StrictHTTPServerOptions{
@@ -339,6 +505,112 @@ func (a *API) ConfigureRoutes(ctx context.Context, r chi.Router) error {
 	})
 
 	return nil
+}
+
+func (a *API) restAuditSeedMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			source := &audit.SourceContext{
+				Source:        "rest",
+				Surface:       string(auth.APIKeySurfaceREST),
+				RequestID:     uuid.NewString(),
+				CorrelationID: uuid.NewString(),
+				Transport:     "http",
+			}
+			next.ServeHTTP(w, r.WithContext(audit.WithSourceContext(r.Context(), source)))
+		})
+	}
+}
+
+func (a *API) restAuditSubjectMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			auditCtx := withRESTAuditCredentialContext(r.Context(), nil, restCredentialTypeFromRequest(r))
+			if apiKey, ok := auth.APIKeyFromContext(auditCtx); ok {
+				if user, ok := auth.UserForAPIKeyAttribution(apiKey); ok {
+					auditCtx = auth.WithUser(auditCtx, user)
+				}
+			}
+			next.ServeHTTP(w, r.WithContext(auditCtx))
+		})
+	}
+}
+
+func withRESTAuditCredentialContext(ctx context.Context, deniedAPIKey *auth.APIKey, credentialType string) context.Context {
+	source, ok := audit.SourceContextFromContext(ctx)
+	if !ok || source == nil {
+		source = &audit.SourceContext{
+			Source:        "rest",
+			Surface:       string(auth.APIKeySurfaceREST),
+			RequestID:     uuid.NewString(),
+			CorrelationID: uuid.NewString(),
+			Transport:     "http",
+		}
+	}
+	if user, ok := auth.UserFromContext(ctx); ok && user != nil {
+		source.SubjectID = user.ID
+		source.SubjectName = user.Username
+		source.SubjectType = "user"
+	}
+	apiKey := deniedAPIKey
+	if apiKey == nil {
+		apiKey, _ = auth.APIKeyFromContext(ctx)
+	}
+	if apiKey != nil {
+		audit.ApplyAPIKeyCredential(source, apiKey)
+	} else if source.CredentialType == "" {
+		if credentialType == "" {
+			credentialType = "none"
+		}
+		source.CredentialType = credentialType
+	}
+	return audit.WithSourceContext(ctx, source)
+}
+
+func (a *API) logRESTAuthDenied(r *http.Request, reason string, apiKey *auth.APIKey) {
+	if a == nil || r == nil {
+		return
+	}
+	credentialType := restCredentialTypeFromRequest(r)
+	ctx := withRESTAuditCredentialContext(r.Context(), apiKey, credentialType)
+	if user, ok := auth.UserForAPIKeyAttribution(apiKey); ok {
+		ctx = auth.WithUser(ctx, user)
+	}
+	category := audit.CategorySystem
+	action := "auth_request_denied"
+	if apiKey != nil || credentialType == "api_key" || reason == frontendauth.DenialReasonAPIKeySurfaceDenied {
+		category = audit.CategoryAPIKey
+		action = "api_key_request_denied"
+	}
+	a.LogAudit(ctx, category, action, map[string]any{
+		"result":        "denied",
+		"denial_reason": reason,
+		"resource_type": "rest_request",
+		"resource_id":   r.URL.Path,
+		"http_method":   r.Method,
+	})
+}
+
+func restCredentialTypeFromRequest(r *http.Request) string {
+	if r == nil {
+		return "none"
+	}
+	if _, _, ok := r.BasicAuth(); ok {
+		return "basic"
+	}
+	authHeader := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if !strings.HasPrefix(authHeader, prefix) {
+		return "none"
+	}
+	token := strings.TrimPrefix(authHeader, prefix)
+	if strings.HasPrefix(token, "dagu_") {
+		return "api_key"
+	}
+	if token != "" {
+		return "jwt"
+	}
+	return "none"
 }
 
 func validateDAGFileNameMiddleware(
@@ -385,7 +657,8 @@ func validateDAGFileNameFromRequest(request any) error {
 
 func (a *API) evaluateBasePath(ctx context.Context) string {
 	basePath := a.config.Server.BasePath
-	if evaluated, err := eval.String(ctx, basePath, eval.WithOSExpansion()); err != nil {
+	resolver := cmnvalue.NewResolver(cmnvalue.StaticScope{}, cmnvalue.RuntimeScope{})
+	if evaluated, err := resolver.String(ctx, basePath, cmnvalue.ServerBasePathField("server.base_path")); err != nil {
 		logger.Warn(ctx, "Failed to evaluate server base path",
 			tag.Path(basePath),
 			tag.Error(err))
@@ -451,9 +724,11 @@ func (a *API) buildAuthOptions(mountedAPIPath string) (frontendauth.Options, err
 	}
 
 	authOptions := frontendauth.Options{
-		Realm:        "restricted",
-		AuthRequired: true,
-		PublicPaths:  publicPaths,
+		Realm:                 "restricted",
+		AuthRequired:          true,
+		RequiredAPIKeySurface: auth.APIKeySurfaceREST,
+		OnDenied:              a.logRESTAuthDenied,
+		PublicPaths:           publicPaths,
 		PublicPathPrefixes: []string{
 			pathutil.BuildPublicEndpointPath(mountedAPIPath, "webhooks") + "/",
 		},
@@ -613,6 +888,11 @@ var (
 		Code:       api.ErrorCodeForbidden,
 		Message:    "Audit logs require a Dagu Pro license",
 	}
+	errIncidentManagementNotLicensed = &Error{
+		HTTPStatus: http.StatusForbidden,
+		Code:       api.ErrorCodeForbidden,
+		Message:    "Incident providers and policies require an active Dagu license or trial",
+	}
 )
 
 // requireDAGWrite checks all permissions for DAG write operations:
@@ -634,22 +914,6 @@ func (a *API) requireDAGWrite(ctx context.Context) error {
 	}
 	if a.dagWritesDisabled {
 		return errDAGWritesDisabled
-	}
-	return nil
-}
-
-// requireExecute checks if the current user can execute (run/stop) DAGs.
-// Returns nil if auth is not enabled (authService is nil).
-func (a *API) requireExecute(ctx context.Context) error {
-	if a.authService == nil {
-		return nil
-	}
-	user, ok := auth.UserFromContext(ctx)
-	if !ok {
-		return errAuthRequired
-	}
-	if !user.Role.CanExecute() {
-		return errInsufficientPermissions
 	}
 	return nil
 }
@@ -684,6 +948,16 @@ func (a *API) requireLicensedAudit() error {
 	return nil
 }
 
+func (a *API) requireLicensedIncidentManagement() error {
+	if a.licenseManager == nil {
+		return errIncidentManagementNotLicensed
+	}
+	if !license.HasActiveLicense(a.licenseManager.Checker()) {
+		return errIncidentManagementNotLicensed
+	}
+	return nil
+}
+
 func (a *API) isAuditLicensed() bool {
 	if a.auditService == nil {
 		return false
@@ -698,6 +972,11 @@ func (a *API) isAuditLicensed() bool {
 // It silently returns if the audit service is not configured.
 // User and IP are extracted from context; missing user is allowed (recorded as empty).
 func (a *API) logAudit(ctx context.Context, category audit.Category, action string, details any) {
+	a.LogAudit(ctx, category, action, details)
+}
+
+// LogAudit logs an audit entry with source/correlation context when present.
+func (a *API) LogAudit(ctx context.Context, category audit.Category, action string, details any) {
 	if !a.isAuditLicensed() {
 		return
 	}
@@ -710,9 +989,14 @@ func (a *API) logAudit(ctx context.Context, category audit.Category, action stri
 
 	clientIP, _ := auth.ClientIPFromContext(ctx)
 
+	detailsMap := normalizeAuditDetails(details)
+	if sourceCtx, ok := audit.SourceContextFromContext(ctx); ok {
+		mergeAuditSourceDetails(detailsMap, sourceCtx)
+	}
+
 	var detailsStr string
-	if details != nil {
-		detailsJSON, err := json.Marshal(details)
+	if len(detailsMap) > 0 {
+		detailsJSON, err := json.Marshal(detailsMap)
 		if err != nil {
 			logger.Warn(ctx, "Failed to marshal audit details", tag.Error(err))
 			detailsStr = "{}"
@@ -724,6 +1008,10 @@ func (a *API) logAudit(ctx context.Context, category audit.Category, action stri
 	entry := audit.NewEntry(category, action, userID, username).
 		WithDetails(detailsStr).
 		WithIPAddress(clientIP)
+	if sourceCtx, ok := audit.SourceContextFromContext(ctx); ok {
+		audit.ApplySourceContext(entry, sourceCtx)
+	}
+	applyAuditDetailsToEntry(entry, detailsMap)
 
 	if err := a.auditService.Log(ctx, entry); err != nil {
 		logger.Warn(ctx, "Failed to write audit log",
@@ -731,6 +1019,99 @@ func (a *API) logAudit(ctx context.Context, category audit.Category, action stri
 			slog.String("action", action),
 			slog.String("category", string(category)),
 		)
+	}
+}
+
+func normalizeAuditDetails(details any) map[string]any {
+	if details == nil {
+		return map[string]any{}
+	}
+	data, err := json.Marshal(details)
+	if err != nil {
+		return map[string]any{"details": details}
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return map[string]any{"details": details}
+	}
+	return out
+}
+
+func mergeAuditSourceDetails(details map[string]any, source *audit.SourceContext) {
+	if details == nil || source == nil {
+		return
+	}
+	put := func(key, value string) {
+		if value != "" {
+			details[key] = value
+		}
+	}
+	put("source", source.Source)
+	put("surface", source.Surface)
+	put("request_id", source.RequestID)
+	put("correlation_id", source.CorrelationID)
+	put("session_id", source.SessionID)
+	put("client_name", source.ClientName)
+	put("client_version", source.ClientVersion)
+	put("transport", source.Transport)
+	put("credential_id", source.CredentialID)
+	put("credential_name", source.CredentialName)
+	put("credential_type", source.CredentialType)
+	put("attribution_class", source.AttributionClass)
+	put("credential_owner_id", source.CredentialOwnerID)
+	put("service_account_id", source.ServiceAccountID)
+	put("requested_workspace", source.RequestedWorkspace)
+	put("resolved_workspace", source.ResolvedWorkspace)
+	put("subject_type", source.SubjectType)
+	put("subject_id", source.SubjectID)
+	put("subject_name", source.SubjectName)
+	put("mcp_tool", source.MCPTool)
+	put("mcp_action", source.MCPAction)
+	if len(source.CredentialAllowedSurfaces) > 0 {
+		details["credential_allowed_surfaces"] = append([]string(nil), source.CredentialAllowedSurfaces...)
+	}
+}
+
+func applyAuditDetailsToEntry(entry *audit.Entry, details map[string]any) {
+	if entry == nil || len(details) == 0 {
+		return
+	}
+	get := func(key string) string {
+		value, _ := details[key].(string)
+		return value
+	}
+	if value := get("source"); value != "" {
+		entry.Source = value
+	}
+	if value := get("surface"); value != "" {
+		entry.Surface = value
+	}
+	if value := get("result"); value != "" {
+		entry.Result = value
+	}
+	if value := get("correlation_id"); value != "" {
+		entry.CorrelationID = value
+	}
+	if value := get("resource_type"); value != "" {
+		entry.ResourceType = value
+	}
+	if value := get("resource_id"); value != "" {
+		entry.ResourceID = value
+	}
+	if value := get("workspace"); value != "" {
+		entry.Workspace = value
+	}
+	if value := get("resolved_workspace"); value != "" && entry.Workspace == "" {
+		entry.Workspace = value
+	}
+	if value := get("credential_id"); value != "" {
+		entry.CredentialID = value
+	}
+	if value := get("credential_type"); value != "" {
+		entry.CredentialType = value
+	}
+	if value := get("mcp_tool"); value != "" {
+		entry.MCPTool = value
 	}
 }
 

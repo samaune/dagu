@@ -10,7 +10,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { components } from '../../../../api/v1/schema';
+import { useConfig } from '@/contexts/ConfigContext';
+import { components, NodeStatus } from '../../../../api/v1/schema';
 import NodeStatusTableRow from './NodeStatusTableRow';
 
 /**
@@ -29,12 +30,25 @@ type Props = {
     dagRunId: string,
     node?: components['schemas']['Node']
   ) => void;
+  /** Function called after a row status update succeeds */
+  onNodeStatusUpdated?: (stepName: string, status: NodeStatus) => void;
 };
 
 /**
  * NodeStatusTable displays execution status information for all nodes in a DAG run
  */
-function NodeStatusTable({ nodes, status, fileName, onViewLog }: Props) {
+function NodeStatusTable({
+  nodes,
+  status,
+  fileName,
+  onViewLog,
+  onNodeStatusUpdated,
+}: Props) {
+  const config = useConfig();
+  const showActionsColumn = Boolean(
+    status?.dagRunId && config.permissions.runDags
+  );
+
   // Don't render if there are no nodes
   if (!nodes || !nodes.length) {
     return null;
@@ -48,28 +62,16 @@ function NodeStatusTable({ nodes, status, fileName, onViewLog }: Props) {
           <Table className="w-full">
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[5%] text-center">
-                  No
-                </TableHead>
-                <TableHead className="w-[20%]">
-                  Step Name
-                </TableHead>
-                <TableHead className="w-[15%]">
-                  Execution
-                </TableHead>
-                <TableHead className="w-[15%]">
-                  Last Run
-                </TableHead>
-                <TableHead className="w-[10%] text-center">
-                  Status
-                </TableHead>
+                <TableHead className="w-[5%] text-center">No</TableHead>
+                <TableHead className="w-[20%]">Step Name</TableHead>
+                <TableHead className="w-[15%]">Execution</TableHead>
+                <TableHead className="w-[15%]">Last Run</TableHead>
+                <TableHead className="w-[10%] text-center">Status</TableHead>
                 <TableHead className="w-[35%] min-w-[150px]">
                   Error / Logs
                 </TableHead>
-                {status?.dagRunId && (
-                  <TableHead className="w-[8%] text-center">
-                    Actions
-                  </TableHead>
+                {showActionsColumn && (
+                  <TableHead className="w-[8%] text-center">Actions</TableHead>
                 )}
               </TableRow>
             </TableHeader>
@@ -81,6 +83,7 @@ function NodeStatusTable({ nodes, status, fileName, onViewLog }: Props) {
                   node={n}
                   name={fileName}
                   onViewLog={onViewLog}
+                  onNodeStatusUpdated={onNodeStatusUpdated}
                   dagRun={status}
                   view="desktop"
                 />
@@ -99,6 +102,7 @@ function NodeStatusTable({ nodes, status, fileName, onViewLog }: Props) {
             node={n}
             name={fileName}
             onViewLog={onViewLog}
+            onNodeStatusUpdated={onNodeStatusUpdated}
             dagRun={status}
             view="mobile"
           />

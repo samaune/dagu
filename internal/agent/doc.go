@@ -22,19 +22,21 @@ var (
 
 // Doc is the domain entity for a markdown document.
 type Doc struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Content   string `json:"content"`
-	FilePath  string `json:"filePath,omitempty"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	Content     string `json:"content"`
+	FilePath    string `json:"filePath,omitempty"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
 }
 
 // DocMetadata is a lightweight doc view excluding Content.
 type DocMetadata struct {
-	ID      string    `json:"id"`
-	Title   string    `json:"title"`
-	ModTime time.Time `json:"modTime"`
+	ID          string    `json:"id"`
+	Title       string    `json:"title"`
+	Description string    `json:"description,omitempty"`
+	ModTime     time.Time `json:"modTime"`
 }
 
 // DocTreeNode represents a file or directory in the doc tree.
@@ -66,31 +68,37 @@ const (
 
 // ListDocsOptions holds parameters for listing documents.
 type ListDocsOptions struct {
-	Page    int
-	PerPage int
-	Sort    DocSortField
-	Order   DocSortOrder
+	Page             int
+	PerPage          int
+	Sort             DocSortField
+	Order            DocSortOrder
+	PathPrefix       string
+	ExcludePathRoots []string
 }
 
 // SearchDocsOptions configures a paginated document search query.
 type SearchDocsOptions struct {
-	Cursor     string
-	Limit      int
-	Query      string
-	MatchLimit int
+	Cursor           string
+	Limit            int
+	Query            string
+	MatchLimit       int
+	PathPrefix       string
+	ExcludePathRoots []string
 }
 
 // SearchDocMatchesOptions configures cursor-based snippet loading for one document.
 type SearchDocMatchesOptions struct {
-	Cursor string
-	Limit  int
-	Query  string
+	Cursor     string
+	Limit      int
+	Query      string
+	PathPrefix string
 }
 
 // DocSearchResult holds a doc ID/title and its grep matches.
 type DocSearchResult struct {
 	ID                string        `json:"id"`
 	Title             string        `json:"title"`
+	Description       string        `json:"description,omitempty"`
 	Matches           []*exec.Match `json:"matches"`
 	HasMoreMatches    bool          `json:"hasMoreMatches"`
 	NextMatchesCursor string        `json:"nextMatchesCursor,omitempty"`
@@ -118,8 +126,10 @@ type DocStore interface {
 }
 
 // validDocIDRegexp matches a valid doc ID: segments separated by slashes.
-// Each segment starts with alphanumeric and can contain alphanumeric, underscore, dot, hyphen, or space.
-var validDocIDRegexp = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_. -]*(/[a-zA-Z0-9][a-zA-Z0-9_. -]*)*$`)
+// Each segment starts with alphanumeric or underscore and can contain alphanumeric, underscore, dot, hyphen, or space.
+const validDocIDPattern = `^[a-zA-Z0-9_][a-zA-Z0-9_. -]*(/[a-zA-Z0-9_][a-zA-Z0-9_. -]*)*$`
+
+var validDocIDRegexp = regexp.MustCompile(validDocIDPattern)
 
 // maxDocIDLength is the maximum allowed length for a doc ID.
 const maxDocIDLength = 256
@@ -133,7 +143,7 @@ func ValidateDocID(id string) error {
 		return fmt.Errorf("%w: exceeds maximum length of %d", ErrInvalidDocID, maxDocIDLength)
 	}
 	if !validDocIDRegexp.MatchString(id) {
-		return fmt.Errorf("%w: must match pattern [a-zA-Z0-9][a-zA-Z0-9_. -]*(/[a-zA-Z0-9][a-zA-Z0-9_. -]*)*", ErrInvalidDocID)
+		return fmt.Errorf("%w: must match pattern %s", ErrInvalidDocID, validDocIDPattern)
 	}
 	return nil
 }

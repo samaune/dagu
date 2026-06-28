@@ -83,18 +83,20 @@ func TestNewDAGRunEventEmbedsDAGRunSnapshot(t *testing.T) {
 	t.Parallel()
 
 	status := &exec.DAGRunStatus{
-		Root:       exec.NewDAGRunRef("root-briefing", "root-run"),
-		Parent:     exec.NewDAGRunRef("root-briefing", "parent-run"),
-		Name:       "briefing",
-		DAGRunID:   "run-1",
-		AttemptID:  "attempt-1",
-		ProcGroup:  "priority-high",
-		Status:     core.Failed,
-		Error:      "boom",
-		Log:        "/tmp/run.log",
-		QueuedAt:   "2026-04-01T09:00:00Z",
-		StartedAt:  "2026-04-01T09:01:00Z",
-		FinishedAt: "2026-04-01T09:02:00Z",
+		Root:           exec.NewDAGRunRef("root-briefing", "root-run"),
+		Parent:         exec.NewDAGRunRef("root-briefing", "parent-run"),
+		Name:           "briefing",
+		DAGRunID:       "run-1",
+		AttemptID:      "attempt-1",
+		ProcGroup:      "priority-high",
+		Status:         core.Failed,
+		Error:          "boom",
+		Log:            "/tmp/run.log",
+		QueuedAt:       "2026-04-01T09:00:00Z",
+		StartedAt:      "2026-04-01T09:01:00Z",
+		FinishedAt:     "2026-04-01T09:02:00Z",
+		AutoRetryCount: 1,
+		AutoRetryLimit: 3,
 		Nodes: []*exec.Node{
 			{
 				Step:   core.Step{Name: "fetch"},
@@ -138,6 +140,8 @@ func TestNewDAGRunEventEmbedsDAGRunSnapshot(t *testing.T) {
 	assert.Equal(t, status.Log, restored.Log)
 	assert.Equal(t, status.StartedAt, restored.StartedAt)
 	assert.Equal(t, status.FinishedAt, restored.FinishedAt)
+	assert.Equal(t, status.AutoRetryCount, restored.AutoRetryCount)
+	assert.Equal(t, status.AutoRetryLimit, restored.AutoRetryLimit)
 	require.Len(t, restored.Nodes, 1)
 	assert.Equal(t, "fetch", restored.Nodes[0].Step.Name)
 	assert.Equal(t, core.NodeFailed, restored.Nodes[0].Status)
@@ -179,6 +183,48 @@ func TestDAGRunSnapshotFromEventBackfillsLegacyDAGFile(t *testing.T) {
 	require.NotNil(t, status)
 	assert.Equal(t, "legacy", status.Name)
 	assert.Equal(t, "run-1", status.DAGRunID)
+}
+
+func TestEmitPersistedStatusTransitionFromContextEmitsUpdateForRepeatedStatus(t *testing.T) {
+	t.Parallel()
+
+	store := &captureStore{}
+	service := New(store)
+	ctx := WithContext(context.Background(), service, Source{Service: SourceServiceServer})
+	status := &exec.DAGRunStatus{
+		Name:      "briefing",
+		DAGRunID:  "run-1",
+		AttemptID: "attempt-1",
+		Status:    core.Running,
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	previous, emitted, err := EmitPersistedStatusTransitionFromContext(ctx, "", status, nil)
+	require.NoError(t, err)
+	require.True(t, emitted)
+	require.NotNil(t, store.event)
+	assert.Equal(t, TypeDAGRunRunning, store.event.Type)
+	assert.Equal(t, TypeDAGRunRunning, previous)
+
+	store.event = nil
+	next, emitted, err := EmitPersistedStatusTransitionFromContext(ctx, previous, status, nil)
+	require.NoError(t, err)
+	require.True(t, emitted)
+	require.NotNil(t, store.event)
+	assert.Equal(t, TypeDAGRunUpdated, store.event.Type)
+	assert.Equal(t, TypeDAGRunRunning, next)
+	assert.True(t, IsDAGRunEventType(store.event.Kind, store.event.Type))
+	assert.False(t, IsNotificationEventType(store.event.Kind, store.event.Type))
+}
+
+func TestDAGRunUpdateEventIDIncludesRecordedAt(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 4, 23, 1, 2, 3, 0, time.UTC)
+	first := DAGRunUpdateEventID("briefing", "run-1", "attempt-1", base)
+	second := DAGRunUpdateEventID("briefing", "run-1", "attempt-1", base.Add(time.Nanosecond))
+
+	assert.NotEqual(t, first, second)
 }
 
 func TestNewDAGRunEventDeepClonesData(t *testing.T) {

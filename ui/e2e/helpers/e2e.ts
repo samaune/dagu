@@ -31,6 +31,13 @@ export type StackConfig = {
 };
 
 export type UserRole = 'admin' | 'manager' | 'developer' | 'operator' | 'viewer';
+type WorkspaceAccessPayload = {
+  all: boolean;
+  grants: Array<{
+    workspace: string;
+    role: UserRole;
+  }>;
+};
 export type RunStatusLabel =
   | 'not_started'
   | 'running'
@@ -107,6 +114,9 @@ type ExecFileSyncError = Error & {
 };
 
 const TOKEN_KEY = 'dagu_auth_token';
+const WORKSPACE_SCOPE_STORAGE_KEY = 'dagu-selected-workspace-scope';
+const LEGACY_WORKSPACE_STORAGE_KEY = 'dagu-selected-workspace';
+const LEGACY_COCKPIT_WORKSPACE_STORAGE_KEY = 'dagu_cockpit_workspace';
 const repoRoot = path.resolve(__dirname, '../../..');
 const stackScriptPath = path.resolve(repoRoot, 'scripts/e2e/start-stack.sh');
 const stackFilePath =
@@ -117,6 +127,15 @@ const stackFilePath =
   );
 
 let cachedStack: StackConfig | null = null;
+
+export function hasRBACLicenseSourceConfigured(): boolean {
+  return Boolean(
+    process.env.DAGU_LICENSE_PRIVKEY_B64 ||
+      process.env.DAGU_LICENSE ||
+      process.env.DAGU_LICENSE_KEY ||
+      process.env.DAGU_LICENSE_FILE
+  );
+}
 
 export async function loadStack(): Promise<StackConfig> {
   if (cachedStack) {
@@ -168,6 +187,21 @@ export async function clearSession(page: Page): Promise<void> {
   await page.reload();
 }
 
+export async function useDefaultWorkspaceScope(page: Page): Promise<void> {
+  await page.evaluate(
+    ([scopeKey, legacyKey, cockpitLegacyKey]) => {
+      localStorage.setItem(scopeKey, JSON.stringify({ scope: 'default' }));
+      localStorage.removeItem(legacyKey);
+      localStorage.removeItem(cockpitLegacyKey);
+    },
+    [
+      WORKSPACE_SCOPE_STORAGE_KEY,
+      LEGACY_WORKSPACE_STORAGE_KEY,
+      LEGACY_COCKPIT_WORKSPACE_STORAGE_KEY,
+    ]
+  );
+}
+
 export async function loginViaAPI(
   request: APIRequestContext,
   username: string,
@@ -193,14 +227,22 @@ export async function createUser(
     username: string;
     password: string;
     role: UserRole;
+    workspaceAccess?: WorkspaceAccessPayload;
   }
 ): Promise<void> {
   const response = await request.post('/api/v1/users?remoteNode=local', {
     headers: authHeaders(token),
-    data: user,
+    data: {
+      ...user,
+      workspaceAccess: user.workspaceAccess ?? { all: true, grants: [] },
+    },
   });
 
-  expect(response.ok()).toBeTruthy();
+  const failureBody = response.ok() ? '' : await response.text();
+  expect(
+    response.ok(),
+    `createUser failed with ${response.status()}: ${failureBody}`
+  ).toBeTruthy();
 }
 
 export async function waitForDAGAvailable(
@@ -240,8 +282,10 @@ export async function waitForSchedulerDAGRegistered(
       async () => {
         try {
           const raw = await fs.readFile(schedulerStatePath, 'utf8');
-          const state = JSON.parse(raw) as { dags?: Record<string, unknown> };
-          return Boolean(state.dags?.[dagName]);
+          const parsed = JSON.parse(raw) as {
+            dags?: Record<string, unknown>;
+          };
+          return Boolean(parsed.dags?.[dagName]);
         } catch {
           return false;
         }
@@ -492,7 +536,9 @@ export async function enqueueRunFromUI(page: Page, fileName: string): Promise<st
 }
 
 export async function selectRemoteNode(page: Page, nodeName: string): Promise<void> {
-  const trigger = page.locator('aside').getByRole('combobox').first();
+  const trigger = page
+    .locator('aside')
+    .getByRole('combobox', { name: 'Remote node' });
   await trigger.click();
   await page.getByRole('option', { name: nodeName }).click();
   await expect(trigger).toContainText(nodeName);

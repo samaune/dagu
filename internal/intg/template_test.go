@@ -8,12 +8,16 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/dagucloud/dagu/internal/cmd"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/test"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// TestTemplateExecutor covers the end-to-end behavior of the template executor,
+// including literal rendering, file output, and data interpolation edge cases.
 func TestTemplateExecutor(t *testing.T) {
 	t.Parallel()
 
@@ -23,12 +27,12 @@ func TestTemplateExecutor(t *testing.T) {
 		th := test.Setup(t)
 		dag := th.DAG(t, `steps:
   - name: render
-    type: template
-    config:
+    action: template.render
+    with:
+      template: |
+        {{ .greeting }}, world!
       data:
         greeting: hello
-    script: |
-      {{ .greeting }}, world!
     output: RESULT
 `)
 		agent := dag.Agent()
@@ -50,13 +54,13 @@ func TestTemplateExecutor(t *testing.T) {
 		th := test.Setup(t)
 		dag := th.DAG(t, `steps:
   - name: render
-    type: template
-    config:
+    action: template.render
+    with:
+      template: |
+        # {{ .title }}
       output: "`+outFileForYAML+`"
       data:
         title: Test Report
-    script: |
-      # {{ .title }}
     output: RESULT
 `)
 		agent := dag.Agent()
@@ -69,6 +73,42 @@ func TestTemplateExecutor(t *testing.T) {
 		assert.Contains(t, string(content), "# Test Report")
 	})
 
+	t.Run("ArtifactOutputAutoEnablesArtifacts", func(t *testing.T) {
+		t.Parallel()
+
+		th := test.SetupCommand(t)
+		dagFile := th.CreateDAGFile(t, "template-artifact-auto-enable.yaml", `
+name: template-artifact-auto-enable
+steps:
+  - name: render
+    action: template.render
+    with:
+      output: "${DAG_RUN_ARTIFACTS_DIR}/greeting.txt"
+      data:
+        greeting: hello
+      template: |
+        {{ .greeting }}, world!
+`)
+
+		runID := uuid.Must(uuid.NewV7()).String()
+		th.RunCommand(t, cmd.Start(), test.CmdTest{
+			Args: []string{
+				"start",
+				"--run-id", runID,
+				dagFile,
+			},
+			ExpectedOut: []string{"DAG run finished"},
+		})
+
+		status, _ := readAttemptStatusAndOutputs(t, th, "template-artifact-auto-enable", runID)
+		require.Equal(t, core.Succeeded, status.Status)
+		require.NotEmpty(t, status.ArchiveDir)
+
+		content, err := os.ReadFile(filepath.Join(status.ArchiveDir, "greeting.txt"))
+		require.NoError(t, err)
+		assert.Contains(t, string(content), "hello, world!")
+	})
+
 	t.Run("RelativeOutputPath", func(t *testing.T) {
 		t.Parallel()
 
@@ -78,13 +118,13 @@ func TestTemplateExecutor(t *testing.T) {
 		th := test.Setup(t)
 		dag := th.DAG(t, `steps:
   - name: render
-    type: template
+    action: template.render
     working_dir: "`+tmpDirForYAML+`"
-    config:
+    with:
       output: "subdir/output.txt"
       data:
         msg: relative
-    script: "{{ .msg }}"
+      template: "{{ .msg }}"
 `)
 		agent := dag.Agent()
 		agent.RunSuccess(t)
@@ -104,17 +144,17 @@ func TestTemplateExecutor(t *testing.T) {
 type: graph
 steps:
   - id: producer
-    command: 'echo -n "Alice"'
+    run: 'echo -n "Alice"'
     output: NAME
 
   - id: render
     depends:
       - producer
-    type: template
-    config:
+    action: template.render
+    with:
+      template: "Hello, {{ .name }}!"
       data:
         name: ${NAME}
-    script: "Hello, {{ .name }}!"
     output: RESULT
 `)
 		agent := dag.Agent()
@@ -132,14 +172,14 @@ steps:
 		th := test.Setup(t)
 		dag := th.DAG(t, `steps:
   - name: render
-    type: template
-    config:
+    action: template.render
+    with:
+      template: |
+        export FOO=${BAR}
+        echo "{{ .name }}"
+        value=`+"`command`"+`
       data:
         name: test
-    script: |
-      export FOO=${BAR}
-      echo "{{ .name }}"
-      value=`+"`command`"+`
     output: RESULT
 `)
 		agent := dag.Agent()
@@ -154,17 +194,51 @@ steps:
 		})
 	})
 
+	t.Run("CodeFenceDataPreserved", func(t *testing.T) {
+		t.Parallel()
+
+		th := test.Setup(t)
+		dag := th.DAG(t, `steps:
+  - name: render
+    action: template.render
+    with:
+      template: |
+        {{ .issue_text }}
+      data:
+        issue_text: |
+          `+"```yaml"+`
+          env:
+            TEST_FILE: ~/dagu-test.txt
+
+          steps:
+            - run: touch $TEST_FILE
+          `+"```"+`
+    output: RESULT
+`)
+		agent := dag.Agent()
+		agent.RunSuccess(t)
+
+		dag.AssertLatestStatus(t, core.Succeeded)
+		dag.AssertOutputs(t, map[string]any{
+			"RESULT": []test.Contains{
+				test.Contains("```yaml"),
+				test.Contains("\n```"),
+				test.Contains("touch $TEST_FILE"),
+			},
+		})
+	})
+
 	t.Run("MissingKeyError", func(t *testing.T) {
 		t.Parallel()
 
 		th := test.Setup(t)
 		dag := th.DAG(t, `steps:
   - name: render
-    type: template
-    config:
+    action: template.render
+    with:
+      template: "{{ .undefined_key }}"
       data:
         name: test
-    script: "{{ .undefined_key }}"
     output: RESULT
 `)
 		agent := dag.Agent()
@@ -179,18 +253,18 @@ steps:
 		th := test.Setup(t)
 		dag := th.DAG(t, `steps:
   - name: render
-    type: template
-    config:
+    action: template.render
+    with:
+      template: |
+        # {{ .title }}
+        {{ $items := .domains | split "," }}
+        Total: {{ $items | count }}
+        {{ range $i, $d := $items }}
+        {{ $i | add 1 }}. {{ $d | upper }}
+        {{ end }}
       data:
         title: Domain Report
         domains: "example.com,test.org,demo.net"
-    script: |
-      # {{ .title }}
-      {{ $items := .domains | split "," }}
-      Total: {{ $items | count }}
-      {{ range $i, $d := $items }}
-      {{ $i | add 1 }}. {{ $d | upper }}
-      {{ end }}
     output: RESULT
 `)
 		agent := dag.Agent()
@@ -214,12 +288,12 @@ steps:
 		th := test.Setup(t)
 		dag := th.DAG(t, `steps:
   - name: render
-    type: template
-    config:
+    action: template.render
+    with:
+      template: |
+        {{ if .items | empty }}No items found.{{ else }}Has items.{{ end }}
       data:
         items: ""
-    script: |
-      {{ if .items | empty }}No items found.{{ else }}Has items.{{ end }}
     output: RESULT
 `)
 		agent := dag.Agent()
@@ -231,18 +305,71 @@ steps:
 		})
 	})
 
+	t.Run("OmittedOptionalParamResolvesToEmptyString", func(t *testing.T) {
+		t.Parallel()
+
+		th := test.SetupCommand(t)
+		dagFile := th.CreateDAGFile(t, "template-optional-param.yaml", `
+name: template-optional-param
+type: graph
+params:
+  - name: name
+    type: string
+    required: true
+  - name: age
+    type: integer
+    required: true
+  - name: favorite_color
+    type: string
+steps:
+  - id: render
+    action: template.render
+    with:
+      template: |
+        Hello, {{ .name }}!
+        You are {{ .age }} years old.
+        {{- if .favorite_color }}
+        Your favorite color is {{ .favorite_color }}.
+        {{- end }}
+      data:
+        name: ${name}
+        age: ${age}
+        favorite_color: ${favorite_color}
+    output: RESULT
+`)
+
+		runID := uuid.Must(uuid.NewV7()).String()
+		th.RunCommand(t, cmd.Start(), test.CmdTest{
+			Args: []string{
+				"start",
+				"--run-id", runID,
+				"--params", "name=tom age=21",
+				dagFile,
+			},
+			ExpectedOut: []string{"DAG run finished"},
+		})
+
+		status, outputs := readAttemptStatusAndOutputs(t, th, "template-optional-param", runID)
+		require.Equal(t, core.Succeeded, status.Status)
+		require.Contains(t, outputs.Outputs, "result")
+		assert.Contains(t, outputs.Outputs["result"], "Hello, tom!")
+		assert.Contains(t, outputs.Outputs["result"], "You are 21 years old.")
+		assert.NotContains(t, outputs.Outputs["result"], "${favorite_color}")
+		assert.NotContains(t, outputs.Outputs["result"], "Your favorite color is")
+	})
+
 	t.Run("DefaultFunction", func(t *testing.T) {
 		t.Parallel()
 
 		th := test.Setup(t)
 		dag := th.DAG(t, `steps:
   - name: render
-    type: template
-    config:
+    action: template.render
+    with:
+      template: '{{ .name | default "Anonymous" }} ({{ .title | default "User" }})'
       data:
         name: ""
         title: Admin
-    script: '{{ .name | default "Anonymous" }} ({{ .title | default "User" }})'
     output: RESULT
 `)
 		agent := dag.Agent()
@@ -260,11 +387,11 @@ steps:
 		th := test.Setup(t)
 		dag := th.DAG(t, `steps:
   - name: render
-    type: template
-    config:
+    action: template.render
+    with:
+      template: '{{ .name | trim | lower | replace " " "-" }}'
       data:
         name: "  My Service  "
-    script: '{{ .name | trim | lower | replace " " "-" }}'
     output: RESULT
 `)
 		agent := dag.Agent()
@@ -282,14 +409,14 @@ steps:
 		th := test.Setup(t)
 		dag := th.DAG(t, `steps:
   - name: render
-    type: template
-    config:
+    action: template.render
+    with:
+      template: |
+        name={{ get .app "name" | default "unknown" }}
+        owner={{ get .app "owner" | default "unknown" }}
       data:
         app:
           name: MyApp
-    script: |
-      name={{ get .app "name" | default "unknown" }}
-      owner={{ get .app "owner" | default "unknown" }}
     output: RESULT
 `)
 		agent := dag.Agent()
@@ -310,14 +437,14 @@ steps:
 		th := test.Setup(t)
 		dag := th.DAG(t, `steps:
   - name: render
-    type: template
-    config:
+    action: template.render
+    with:
+      template: '{{ .domains | uniq | sortAlpha | join "," }}'
       data:
         domains:
           - api.example.com
           - api.example.com
           - app.example.com
-    script: '{{ .domains | uniq | sortAlpha | join "," }}'
     output: RESULT
 `)
 		agent := dag.Agent()
@@ -335,12 +462,12 @@ steps:
 		th := test.Setup(t)
 		dag := th.DAG(t, `steps:
   - name: render-config
-    type: template
-    script: |
-      app={{ .app.name | lower | replace " " "-" }}
-      owner={{ get .app "owner" | default "unknown" }}
-      domains={{ get .app "domains" | default (list "localhost") | uniq | sortAlpha | join "," }}
-    config:
+    action: template.render
+    with:
+      template: |
+        app={{ .app.name | lower | replace " " "-" }}
+        owner={{ get .app "owner" | default "unknown" }}
+        domains={{ get .app "domains" | default (list "localhost") | uniq | sortAlpha | join "," }}
       data:
         app:
           name: My Service
@@ -369,10 +496,9 @@ steps:
 		th := test.Setup(t)
 		dag := th.DAG(t, `steps:
   - name: render
-    type: template
-    config:
-      data: {}
-    script: '{{ env "HOME" }}'
+    action: template.render
+    with:
+      template: '{{ env "HOME" }}'
 `)
 		agent := dag.Agent()
 		agent.RunCheckErr(t, "error")
@@ -386,12 +512,12 @@ steps:
 		th := test.Setup(t)
 		dag := th.DAG(t, `steps:
   - name: render
-    type: template
-    config:
+    action: template.render
+    with:
       data:
         app:
           name: test
-    script: '{{ .nonexistent }}'
+      template: '{{ .nonexistent }}'
 `)
 		agent := dag.Agent()
 		agent.RunCheckErr(t, "execution error")
@@ -405,13 +531,13 @@ steps:
 		th := test.Setup(t)
 		dag := th.DAG(t, `steps:
   - name: render
-    type: template
-    config:
+    action: template.render
+    with:
+      template: |
+        items={{ .csv | split "," | join ";" }}
+        sum={{ 5 | add 3 }}
       data:
         csv: "a,b,c"
-    script: |
-      items={{ .csv | split "," | join ";" }}
-      sum={{ 5 | add 3 }}
     output: RESULT
 `)
 		agent := dag.Agent()

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Yota Hamada
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { useErrorModal } from '@/components/ui/error-modal';
 import { Tab, Tabs } from '@/components/ui/tabs';
 import {
@@ -20,19 +23,21 @@ import React, { useEffect, useState } from 'react';
 import { useCookies } from 'react-cookie';
 import { useNavigate } from 'react-router-dom';
 import { components, NodeStatus, Status, Stream } from '../../../api/v1/schema';
-import { AppBarContext } from '../../../contexts/AppBarContext';
 import { useConfig } from '../../../contexts/ConfigContext';
+import { useRemoteNode } from '../../../contexts/RemoteNodeContext';
 import { useClient } from '../../../hooks/api';
-import { toMermaidNodeId } from '../../../lib/utils';
-import BorderedBox from '../../../ui/BorderedBox';
+import { cn, toMermaidNodeId } from '../../../lib/utils';
+import BorderedBox from '@/components/ui/bordered-box';
 import { DAGRunOutputs } from '../../dag-runs/components/dag-run-details';
 import { DAGContext } from '../contexts/DAGContext';
 import { getEventHandlers } from '../lib/getEventHandlers';
+import { updateDAGRunNodeStatus } from '../lib/nodeStatus';
 import { ApprovalTab } from './approval';
 import ArtifactsTab from './artifacts/ArtifactsTab';
 import { ChatHistoryTab } from './chat-history';
 import { DAGStatusOverview, NodeStatusTable } from './dag-details';
 import { DAGSpecReadOnly } from './dag-editor';
+import { StepDetailsDrawer } from './step-details';
 import {
   LogViewer,
   ParallelExecutionModal,
@@ -44,9 +49,18 @@ type Props = {
   dagRun: components['schemas']['DAGRunDetails'];
   fileName: string;
   artifactEnabled?: boolean;
+  initialTab?: StatusTab;
+  fillHeight?: boolean;
 };
 
-type StatusTab = 'status' | 'timeline' | 'outputs' | 'artifacts' | 'chat' | 'spec' | 'approval';
+export type StatusTab =
+  | 'status'
+  | 'timeline'
+  | 'outputs'
+  | 'artifacts'
+  | 'chat'
+  | 'spec'
+  | 'approval';
 
 /** Check if the current DAG run is a sub DAG-run (has a different root) */
 function isSubDAGRun(dagRun: components['schemas']['DAGRunDetails']): boolean {
@@ -57,13 +71,25 @@ function isSubDAGRun(dagRun: components['schemas']['DAGRunDetails']): boolean {
   );
 }
 
-function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
-  const appBarContext = React.useContext(AppBarContext);
+function DAGStatus({
+  dagRun,
+  fileName,
+  artifactEnabled = false,
+  initialTab = 'status',
+  fillHeight = false,
+}: Props) {
+  const dagContext = React.useContext(DAGContext);
   const config = useConfig();
+  const remoteNode = useRemoteNode();
   const navigate = useNavigate();
   const { showError } = useErrorModal();
   const [modal, setModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<StatusTab>('status');
+  const [activeTab, setActiveTab] = useState<StatusTab>(initialTab);
+  const [displayDAGRun, setDisplayDAGRun] = useState(dagRun);
+
+  useEffect(() => {
+    setDisplayDAGRun(dagRun);
+  }, [dagRun]);
 
   // Flowchart direction preference stored in cookies
   const [cookie, setCookie] = useCookies(['flowchart']);
@@ -76,6 +102,20 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
   const [selectedStep, setSelectedStep] = useState<
     components['schemas']['Step'] | undefined
   >(undefined);
+  const [selectedDetailStep, setSelectedDetailStep] = useState<
+    components['schemas']['Step'] | undefined
+  >(undefined);
+  const [isStepDetailsOpen, setIsStepDetailsOpen] = useState(false);
+
+  const closeStepDetails = React.useCallback(() => {
+    setIsStepDetailsOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'status') {
+      closeStepDetails();
+    }
+  }, [activeTab, closeStepDetails]);
 
   const handleResizeMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -131,18 +171,27 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
     setFlowchart(value);
   };
 
+  const applyDisplayNodeStatus = React.useCallback(
+    (stepName: string, status: NodeStatus) => {
+      setDisplayDAGRun((current) =>
+        updateDAGRunNodeStatus(current, stepName, status)
+      );
+    },
+    []
+  );
+
   const onUpdateStatus = async (
     step: components['schemas']['Step'],
     status: NodeStatus
   ) => {
-    const isSubRun = isSubDAGRun(dagRun);
+    const isSubRun = isSubDAGRun(displayDAGRun);
 
     // Define path parameters with proper typing
     const pathParams = {
-      name: isSubRun ? dagRun.rootDAGRunName : dagRun.name,
-      dagRunId: isSubRun ? dagRun.rootDAGRunId : dagRun.dagRunId,
+      name: isSubRun ? displayDAGRun.rootDAGRunName : displayDAGRun.name,
+      dagRunId: isSubRun ? displayDAGRun.rootDAGRunId : displayDAGRun.dagRunId,
       stepName: step.name,
-      ...(isSubRun ? { subDAGRunId: dagRun.dagRunId } : {}),
+      ...(isSubRun ? { subDAGRunId: displayDAGRun.dagRunId } : {}),
     };
 
     // Use the appropriate endpoint based on whether this is a sub DAG-run
@@ -154,7 +203,7 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
       params: {
         path: pathParams,
         query: {
-          remoteNode: appBarContext.selectedRemoteNode || 'local',
+          remoteNode,
         },
       },
       body: {
@@ -168,13 +217,17 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
       );
       return;
     }
+    applyDisplayNodeStatus(step.name, status);
+    dagContext.refresh();
     dismissModal();
   };
   // Handle double-click on graph node (navigate to sub dagRun)
   const onSelectStepOnGraph = React.useCallback(
     async (id: string) => {
       // find the clicked step
-      const n = dagRun.nodes?.find((n) => toMermaidNodeId(n.step.name) == id);
+      const n = displayDAGRun.nodes?.find(
+        (n) => toMermaidNodeId(n.step.name) == id
+      );
       if (!n) return;
 
       // Combine both regular children and repeated children
@@ -196,7 +249,21 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
         }
       }
     },
-    [dagRun, navigate, fileName]
+    [displayDAGRun, navigate, fileName, remoteNode]
+  );
+
+  const onInspectStepOnGraph = React.useCallback(
+    (id: string) => {
+      const n = displayDAGRun.nodes?.find(
+        (node) => toMermaidNodeId(node.step.name) == id
+      );
+      if (!n) {
+        return;
+      }
+      setSelectedDetailStep(n.step);
+      setIsStepDetailsOpen(true);
+    },
+    [displayDAGRun]
   );
 
   // Helper function to navigate to a specific sub DAG run
@@ -215,7 +282,7 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
 
       if (subDAGRun && subDAGRun.dagRunId) {
         // Navigate to the sub DAG-run status page
-        const dagRunId = dagRun.rootDAGRunId || dagRun.dagRunId;
+        const dagRunId = displayDAGRun.rootDAGRunId || displayDAGRun.dagRunId;
 
         // Check if we're in a dagRun context or a DAG context
         const currentPath = window.location.pathname;
@@ -227,25 +294,36 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
         if (isDAGRunContext) {
           // For DAG runs, use query parameters to navigate to the DAG-run details page
           const searchParams = new URLSearchParams();
+          searchParams.set('remoteNode', remoteNode);
           searchParams.set('subDAGRunId', subDAGRun.dagRunId);
 
           // Use root DAG-run information
-          if (dagRun.rootDAGRunId) {
-            searchParams.set('dagRunId', dagRun.rootDAGRunId);
-            searchParams.set('dagRunName', dagRun.rootDAGRunName);
+          if (displayDAGRun.rootDAGRunId) {
+            searchParams.set('dagRunId', displayDAGRun.rootDAGRunId);
+            searchParams.set('dagRunName', displayDAGRun.rootDAGRunName);
           } else {
-            searchParams.set('dagRunId', dagRun.dagRunId);
-            searchParams.set('dagRunName', dagRun.name);
+            searchParams.set('dagRunId', displayDAGRun.dagRunId);
+            searchParams.set('dagRunName', displayDAGRun.name);
           }
 
           searchParams.set('step', node.step.name);
 
           // Determine root DAG name
-          const rootDAGName = dagRun.rootDAGRunName || dagRun.name;
+          const rootDAGName =
+            displayDAGRun.rootDAGRunName || displayDAGRun.name;
           url = `/dag-runs/${rootDAGName}/${dagRunId}?${searchParams.toString()}`;
         } else {
           // For DAGs, use the existing approach with query parameters
-          url = `/dags/${fileName}?subDAGRunId=${subDAGRun.dagRunId}&dagRunId=${dagRunId}&step=${node.step.name}&dagRunName=${encodeURIComponent(dagRun.rootDAGRunName || dagRun.name)}`;
+          const searchParams = new URLSearchParams();
+          searchParams.set('remoteNode', remoteNode);
+          searchParams.set('subDAGRunId', subDAGRun.dagRunId);
+          searchParams.set('dagRunId', dagRunId);
+          searchParams.set('step', node.step.name);
+          searchParams.set(
+            'dagRunName',
+            displayDAGRun.rootDAGRunName || displayDAGRun.name
+          );
+          url = `/dags/${fileName}?${searchParams.toString()}`;
         }
 
         if (openInNewTab) {
@@ -255,7 +333,7 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
         }
       }
     },
-    [dagRun, navigate, fileName]
+    [displayDAGRun, navigate, fileName, remoteNode]
   );
 
   // Handle right-click on graph node (show status update modal)
@@ -266,12 +344,14 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
         return;
       }
 
-      const status = dagRun.status;
+      const status = displayDAGRun.status;
 
       // Only allow status updates for completed DAG runs
       if (status !== Status.Running && status !== Status.NotStarted) {
         // find the right-clicked step
-        const n = dagRun.nodes?.find((n) => toMermaidNodeId(n.step.name) == id);
+        const n = displayDAGRun.nodes?.find(
+          (n) => toMermaidNodeId(n.step.name) == id
+        );
 
         if (n) {
           // Show the modal (it will be centered by default)
@@ -280,10 +360,10 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
         }
       }
     },
-    [dagRun, config.permissions.runDags]
+    [displayDAGRun, config.permissions.runDags]
   );
 
-  const handlers = getEventHandlers(dagRun);
+  const handlers = getEventHandlers(displayDAGRun);
 
   // Handler for opening log viewer
   const handleViewLog = (
@@ -299,26 +379,30 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
       isOpen: true,
       logType: 'step',
       stepName: actualStepName,
-      dagRunId: dagRunId || dagRun.dagRunId,
+      dagRunId: dagRunId || displayDAGRun.dagRunId,
       stream: isStderr ? Stream.stderr : Stream.stdout,
       node,
     });
   };
 
   // Check if timeline should be shown (any status except not started)
-  const showTimeline = dagRun.status !== Status.NotStarted;
+  const showTimeline = displayDAGRun.status !== Status.NotStarted;
 
   // Check if there are any chat steps
-  const hasChatSteps = !!dagRun.nodes?.some(
+  const hasChatSteps = !!displayDAGRun.nodes?.some(
     (node) => node.step.executorConfig?.type === 'chat'
   );
 
   // Check if there are any steps awaiting approval
-  const waitingStepCount = dagRun.nodes?.filter(
-    (node) => node.status === NodeStatus.Waiting
-  ).length || 0;
+  const waitingStepCount =
+    displayDAGRun.nodes?.filter((node) => node.status === NodeStatus.Waiting)
+      .length || 0;
   const hasWaitingSteps = waitingStepCount > 0;
-  const hasArtifacts = artifactEnabled || !!dagRun.artifactsAvailable;
+  const hasArtifacts = artifactEnabled || !!displayDAGRun.artifactsAvailable;
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [displayDAGRun.dagRunId, initialTab]);
 
   // Reset to status tab if selected tab is not available
   useEffect(() => {
@@ -343,98 +427,126 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
     }
   }, [hasWaitingSteps]);
 
+  const scrollPaneClassName = fillHeight
+    ? 'min-h-0 flex-1 overflow-auto pr-1'
+    : '';
+
   return (
-    <div className="space-y-4">
+    <div
+      className={cn(
+        'w-full min-w-0 max-w-full overflow-hidden space-y-4',
+        fillHeight && 'flex h-full min-h-0 flex-col gap-4 space-y-0'
+      )}
+    >
       {/* Status Detail Tabs */}
-      <Tabs className="whitespace-nowrap">
-        <Tab
-          isActive={activeTab === 'status'}
-          onClick={() => setActiveTab('status')}
-          className="flex items-center gap-2 cursor-pointer"
-        >
-          <ActivitySquare className="h-4 w-4" />
-          Status
-        </Tab>
-        {hasWaitingSteps && (
-          <Tab
-            isActive={activeTab === 'approval'}
-            onClick={() => setActiveTab('approval')}
-            className="flex items-center gap-2 cursor-pointer"
-          >
-            <ShieldCheck className="h-4 w-4" />
-            Approval
-            <span className="bg-warning/15 text-warning text-xs font-medium px-1.5 py-0.5 rounded-full">
-              {waitingStepCount}
-            </span>
-          </Tab>
+      <div
+        className={cn(
+          'w-full min-w-0 max-w-full overflow-hidden',
+          fillHeight && 'shrink-0'
         )}
-        {showTimeline && (
-          <Tab
-            isActive={activeTab === 'timeline'}
-            onClick={() => setActiveTab('timeline')}
-            className="flex items-center gap-2 cursor-pointer"
-          >
-            <GanttChart className="h-4 w-4" />
-            Timeline
-          </Tab>
-        )}
-        <Tab
-          isActive={activeTab === 'outputs'}
-          onClick={() => setActiveTab('outputs')}
-          className="flex items-center gap-2 cursor-pointer"
-        >
-          <Package className="h-4 w-4" />
-          Outputs
-        </Tab>
-        {hasArtifacts && (
-          <Tab
-            isActive={activeTab === 'artifacts'}
-            onClick={() => setActiveTab('artifacts')}
-            className="flex items-center gap-2 cursor-pointer"
-          >
-            <Archive className="h-4 w-4" />
-            Artifacts
-          </Tab>
-        )}
-        {hasChatSteps && (
-          <Tab
-            isActive={activeTab === 'chat'}
-            onClick={() => setActiveTab('chat')}
-            className="flex items-center gap-2 cursor-pointer"
-          >
-            <MessageSquare className="h-4 w-4" />
-            Chat
-          </Tab>
-        )}
-        <Tab
-          isActive={activeTab === 'spec'}
-          onClick={() => setActiveTab('spec')}
-          className="flex items-center gap-2 cursor-pointer"
-        >
-          <FileCode className="h-4 w-4" />
-          Spec
-        </Tab>
-      </Tabs>
+      >
+        <div className="flex w-full min-w-0 flex-wrap items-center gap-2">
+          <div className="min-w-0 flex-1 overflow-x-auto">
+            <Tabs className="min-w-max whitespace-nowrap">
+              <Tab
+                aria-label="Status"
+                isActive={activeTab === 'status'}
+                onClick={() => setActiveTab('status')}
+                className="flex cursor-pointer items-center gap-2 px-3 sm:px-4"
+              >
+                <ActivitySquare className="h-4 w-4" />
+                <span className="hidden sm:inline">Status</span>
+              </Tab>
+              {hasWaitingSteps && (
+                <Tab
+                  aria-label="Approval"
+                  isActive={activeTab === 'approval'}
+                  onClick={() => setActiveTab('approval')}
+                  className="flex cursor-pointer items-center gap-2 px-3 sm:px-4"
+                >
+                  <ShieldCheck className="h-4 w-4" />
+                  <span className="hidden sm:inline">Approval</span>
+                  <span className="rounded-full bg-warning/15 px-1.5 py-0.5 text-xs font-medium text-warning">
+                    {waitingStepCount}
+                  </span>
+                </Tab>
+              )}
+              {showTimeline && (
+                <Tab
+                  aria-label="Timeline"
+                  isActive={activeTab === 'timeline'}
+                  onClick={() => setActiveTab('timeline')}
+                  className="flex cursor-pointer items-center gap-2 px-3 sm:px-4"
+                >
+                  <GanttChart className="h-4 w-4" />
+                  <span className="hidden sm:inline">Timeline</span>
+                </Tab>
+              )}
+              <Tab
+                aria-label="Outputs"
+                isActive={activeTab === 'outputs'}
+                onClick={() => setActiveTab('outputs')}
+                className="flex cursor-pointer items-center gap-2 px-3 sm:px-4"
+              >
+                <Package className="h-4 w-4" />
+                <span className="hidden sm:inline">Outputs</span>
+              </Tab>
+              {hasArtifacts && (
+                <Tab
+                  aria-label="Artifacts"
+                  isActive={activeTab === 'artifacts'}
+                  onClick={() => setActiveTab('artifacts')}
+                  className="flex cursor-pointer items-center gap-2 px-3 sm:px-4"
+                >
+                  <Archive className="h-4 w-4" />
+                  <span className="hidden sm:inline">Artifacts</span>
+                </Tab>
+              )}
+              {hasChatSteps && (
+                <Tab
+                  aria-label="Chat"
+                  isActive={activeTab === 'chat'}
+                  onClick={() => setActiveTab('chat')}
+                  className="flex cursor-pointer items-center gap-2 px-3 sm:px-4"
+                >
+                  <MessageSquare className="h-4 w-4" />
+                  <span className="hidden sm:inline">Chat</span>
+                </Tab>
+              )}
+              <Tab
+                aria-label="Spec"
+                isActive={activeTab === 'spec'}
+                onClick={() => setActiveTab('spec')}
+                className="flex cursor-pointer items-center gap-2 px-3 sm:px-4"
+              >
+                <FileCode className="h-4 w-4" />
+                <span className="hidden sm:inline">Spec</span>
+              </Tab>
+            </Tabs>
+          </div>
+        </div>
+      </div>
 
       {/* Status Tab Content */}
       {activeTab === 'status' && (
-        <div className="space-y-6">
+        <div className={cn('space-y-6', scrollPaneClassName)}>
           {/* DAG Graph Visualization */}
-          {dagRun.nodes && dagRun.nodes.length > 0 && (
+          {displayDAGRun.nodes && displayDAGRun.nodes.length > 0 && (
             <div className="flex flex-col">
               <BorderedBox className="pt-4 px-4 pb-0 flex flex-col items-stretch overflow-hidden">
                 <div className="flex justify-end mb-2">
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <div className="flex items-center text-xs text-muted-foreground bg-muted px-2 py-1 rounded cursor-help">
-                        <MousePointerClick className="h-3 w-3 mr-1" />
-                        {config.permissions.runDags
-                          ? 'Double-click to navigate / Right-click to change status'
-                          : 'Double-click to navigate'}
+                      <div
+                        className="flex h-7 w-7 items-center justify-center rounded bg-muted text-muted-foreground cursor-help"
+                        aria-label="Graph interactions"
+                      >
+                        <MousePointerClick className="h-3.5 w-3.5" />
                       </div>
                     </TooltipTrigger>
                     <TooltipContent>
                       <div className="space-y-1">
+                        <p>Click: Inspect step details</p>
                         <p>Double-click: Navigate to sub dagRun</p>
                         {config.permissions.runDags && (
                           <p>Right-click: Update node status</p>
@@ -443,20 +555,22 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
                     </TooltipContent>
                   </Tooltip>
                 </div>
-                <div className="overflow-x-auto -mx-4 px-4">
+                <div className="w-full min-w-0 max-w-full overflow-x-auto">
                   <Graph
-                    steps={dagRun.nodes}
+                    steps={displayDAGRun.nodes}
                     type="status"
                     flowchart={flowchart}
                     onChangeFlowchart={onChangeFlowchart}
-                    onClickNode={onSelectStepOnGraph}
+                    onClickNode={onInspectStepOnGraph}
+                    selectOnClick
+                    onDoubleClickNode={onSelectStepOnGraph}
                     onRightClickNode={
                       config.permissions.runDags
                         ? onRightClickStepOnGraph
                         : undefined
                     }
-                    showIcons={dagRun.status > Status.NotStarted}
-                    animate={dagRun.status == Status.Running}
+                    showIcons={displayDAGRun.status > Status.NotStarted}
+                    animate={displayDAGRun.status == Status.Running}
                     height={graphHeight}
                   />
                 </div>
@@ -473,11 +587,11 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
           <DAGContext.Consumer>
             {(props) => (
               <>
-                <div className="grid grid-cols-1 gap-6">
+                <div className="grid min-w-0 grid-cols-1 gap-6">
                   {/* Status Overview */}
                   <div className="bg-surface border border-border rounded-lg p-4">
                     <DAGStatusOverview
-                      status={dagRun}
+                      status={displayDAGRun}
                       onViewLog={(dagRunId) => {
                         setLogViewer({
                           isOpen: true,
@@ -492,10 +606,11 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
 
                   {/* Steps Table */}
                   <NodeStatusTable
-                    nodes={dagRun.nodes}
-                    status={dagRun}
+                    nodes={displayDAGRun.nodes}
+                    status={displayDAGRun}
                     {...props}
                     onViewLog={handleViewLog}
+                    onNodeStatusUpdated={applyDisplayNodeStatus}
                   />
                 </div>
 
@@ -503,9 +618,10 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
                 {handlers?.length ? (
                   <NodeStatusTable
                     nodes={handlers}
-                    status={dagRun}
+                    status={displayDAGRun}
                     {...props}
                     onViewLog={handleViewLog}
+                    onNodeStatusUpdated={applyDisplayNodeStatus}
                   />
                 ) : null}
               </>
@@ -516,33 +632,68 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
 
       {/* Approval Tab Content */}
       {activeTab === 'approval' && hasWaitingSteps && (
-        <ApprovalTab dagRun={dagRun} dagName={fileName} />
+        <div className={scrollPaneClassName}>
+          <ApprovalTab dagRun={displayDAGRun} dagName={displayDAGRun.name} />
+        </div>
       )}
 
       {/* Timeline Tab Content */}
       {activeTab === 'timeline' && showTimeline && (
-        <TimelineChart status={dagRun} />
+        <div className={scrollPaneClassName}>
+          <TimelineChart status={displayDAGRun} />
+        </div>
       )}
 
       {/* Outputs Tab Content */}
       {activeTab === 'outputs' && (
-        <DAGRunOutputs dagName={dagRun.name} dagRunId={dagRun.dagRunId} />
+        <div className={scrollPaneClassName}>
+          <DAGRunOutputs
+            dagName={displayDAGRun.name}
+            dagRunId={displayDAGRun.dagRunId}
+          />
+        </div>
       )}
 
       {activeTab === 'artifacts' && hasArtifacts && (
-        <ArtifactsTab dagRun={dagRun} artifactEnabled={artifactEnabled} />
+        <ArtifactsTab
+          dagRun={displayDAGRun}
+          artifactEnabled={artifactEnabled}
+          className={fillHeight ? 'min-h-0 flex-1' : undefined}
+          fillHeight={fillHeight}
+        />
       )}
 
       {/* Chat Tab Content */}
-      {activeTab === 'chat' && <ChatHistoryTab dagRun={dagRun} />}
+      {activeTab === 'chat' && (
+        <div className={scrollPaneClassName}>
+          <ChatHistoryTab dagRun={displayDAGRun} />
+        </div>
+      )}
 
       {/* Spec Tab Content */}
       {activeTab === 'spec' && (
-        <DAGSpecReadOnly
-          dagName={isSubDAGRun(dagRun) ? dagRun.rootDAGRunName : dagRun.name}
-          dagRunId={isSubDAGRun(dagRun) ? dagRun.rootDAGRunId : dagRun.dagRunId}
-          subDAGRunId={isSubDAGRun(dagRun) ? dagRun.dagRunId : undefined}
-        />
+        <div className={scrollPaneClassName}>
+          <DAGSpecReadOnly
+            dagName={
+              isSubDAGRun(displayDAGRun)
+                ? displayDAGRun.rootDAGRunName
+                : displayDAGRun.name
+            }
+            dagRunId={
+              isSubDAGRun(displayDAGRun)
+                ? displayDAGRun.rootDAGRunId
+                : displayDAGRun.dagRunId
+            }
+            subDAGRunId={
+              isSubDAGRun(displayDAGRun) ? displayDAGRun.dagRunId : undefined
+            }
+            sourceFileName={
+              isSubDAGRun(displayDAGRun)
+                ? undefined
+                : displayDAGRun.sourceFileName
+            }
+          />
+        </div>
       )}
 
       <StatusUpdateModal
@@ -552,15 +703,22 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
         onSubmit={onUpdateStatus}
       />
 
+      <StepDetailsDrawer
+        dagName={displayDAGRun.name}
+        isOpen={isStepDetailsOpen}
+        step={selectedDetailStep}
+        onClose={closeStepDetails}
+      />
+
       {/* Log viewer modal */}
       <LogViewer
         isOpen={logViewer.isOpen}
         onClose={() => setLogViewer((prev) => ({ ...prev, isOpen: false }))}
         logType={logViewer.logType}
-        dagName={dagRun.name}
+        dagName={displayDAGRun.name}
         dagRunId={logViewer.dagRunId}
         stepName={logViewer.stepName}
-        dagRun={dagRun}
+        dagRun={displayDAGRun}
         stream={logViewer.stream}
         node={logViewer.node}
       />
@@ -576,9 +734,9 @@ function DAGStatus({ dagRun, fileName, artifactEnabled = false }: Props) {
             ...(parallelExecutionModal.node.subRuns || []),
             ...(parallelExecutionModal.node.subRunsRepeated || []),
           ]}
-          rootDagName={dagRun.rootDAGRunName}
-          rootDagRunId={dagRun.rootDAGRunId}
-          parentDagRunId={dagRun.dagRunId}
+          rootDagName={displayDAGRun.rootDAGRunName}
+          rootDagRunId={displayDAGRun.rootDAGRunId}
+          parentDagRunId={displayDAGRun.dagRunId}
           onSelectSubRun={(subRunIndex, openInNewTab) => {
             navigateToSubDagRun(
               parallelExecutionModal.node!,

@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/dagucloud/dagu/internal/cmn/config"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/test"
 	"github.com/stretchr/testify/require"
@@ -24,9 +25,10 @@ func TestDAGExecution(t *testing.T) {
 		t.Parallel()
 
 		dag := th.DAG(t, `steps:
-  - command: echo 1
+  - run: echo 1
     output: NO_NAME_STEP_OUT
-  - command: echo ${NO_NAME_STEP_OUT}=1
+  - run: echo ${NO_NAME_STEP_OUT}=1
+    depends: cmd_1
     output: NO_NAME_STEP_OUT2
 `)
 		agent := dag.Agent()
@@ -41,10 +43,10 @@ func TestDAGExecution(t *testing.T) {
 		dag := th.DAG(t, `type: graph
 steps:
   - name: "1"
-    command: echo 1
+    run: echo 1
   - name: "2"
     depends: "1"
-    command: echo 2
+    run: echo 2
 `)
 		agent := dag.Agent()
 		agent.RunSuccess(t)
@@ -57,7 +59,7 @@ steps:
 		dag := th.DAG(t, `params:
   - NAME: "foo"
 steps:
-  - command: |
+  - run: |
 `+indentTestScript(pipeCommand, 6)+`
     output: OUT1
 `)
@@ -81,7 +83,7 @@ steps:
   - `+dotenv1Path+`
   - `+dotenv2Path+`
 steps:
-  - command: echo "${ENV1} ${ENV2}"
+  - run: echo "${ENV1} ${ENV2}"
     output: OUT1
 `)
 		agent := dag.Agent()
@@ -96,11 +98,12 @@ steps:
 		t.Parallel()
 
 		dag := th.DAG(t, `steps:
-  - command: bash
-    script: |
+  - run: |
       echo first 1>&2
       echo second 1>&2
       exit 7
+    with:
+      shell: bash
 `)
 		agent := dag.Agent()
 		err := agent.Run(agent.Context)
@@ -114,11 +117,11 @@ steps:
 		dag := th.DAG(t, `type: graph
 steps:
   - name: slow
-    command: sleep 2
+    run: sleep 2
     timeout_sec: 1
   - name: after
     depends: slow
-    command: echo after
+    run: echo after
 `)
 		agent := dag.Agent()
 		err := agent.Run(agent.Context)
@@ -139,11 +142,11 @@ params:
 
 steps:
   - name: Hello
-    command: |
+    run: |
 `+indentTestScript(nameCommand, 6)+`
     output: OUT1
   - name: Name
-    command: |
+    run: |
 `+indentTestScript(greetingCommand, 6)+`
     depends: Hello
     output: OUT2
@@ -166,10 +169,10 @@ steps:
   - AGE: 30
 
 steps:
-  - command: |
+  - run: |
 `+indentTestScript(nameCommand, 6)+`
     output: OUT1
-  - command: |
+  - run: |
 `+indentTestScript(greetingCommand, 6)+`
     output: OUT2
 `)
@@ -193,7 +196,7 @@ steps:
 
 steps:
   - output: OUT1
-    command: |
+    run: |
 `+indentTestScript(positionalCommand, 6)+`
 `)
 		agent := dag.Agent()
@@ -225,7 +228,7 @@ steps:
 
 steps:
   - output: OUT1
-    script: |
+    run: |
 `+indentTestScript(positionalScript, 6)+`
 `)
 		agent := dag.Agent()
@@ -256,7 +259,7 @@ steps:
 		dag := th.DAG(t, `params:
   - NAME: "foo"
 steps:
-  - script: |
+  - run: |
 `+indentTestScript(scriptCommand, 6)+`
     output: OUT1
 `)
@@ -273,12 +276,15 @@ steps:
 		out1Command := test.Output("abc run def")
 		out2Command := test.Output("match")
 		dag := th.DAG(t, `steps:
-  - command: |
+  - id: source
+    run: |
 `+indentTestScript(out1Command, 6)+`
     output: OUT1
-  - command: |
+  - id: match
+    run: |
 `+indentTestScript(out2Command, 6)+`
     output: OUT2
+    depends: source
     preconditions:
       - condition: "$OUT1"
         expected: "re:^abc.*def$"
@@ -295,11 +301,13 @@ steps:
 		t.Parallel()
 
 		dag := th.DAG(t, `steps:
-  - command: |
+  - id: config
+    run: |
       echo '{"port": 8080, "host": "localhost"}'
     output: CONFIG
 
-  - command: echo "Starting server at ${CONFIG.host}:${CONFIG.port}"
+  - run: echo "Starting server at ${CONFIG.host}:${CONFIG.port}"
+    depends: config
     output: OUT1
 `)
 		agent := dag.Agent()
@@ -313,19 +321,26 @@ steps:
 		t.Parallel()
 
 		dataPrefix := filepath.ToSlash(filepath.Join(t.TempDir(), "dagu_test_integration"))
-		dag := th.DAG(t, fmt.Sprintf(`env:
+		dag := th.DAG(t, fmt.Sprintf(`params:
+  - name: process_date
+    type: string
+    eval: "`+"`"+`date '+%%Y%%m%%d_%%H%%M%%S'`+"`"+`"
+
+env:
   - DATA_DIR: %q
-  - PROCESS_DATE: "`+"`"+`date '+%%Y%%m%%d_%%H%%M%%S'`+"`"+`"
+  - PROCESS_DATE: "${params.process_date}"
 
 steps:
-  - command: echo foo
+  - run: echo foo
     stdout: "${DATA_DIR}_${PROCESS_DATE}"
-  - command: cat ${DATA_DIR}_${PROCESS_DATE}
+  - run: cat ${DATA_DIR}_${PROCESS_DATE}
+    depends: cmd_1
     output: OUT1
     preconditions:
       - condition: "${DATA_DIR}_${PROCESS_DATE}"
         expected: "re:[0-9]{8}_[0-9]{6}"
-  - command: rm ${DATA_DIR}_${PROCESS_DATE}
+  - run: rm ${DATA_DIR}_${PROCESS_DATE}
+    depends: cmd_2
 `, dataPrefix))
 		agent := dag.Agent()
 		agent.RunSuccess(t)
@@ -347,7 +362,7 @@ steps:
 
 steps:
   - output: OUT1
-    script: |
+    run: |
 `+indentTestScript(envScript, 6)+`
 `)
 		agent := dag.Agent()
@@ -364,20 +379,22 @@ steps:
 		t.Parallel()
 
 		dag := th.DAG(t, `steps:
-  - command: echo $DAG_RUN_LOG_FILE
+  - run: echo $DAG_RUN_LOG_FILE
     output: OUT1
-  - command: echo $DAG_RUN_STEP_STDOUT_FILE
+  - run: echo $DAG_RUN_STEP_STDOUT_FILE
     output: OUT2
-  - command: echo $DAG_RUN_STEP_NAME
+  - run: echo $DAG_RUN_STEP_NAME
     output: OUT3
-  - command: sh
-    output: OUT4
-    script: |
+  - run: |
       echo $DAG_NAME
-  - command: bash
-    output: OUT5
-    script: |
+    with:
+      shell: sh
+    output: OUT4
+  - run: |
       echo $DAG_RUN_ID
+    with:
+      shell: bash
+    output: OUT5
 `)
 		agent := dag.Agent()
 		agent.RunSuccess(t)
@@ -405,7 +422,7 @@ steps:
 
 		dag := th.DAG(t, `steps:
   - name: first
-    command: echo $DAG_RUN_STEP_NAME
+    run: echo $DAG_RUN_STEP_NAME
     output: FIRST_OUT
 
   - name: second
@@ -413,7 +430,7 @@ steps:
       - LOG_SUFFIX=custom-error
     stdout: "`+stdoutPathForYAML+`"
     stderr: "`+stderrPathForYAML+`"
-    command: |
+    run: |
 `+indentTestScript(secondCommand, 6)+`
 `)
 		agent := dag.Agent()
@@ -441,16 +458,17 @@ steps:
 		t.Parallel()
 
 		dag := th.DAG(t, `steps:
-  - type: jq
-    command: .user.name # Get user name from JSON
-    output: NAME
-    script: |
-      {
-        "user": {
-          "name": "John",
-          "age": 30
+  - action: jq.filter
+    with:
+      filter: .user.name # Get user name from JSON
+      data: |
+        {
+          "user": {
+            "name": "John",
+            "age": 30
+          }
         }
-      }
+    output: NAME
 `)
 		agent := dag.Agent()
 		agent.RunSuccess(t)
@@ -463,12 +481,14 @@ steps:
 		t.Parallel()
 
 		dag := th.DAG(t, `steps:
-  - command: |
+  - id: config
+    run: |
       echo '{"port": 8080, "host": "localhost"}'
     output: CONFIG
 
   - name: start_server
-    command: echo "Starting server at ${CONFIG.host}:${CONFIG.port}"
+    depends: config
+    run: echo "Starting server at ${CONFIG.host}:${CONFIG.port}"
     output: OUT1
 `)
 		agent := dag.Agent()
@@ -481,12 +501,17 @@ steps:
 	t.Run("PerlScript", func(t *testing.T) {
 		t.Parallel()
 
-		dag := th.DAG(t, `steps:
-  - command: perl
-    script: |
+		dag := th.DAG(t, `env:
+  - LC_ALL: C
+  - LC_CTYPE: C
+  - LANG: C
+steps:
+  - run: |
       use strict;
       use warnings;
       print("Hello World\n");
+    with:
+      shell: perl
     output: OUT1
 `)
 		agent := dag.Agent()
@@ -499,8 +524,12 @@ steps:
 	t.Run("Shebang", func(t *testing.T) {
 		t.Parallel()
 
-		dag := th.DAG(t, `steps:
-  - script: |
+		dag := th.DAG(t, `env:
+  - LC_ALL: C
+  - LC_CTYPE: C
+  - LANG: C
+steps:
+  - run: |
       #!env perl
       use strict;
       use warnings;
@@ -517,7 +546,11 @@ steps:
 	t.Run("ShebangInCommand", func(t *testing.T) {
 		t.Parallel()
 
-		dag := th.DAG(t, `steps:
+		dag := th.DAG(t, `env:
+  - LC_ALL: C
+  - LC_CTYPE: C
+  - LANG: C
+steps:
   - |
       #!env perl
       use strict;
@@ -536,11 +569,11 @@ steps:
   - TILDE: ~/
 steps:
   - working_dir: $TILDE
-    command: echo $PWD
+    run: echo $PWD
     output: OUT1
 
   - working_dir: $WORKDIR
-    command: echo $PWD
+    run: echo $PWD
     output: OUT2
 `)
 		agent := dag.Agent()
@@ -557,10 +590,10 @@ steps:
 params: bar
 steps:
   - name: step1
-    command: echo start
+    run: echo start
     output: OUT1 # "start"
   - name: foo
-    command: echo foo
+    run: echo foo
     depends:
       - step1
     output: OUT2 # "foo"
@@ -568,7 +601,7 @@ steps:
       - condition: $OUT1 # should be "start"
         expected: start
   - name: bar
-    command: echo bar
+    run: echo bar
     depends:
       - step1
     output: OUT3 # "bar"
@@ -576,7 +609,7 @@ steps:
       - condition: "$1" # should be "bar"
         expected: bar
   - name: baz
-    command: echo baz
+    run: echo baz
     depends:
       - foo
       - bar
@@ -599,9 +632,9 @@ steps:
 		t.Parallel()
 
 		dag := th.DAG(t, `steps:
-  - command: |
-      echo 'hello world' && ls -al /
-    shell: bash -o errexit -o xtrace -o pipefail -c
+  - run: echo 'hello world' && ls -al /
+    with:
+      shell: bash -o errexit -o xtrace -o pipefail -c
     output: OUT1
 `)
 		agent := dag.Agent()
@@ -638,6 +671,52 @@ steps:
 	})
 }
 
+func TestDotEnvUsesResolvedWorkingDirFromBaseEnv(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	workDir := filepath.Join(baseDir, "signals")
+	require.NoError(t, os.MkdirAll(workDir, 0750))
+	if resolved, err := filepath.EvalSymlinks(workDir); err == nil {
+		workDir = resolved
+	}
+	workDirForYAML := filepath.ToSlash(workDir)
+
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, ".env"), []byte("PYTHON_BIN=/usr/local/bin/python\n"), 0600))
+
+	baseConfigPath := filepath.Join(baseDir, "base.yaml")
+	require.NoError(t, os.WriteFile(baseConfigPath, fmt.Appendf(nil, `env:
+  - QUANT_SIGNAL_DIR: %q
+`, workDirForYAML), 0600))
+
+	th := test.Setup(t, test.WithConfigMutator(func(cfg *config.Config) {
+		cfg.Paths.BaseConfig = baseConfigPath
+	}))
+
+	require.NoError(t, os.MkdirAll(th.Config.Paths.DAGsDir, 0750))
+	require.NoError(t, os.WriteFile(filepath.Join(th.Config.Paths.DAGsDir, ".env"), []byte("PYTHON_BIN=wrong-from-dag-dir\n"), 0600))
+
+	pwdCommand := test.ForOS("pwd", "(Get-Location).Path")
+	dag := th.DAG(t, `dotenv: .env
+working_dir: ${QUANT_SIGNAL_DIR}
+steps:
+  - name: check-env
+    command: |
+`+indentTestScript(test.EnvOutput("QUANT_SIGNAL_DIR", "PYTHON_BIN"), 6)+`
+    output: ENV_RESULT
+  - name: check-pwd
+    command: |
+`+indentTestScript(pwdCommand, 6)+`
+    output: PWD_RESULT
+`)
+
+	dag.Agent().RunSuccess(t)
+
+	outputs := dag.ReadOutputs(t)
+	require.Equal(t, workDirForYAML+"|/usr/local/bin/python", outputs["envResult"])
+	require.Equal(t, canonicalTestPath(workDir), canonicalTestPath(outputs["pwdResult"]))
+}
+
 func TestCallSubDAG(t *testing.T) {
 	t.Parallel()
 
@@ -645,10 +724,13 @@ func TestCallSubDAG(t *testing.T) {
 
 	// Use multi-document YAML to include both parent and sub DAG
 	dagContent := `steps:
-  - call: sub
-    params: "SUB_P1=foo"
+  - action: dag.run
+    with:
+      dag: sub
+      params: "SUB_P1=foo"
     output: OUT1
-  - command: echo "${OUT1.outputs.OUT}"
+  - run: echo "${OUT1.outputs.OUT}"
+    depends: dag_1
     output: OUT2
 ---
 name: sub
@@ -656,7 +738,7 @@ params:
   SUB_P1: xyz
 steps:
   - name: step1
-    command: echo $SUB_P1
+    run: echo $SUB_P1
     output: OUT
 `
 	dag := th.DAG(t, dagContent)
@@ -677,26 +759,32 @@ func TestNestedThreeLevelDAG(t *testing.T) {
 params:
   PARAM: VALUE
 steps:
-  - command: echo "value is ${PARAM}"
+  - run: echo "value is ${PARAM}"
     output: OUTPUT
 `))
 
 	// Create parent and sub DAGs using multi-document YAML
 	dagContent := `steps:
-  - call: nested_child
-    params: "PARAM=123"
+  - action: dag.run
+    with:
+      dag: nested_child
+      params: "PARAM=123"
     output: SUB_OUTPUT
-  - command: echo "${SUB_OUTPUT.outputs.OUTPUT}"
+  - run: echo "${SUB_OUTPUT.outputs.OUTPUT}"
+    depends: dag_1
     output: OUT1
 ---
 name: nested_child
 params:
   PARAM: VALUE
 steps:
-  - call: nested_grand_child
-    params: "PARAM=${PARAM}"
+  - action: dag.run
+    with:
+      dag: nested_grand_child
+      params: "PARAM=${PARAM}"
     output: GRAND_SUB_OUTPUT
-  - command: echo "${GRAND_SUB_OUTPUT.outputs.OUTPUT}"
+  - run: echo "${GRAND_SUB_OUTPUT.outputs.OUTPUT}"
+    depends: dag_1
     output: OUTPUT
 `
 	dag := th.DAG(t, dagContent)
@@ -718,13 +806,13 @@ func TestSkippedPreconditions(t *testing.T) {
 	dag := th.DAG(t, fmt.Sprintf(`type: graph
 steps:
   - name: run
-    command: |
+    run: |
 %s
     output: OUT_RUN
   - name: skipped
     depends:
       - run
-    command: |
+    run: |
 %s
     preconditions:
       - condition: "$OUT_RUN"
@@ -733,7 +821,7 @@ steps:
   - name: executed
     depends:
       - run
-    command: |
+    run: |
 %s
     preconditions:
       - condition: "$OUT_RUN"
@@ -759,24 +847,24 @@ func TestComplexDependencies(t *testing.T) {
 	dag := th.DAG(t, `type: graph
 steps:
   - name: start
-    command: echo "start"
+    run: echo "start"
     output: START
   - name: branch1
-    command: echo "branch1"
+    run: echo "branch1"
     depends: start
     output: BRANCH1
   - name: branch2
-    command: echo "branch2"
+    run: echo "branch2"
     depends: start
     output: BRANCH2
   - name: merge
-    command: echo "merge"
+    run: echo "merge"
     depends:
       - branch1
       - branch2
     output: MERGE
   - name: final
-    command: echo "final"
+    run: echo "final"
     depends: merge
     output: FINAL
 `)
@@ -805,17 +893,17 @@ env:
 steps:
   - env:
       MY_VAR: "step1_value"
-    command: `+test.ExpandedOutput("${MY_VAR}")+`
+    run: `+test.ExpandedOutput("${MY_VAR}")+`
     output: OUT1
 
   - env:
       MY_VAR: $MY_VAR2
-    command: `+test.ExpandedOutput("${MY_VAR}")+`
+    run: `+test.ExpandedOutput("${MY_VAR}")+`
     output: OUT2
 
   - env:
       MY_VAR: "dynamic value"
-    command: `+test.ExpandedOutput("${MY_VAR}")+`
+    run: `+test.ExpandedOutput("${MY_VAR}")+`
     output: OUT3
 `)
 
@@ -853,7 +941,7 @@ func TestStepWorkingDir(t *testing.T) {
 	dag := th.DAG(t, `
 steps:
   - working_dir: `+stepWorkDir+`
-    command: `+test.ForOS("pwd", "(Get-Location).Path")+`
+    run: `+test.ForOS("pwd", "(Get-Location).Path")+`
     output: STEP_DIR
 `)
 
@@ -879,9 +967,9 @@ func TestPreconditionNegate(t *testing.T) {
 env:
   - STATUS: success
 steps:
-  - command: echo "always runs"
+  - run: echo "always runs"
     output: OUT1
-  - command: echo "should skip"
+  - run: echo "should skip"
     output: OUT2
     preconditions:
       - condition: "${STATUS}"
@@ -904,9 +992,9 @@ steps:
 env:
   - STATUS: failure
 steps:
-  - command: echo "always runs"
+  - run: echo "always runs"
     output: OUT1
-  - command: echo "should run"
+  - run: echo "should run"
     output: OUT2
     preconditions:
       - condition: "${STATUS}"
@@ -927,7 +1015,7 @@ steps:
 		// When negate:true with a command, step runs when command fails (non-zero exit)
 		dag := th.DAG(t, `type: graph
 steps:
-  - command: echo "should run"
+  - run: echo "should run"
     output: OUT1
     preconditions:
       - condition: "false"
@@ -952,7 +1040,7 @@ preconditions:
     expected: "production"
     negate: true
 steps:
-  - command: echo "dag ran"
+  - run: echo "dag ran"
     output: OUT1
 `)
 		agent := dag.Agent()

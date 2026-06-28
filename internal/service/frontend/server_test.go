@@ -8,7 +8,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,10 +20,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
 
-	authmodel "github.com/dagucloud/dagu/internal/auth"
 	"github.com/dagucloud/dagu/internal/cmn/config"
-	"github.com/dagucloud/dagu/internal/persis/fileuser"
+	"github.com/dagucloud/dagu/internal/service/eventstore"
+	apiv1 "github.com/dagucloud/dagu/internal/service/frontend/api/v1"
 	frontendauth "github.com/dagucloud/dagu/internal/service/frontend/auth"
+	"github.com/dagucloud/dagu/internal/service/frontend/sse"
 )
 
 // testContext returns a context that is cancelled when the test ends,
@@ -32,147 +36,373 @@ func testContext(t *testing.T) context.Context {
 	return ctx
 }
 
-// testConfig creates a minimal config for initBuiltinAuthService tests.
-// All directories point to subdirectories of the given temp dir.
-func testConfig(tmpDir string, ia config.InitialAdmin) *config.Config {
-	return &config.Config{
-		Paths: config.PathsConfig{
-			UsersDir:    filepath.Join(tmpDir, "users"),
-			APIKeysDir:  filepath.Join(tmpDir, "apikeys"),
-			WebhooksDir: filepath.Join(tmpDir, "webhooks"),
-			DataDir:     filepath.Join(tmpDir, "data"),
+func testAppStream(t *testing.T) *sse.AppStreamService {
+	t.Helper()
+	stream, err := sse.NewAppStreamService(sse.AppStreamConfig{})
+	require.NoError(t, err)
+	t.Cleanup(stream.Shutdown)
+	return stream
+}
+
+func TestRegisterDedicatedSSEFetchersUsesEventStoreInvalidationForRunTopics(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		topicType  sse.TopicType
+		topic      string
+		identifier string
+	}{
+		{
+			name:       "dag run details",
+			topicType:  sse.TopicTypeDAGRun,
+			topic:      "dagrun:test/run-1",
+			identifier: "test/run-1",
 		},
-		Server: config.Server{
-			Auth: config.Auth{
-				Mode: config.AuthModeBuiltin,
-				Builtin: config.AuthBuiltin{
-					Token: config.TokenConfig{
-						Secret: "test-secret-for-jwt-signing",
-						TTL:    24 * time.Hour,
-					},
-					InitialAdmin: ia,
-				},
-			},
+		{
+			name:       "sub dag run details",
+			topicType:  sse.TopicTypeSubDAGRun,
+			topic:      "subdagrun:test/run-1/sub-1",
+			identifier: "test/run-1/sub-1",
 		},
+		{
+			name:       "dag history",
+			topicType:  sse.TopicTypeDAGHistory,
+			topic:      "daghistory:test.yaml",
+			identifier: "test.yaml",
+		},
+		{
+			name:       "dag runs list",
+			topicType:  sse.TopicTypeDAGRuns,
+			topic:      "dagruns:limit=10&status=4",
+			identifier: "limit=10&status=4",
+		},
+		{
+			name:       "queues list",
+			topicType:  sse.TopicTypeQueues,
+			topic:      "queues:",
+			identifier: "",
+		},
+		{
+			name:       "dags list",
+			topicType:  sse.TopicTypeDAGsList,
+			topic:      "dagslist:page=1&perPage=100",
+			identifier: "page=1&perPage=100",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mux := sse.NewMultiplexer(sse.StreamConfig{HeartbeatInterval: time.Hour}, nil)
+			t.Cleanup(mux.Shutdown)
+
+			srv := &Server{
+				apiV1:        &apiv1.API{},
+				eventService: eventstore.New(nil),
+				appStream:    testAppStream(t),
+			}
+			srv.registerDedicatedSSEFetchers(mux)
+
+			var fetches atomic.Int64
+			mux.RegisterFetcher(tt.topicType, func(_ context.Context, identifier string) (any, error) {
+				return map[string]any{
+					"id":      identifier,
+					"fetches": fetches.Add(1),
+				}, nil
+			})
+
+			handler := sse.NewMultiplexHandler(mux, nil)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				req := httptest.NewRequest(
+					http.MethodGet,
+					"/api/v1/events/stream?topic="+url.QueryEscape(tt.topic),
+					nil,
+				).WithContext(ctx)
+				handler.HandleStream(httptest.NewRecorder(), req)
+			}()
+
+			require.Eventually(t, func() bool {
+				return fetches.Load() == 1
+			}, time.Second, 10*time.Millisecond)
+			require.Never(t, func() bool {
+				return fetches.Load() > 1
+			}, 1200*time.Millisecond, 20*time.Millisecond)
+
+			mux.WakeTopic(tt.topicType, tt.identifier)
+			require.Eventually(t, func() bool {
+				return fetches.Load() == 2
+			}, time.Second, 10*time.Millisecond)
+
+			cancel()
+			require.Eventually(t, func() bool {
+				select {
+				case <-done:
+					return true
+				default:
+					return false
+				}
+			}, time.Second, 10*time.Millisecond)
+		})
 	}
 }
 
-func TestInitBuiltinAuthService_AutoProvision(t *testing.T) {
+func TestRegisterDedicatedSSEFetchersKeepsDAGsListPollingWithoutAppStream(t *testing.T) {
 	t.Parallel()
 
-	t.Run("ProvisionsAdminWhenNoUsers", func(t *testing.T) {
-		t.Parallel()
-		cfg := testConfig(t.TempDir(), config.InitialAdmin{
-			Username: "testadmin",
-			Password: "securepass123",
-		})
+	mux := sse.NewMultiplexer(sse.StreamConfig{HeartbeatInterval: time.Hour}, nil)
+	t.Cleanup(mux.Shutdown)
 
-		result, setupRequired, err := initBuiltinAuthService(testContext(t), cfg, nil)
-		require.NoError(t, err)
-		assert.False(t, setupRequired, "setup should not be required after auto-provisioning")
+	srv := &Server{
+		apiV1:        &apiv1.API{},
+		eventService: eventstore.New(nil),
+	}
+	srv.registerDedicatedSSEFetchers(mux)
 
-		// Verify user was created
-		count, err := result.AuthService.CountUsers(testContext(t))
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), count)
-
-		// Verify user has correct role and username
-		user, err := result.UserStore.GetByUsername(testContext(t), "testadmin")
-		require.NoError(t, err)
-		assert.Equal(t, "testadmin", user.Username)
-		assert.Equal(t, authmodel.RoleAdmin, user.Role)
+	var fetches atomic.Int64
+	mux.RegisterFetcher(sse.TopicTypeDAGsList, func(_ context.Context, identifier string) (any, error) {
+		return map[string]any{
+			"id":      identifier,
+			"fetches": fetches.Add(1),
+		}, nil
 	})
 
-	t.Run("SkipsWhenUsersExist", func(t *testing.T) {
-		t.Parallel()
-		tmpDir := t.TempDir()
-		cfg := testConfig(tmpDir, config.InitialAdmin{
-			Username: "testadmin",
-			Password: "securepass123",
-		})
+	handler := sse.NewMultiplexHandler(mux, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-		// Pre-create a user directly in the store
-		store, err := fileuser.New(cfg.Paths.UsersDir)
-		require.NoError(t, err)
-		existing := authmodel.NewUser("existinguser", "$2a$12$K8gHXqrFdFvMwJBG0VlJGuAGz3FwBmTm8xnNQblN2tCxrQgPLmwHa", authmodel.RoleAdmin)
-		require.NoError(t, store.Create(testContext(t), existing))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req := httptest.NewRequest(
+			http.MethodGet,
+			"/api/v1/events/stream?topic="+url.QueryEscape("dagslist:page=1&perPage=100"),
+			nil,
+		).WithContext(ctx)
+		handler.HandleStream(httptest.NewRecorder(), req)
+	}()
 
-		result, setupRequired, err := initBuiltinAuthService(testContext(t), cfg, nil)
-		require.NoError(t, err)
-		assert.False(t, setupRequired)
+	require.Eventually(t, func() bool {
+		return fetches.Load() > 1
+	}, 2*time.Second, 10*time.Millisecond)
 
-		// Verify no additional user was created
-		count, err := result.AuthService.CountUsers(testContext(t))
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), count)
-	})
-
-	t.Run("SkipsWhenNotConfigured", func(t *testing.T) {
-		t.Parallel()
-		cfg := testConfig(t.TempDir(), config.InitialAdmin{})
-
-		_, setupRequired, err := initBuiltinAuthService(testContext(t), cfg, nil)
-		require.NoError(t, err)
-		assert.True(t, setupRequired, "setup should be required when initial_admin is not configured")
-	})
-
-	t.Run("FailsOnInvalidPassword", func(t *testing.T) {
-		t.Parallel()
-		cfg := testConfig(t.TempDir(), config.InitialAdmin{
-			Username: "testadmin",
-			Password: "short", // less than 8 characters
-		})
-
-		_, _, err := initBuiltinAuthService(testContext(t), cfg, nil)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to auto-provision initial admin user")
-	})
-
-	t.Run("Idempotent", func(t *testing.T) {
-		t.Parallel()
-		tmpDir := t.TempDir()
-		cfg := testConfig(tmpDir, config.InitialAdmin{
-			Username: "testadmin",
-			Password: "securepass123",
-		})
-
-		// First call: provisions the user
-		_, setupRequired, err := initBuiltinAuthService(testContext(t), cfg, nil)
-		require.NoError(t, err)
-		assert.False(t, setupRequired)
-
-		// Second call: should not create a duplicate
-		result, setupRequired, err := initBuiltinAuthService(testContext(t), cfg, nil)
-		require.NoError(t, err)
-		assert.False(t, setupRequired)
-
-		count, err := result.AuthService.CountUsers(testContext(t))
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), count)
-	})
+	cancel()
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
 }
 
-// TestInitBuiltinAuthService_UserCanAuthenticate verifies that the auto-provisioned
-// user can actually authenticate (password was hashed correctly).
-func TestInitBuiltinAuthService_UserCanAuthenticate(t *testing.T) {
+func TestRegisterDedicatedSSEFetchersUsesMutationInvalidationForDocTopics(t *testing.T) {
 	t.Parallel()
-	cfg := testConfig(t.TempDir(), config.InitialAdmin{
-		Username: "authadmin",
-		Password: "mypassword123",
+
+	tests := []struct {
+		name       string
+		topicType  sse.TopicType
+		topic      string
+		identifier string
+	}{
+		{
+			name:       "doc content",
+			topicType:  sse.TopicTypeDoc,
+			topic:      "doc:runbooks/deploy",
+			identifier: "runbooks/deploy",
+		},
+		{
+			name:       "doc tree",
+			topicType:  sse.TopicTypeDocTree,
+			topic:      "doctree:page=1&perPage=200",
+			identifier: "page=1&perPage=200",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mux := sse.NewMultiplexer(sse.StreamConfig{HeartbeatInterval: time.Hour}, nil)
+			t.Cleanup(mux.Shutdown)
+
+			srv := &Server{
+				apiV1:     &apiv1.API{},
+				appStream: testAppStream(t),
+			}
+			srv.registerDedicatedSSEFetchers(mux)
+
+			var fetches atomic.Int64
+			mux.RegisterFetcher(tt.topicType, func(_ context.Context, identifier string) (any, error) {
+				return map[string]any{
+					"id":      identifier,
+					"fetches": fetches.Add(1),
+				}, nil
+			})
+
+			handler := sse.NewMultiplexHandler(mux, nil)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				req := httptest.NewRequest(
+					http.MethodGet,
+					"/api/v1/events/stream?topic="+url.QueryEscape(tt.topic),
+					nil,
+				).WithContext(ctx)
+				handler.HandleStream(httptest.NewRecorder(), req)
+			}()
+
+			require.Eventually(t, func() bool {
+				return fetches.Load() == 1
+			}, time.Second, 10*time.Millisecond)
+			require.Never(t, func() bool {
+				return fetches.Load() > 1
+			}, 1200*time.Millisecond, 20*time.Millisecond)
+
+			mux.WakeTopic(tt.topicType, tt.identifier)
+			require.Eventually(t, func() bool {
+				return fetches.Load() == 2
+			}, time.Second, 10*time.Millisecond)
+
+			cancel()
+			require.Eventually(t, func() bool {
+				select {
+				case <-done:
+					return true
+				default:
+					return false
+				}
+			}, time.Second, 10*time.Millisecond)
+		})
+	}
+}
+
+func TestDAGFileChangeWakesDAGsListSSETopic(t *testing.T) {
+	t.Parallel()
+
+	rootDir := t.TempDir()
+	dagsDir := filepath.Join(rootDir, "dags")
+	require.NoError(t, os.MkdirAll(dagsDir, 0750))
+
+	srv := &Server{
+		config: &config.Config{
+			Paths: config.PathsConfig{
+				DAGsDir:         dagsDir,
+				SuspendFlagsDir: filepath.Join(rootDir, "flags"),
+				DAGRunsDir:      filepath.Join(rootDir, "dag-runs"),
+				QueueDir:        filepath.Join(rootDir, "queue"),
+				DocsDir:         filepath.Join(rootDir, "docs"),
+			},
+		},
+		apiV1:        &apiv1.API{},
+		eventService: eventstore.New(nil),
+	}
+
+	router := chi.NewMux()
+	srv.setupSSERoute(testContext(t), router, "/api/v1")
+	require.NotNil(t, srv.appStream)
+	require.NotNil(t, srv.sseMultiplexer)
+	t.Cleanup(func() {
+		if srv.appStream != nil {
+			srv.appStream.Shutdown()
+		}
+		if srv.sseMultiplexer != nil {
+			srv.sseMultiplexer.Shutdown()
+		}
 	})
 
-	result, _, err := initBuiltinAuthService(testContext(t), cfg, nil)
-	require.NoError(t, err)
+	var fetches atomic.Int64
+	srv.sseMultiplexer.RegisterFetcher(sse.TopicTypeDAGsList, func(context.Context, string) (any, error) {
+		return map[string]any{
+			"fetches": fetches.Add(1),
+		}, nil
+	})
 
-	// Authenticate via the auth service
-	user, err := result.AuthService.Authenticate(testContext(t), "authadmin", "mypassword123")
-	require.NoError(t, err)
-	assert.Equal(t, "authadmin", user.Username)
-	assert.Equal(t, authmodel.RoleAdmin, user.Role)
+	handler := sse.NewMultiplexHandler(srv.sseMultiplexer, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Wrong password should fail
-	_, err = result.AuthService.Authenticate(testContext(t), "authadmin", "wrongpassword")
-	require.Error(t, err)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req := httptest.NewRequest(
+			http.MethodGet,
+			"/api/v1/events/stream?topic="+url.QueryEscape("dagslist:page=1&perPage=100"),
+			nil,
+		).WithContext(ctx)
+		handler.HandleStream(httptest.NewRecorder(), req)
+	}()
+
+	require.Eventually(t, func() bool {
+		return fetches.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dagsDir, "external-edit.yaml"), []byte(`schedule: "0 8 * * 6"
+steps:
+  - run: echo ok
+`), 0600))
+
+	require.Eventually(t, func() bool {
+		return fetches.Load() >= 2
+	}, 3*time.Second, 20*time.Millisecond)
+
+	cancel()
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestCacheControlForAssetDisablesJavaScriptCaching(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "no-cache, no-store, must-revalidate", cacheControlForAsset("/assets/bundle.js"))
+	assert.Equal(t, "no-cache, no-store, must-revalidate", cacheControlForAsset("/assets/legacy.js"))
+}
+
+func TestCacheControlForAssetCachesContentHashedJavaScriptChunks(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(
+		t,
+		"max-age=31536000, immutable",
+		cacheControlForAsset("/assets/vendors.a1b2c3d4e5f6a1b2.bundle.js"),
+	)
+}
+
+func TestCacheControlForAssetCachesContentHashedJavaScriptWorkers(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(
+		t,
+		"max-age=31536000, immutable",
+		cacheControlForAsset("/assets/yaml.a1b2c3d4e5f6a1b2.worker.js"),
+	)
+	assert.Equal(
+		t,
+		"no-cache, no-store, must-revalidate",
+		cacheControlForAsset("/assets/yaml.worker.js"),
+	)
+}
+
+func TestCacheControlForAssetCachesNonJavaScriptAssets(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "max-age=86400", cacheControlForAsset("/assets/favicon.ico"))
 }
 
 func TestServerUsesEvaluatedBasePathForOIDCAndAPI(t *testing.T) {
@@ -220,6 +450,15 @@ func TestServerUsesEvaluatedBasePathForOIDCAndAPI(t *testing.T) {
 	rootCallbackRecorder := httptest.NewRecorder()
 	r.ServeHTTP(rootCallbackRecorder, httptest.NewRequest(http.MethodGet, "/oidc-callback", nil))
 	assert.Equal(t, http.StatusNotFound, rootCallbackRecorder.Code)
+}
+
+func TestPublicURLWithBasePath(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "https://dagu.example.com", publicURLWithBasePath("https://dagu.example.com/", ""))
+	assert.Equal(t, "https://dagu.example.com/dagu", publicURLWithBasePath("https://dagu.example.com/", "/dagu"))
+	assert.Equal(t, "https://dagu.example.com/root/dagu", publicURLWithBasePath("https://dagu.example.com/root/", "dagu/"))
+	assert.Empty(t, publicURLWithBasePath("", "/dagu"))
 }
 
 func TestNewServerShutdownContext(t *testing.T) {

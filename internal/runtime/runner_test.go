@@ -5,6 +5,7 @@ package runtime_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path"
@@ -32,10 +33,6 @@ func shellTestPath(path string) string {
 
 func windowsShellTest() bool {
 	return os.PathSeparator == '\\'
-}
-
-func shellSubstitution(command string) string {
-	return "`" + command + "`"
 }
 
 func trimmedCounterReadCommand(counterFile string) string {
@@ -69,25 +66,8 @@ func fileMissingCommand(path string) string {
 	return fmt.Sprintf("test ! -f %s", test.PosixQuote(path))
 }
 
-func repeatCounterValueCondition(counterFile string) string {
-	if windowsShellTest() {
-		return shellSubstitution(fmt.Sprintf(
-			"if (Test-Path %s) { [System.IO.File]::ReadAllText(%s).TrimEnd([char]13,[char]10) } else { '' }",
-			test.PowerShellQuote(counterFile),
-			test.PowerShellQuote(counterFile),
-		))
-	}
-	return shellSubstitution(trimmedCounterReadCommand(counterFile))
-}
-
 func repeatExpectedCondition(counterFile, expected string) *core.Condition {
-	if windowsShellTest() {
-		return &core.Condition{Condition: repeatCounterEqualsCommand(counterFile, expected)}
-	}
-	return &core.Condition{
-		Condition: repeatCounterValueCondition(counterFile),
-		Expected:  expected,
-	}
+	return &core.Condition{Condition: repeatCounterEqualsCommand(counterFile, expected)}
 }
 
 func repeatConditionMutationTimeout() time.Duration {
@@ -378,6 +358,53 @@ func TestRunner(t *testing.T) {
 		result.assertNodeStatus(t, "3", core.NodeSucceeded)
 		result.assertNodeStatus(t, "4", core.NodeSucceeded)
 	})
+	t.Run("SkippedByRetryDependencyAllowsDownstream", func(t *testing.T) {
+		t.Parallel()
+		r := setupRunner(t, withMaxActiveRuns(1))
+
+		plan, err := runtime.NewPlanFromNodes(
+			runtime.NewNode(successStep("1"), runtime.NodeState{
+				Status:         core.NodeSkipped,
+				SkippedByRetry: true,
+			}),
+			runtime.NewNode(successStep("2", "1"), runtime.NodeState{
+				Status: core.NodeNotStarted,
+			}),
+		)
+		require.NoError(t, err)
+
+		result := planHelper{
+			testHelper: r,
+			Plan:       plan,
+			workDir:    t.TempDir(),
+		}.assertRun(t, core.Succeeded)
+
+		result.assertNodeStatus(t, "1", core.NodeSkipped)
+		result.assertNodeStatus(t, "2", core.NodeSucceeded)
+	})
+	t.Run("OrdinarySkippedDependencyStillSkipsDownstream", func(t *testing.T) {
+		t.Parallel()
+		r := setupRunner(t, withMaxActiveRuns(1))
+
+		plan, err := runtime.NewPlanFromNodes(
+			runtime.NewNode(successStep("1"), runtime.NodeState{
+				Status: core.NodeSkipped,
+			}),
+			runtime.NewNode(successStep("2", "1"), runtime.NodeState{
+				Status: core.NodeNotStarted,
+			}),
+		)
+		require.NoError(t, err)
+
+		result := planHelper{
+			testHelper: r,
+			Plan:       plan,
+			workDir:    t.TempDir(),
+		}.assertRun(t, core.Succeeded)
+
+		result.assertNodeStatus(t, "1", core.NodeSkipped)
+		result.assertNodeStatus(t, "2", core.NodeSkipped)
+	})
 	t.Run("ComplexCommand", func(t *testing.T) {
 		t.Parallel()
 		r := setupRunner(t, withMaxActiveRuns(1))
@@ -423,7 +450,7 @@ func TestRunner(t *testing.T) {
 				withDepends("1"),
 				withCommand("false"),
 				withPrecondition(&core.Condition{
-					Condition: "`echo 1`",
+					Condition: "1",
 					Expected:  "0",
 				}),
 				withContinueOn(core.ContinueOn{
@@ -483,7 +510,7 @@ func TestRunner(t *testing.T) {
 	})
 	t.Run("ContinueOnOutputStderr", func(t *testing.T) {
 		r := setupRunner(t)
-		command := test.JoinLines(
+		command := test.JoinShellCommands(
 			test.Stderr("test_output"),
 			test.Output("test_output"),
 			"exit 1",
@@ -784,6 +811,30 @@ func TestRunner(t *testing.T) {
 		result.assertNodeStatus(t, "2", core.NodeSucceeded)
 		result.assertNodeStatus(t, "3", core.NodeSucceeded)
 	})
+	t.Run("PreconditionUsesSameRuntimeManagedStepEnvAsCommand", func(t *testing.T) {
+		t.Parallel()
+
+		if windowsShellTest() {
+			t.Skip("Skipping Unix-specific env assertion on Windows")
+		}
+
+		r := setupRunner(t)
+
+		plan := r.newPlan(t,
+			newStep("1",
+				withCommand(`printf '%s' "$DAG_RUN_STEP_STDOUT_FILE"`),
+				withOutput("RESULT"),
+				withPrecondition(&core.Condition{
+					Condition: `test -n "$DAG_RUN_STEP_STDOUT_FILE"`,
+				}),
+			),
+		)
+
+		result := plan.assertRun(t, core.Succeeded)
+
+		result.assertNodeStatus(t, "1", core.NodeSucceeded)
+		assert.Equal(t, result.nodeByName(t, "1").GetStdout(), result.nodeByName(t, "1").OutputVariablesMap()["RESULT"])
+	})
 	t.Run("PreconditionWithCommandNotMet", func(t *testing.T) {
 		r := setupRunner(t)
 
@@ -861,6 +912,65 @@ func TestRunner(t *testing.T) {
 
 		result.assertNodeStatus(t, "1", core.NodeFailed)
 		result.assertNodeStatus(t, "onFailure", core.NodeSucceeded)
+	})
+	t.Run("OnFailureHandlerSkippedWhileRootDAGAutoRetryPending", func(t *testing.T) {
+		r := setupRunner(t,
+			withDAGAutoRetry(0, 2, true),
+			withOnFailure(successStep("onFailure")),
+			withOnExit(successStep("onExit")),
+		)
+
+		plan := r.newPlan(t, failStep("1"))
+
+		result := plan.assertRun(t, core.Failed)
+
+		result.assertNodeStatus(t, "1", core.NodeFailed)
+		result.assertNodeStatus(t, "onFailure", core.NodeNotStarted)
+		result.assertNodeStatus(t, "onExit", core.NodeSucceeded)
+	})
+	t.Run("OnFailureHandlerRunsWhenRootDAGAutoRetryExhausted", func(t *testing.T) {
+		r := setupRunner(t,
+			withDAGAutoRetry(2, 2, true),
+			withOnFailure(successStep("onFailure")),
+			withOnExit(successStep("onExit")),
+		)
+
+		plan := r.newPlan(t, failStep("1"))
+
+		result := plan.assertRun(t, core.Failed)
+
+		result.assertNodeStatus(t, "1", core.NodeFailed)
+		result.assertNodeStatus(t, "onFailure", core.NodeSucceeded)
+		result.assertNodeStatus(t, "onExit", core.NodeSucceeded)
+	})
+	t.Run("OnFailureHandlerRunsForChildDAGFailure", func(t *testing.T) {
+		r := setupRunner(t,
+			withDAGAutoRetry(0, 2, false),
+			withOnFailure(successStep("onFailure")),
+		)
+
+		plan := r.newPlan(t, failStep("1"))
+
+		result := plan.assertRun(t, core.Failed)
+
+		result.assertNodeStatus(t, "1", core.NodeFailed)
+		result.assertNodeStatus(t, "onFailure", core.NodeSucceeded)
+	})
+	t.Run("OnFailureHandlerRunsForRejectedRootDAGWithAutoRetryPending", func(t *testing.T) {
+		r := setupRunner(t,
+			withForcedStatus(core.Rejected),
+			withDAGAutoRetry(0, 2, true),
+			withOnFailure(successStep("onFailure")),
+			withOnExit(successStep("onExit")),
+		)
+
+		plan := r.newPlan(t, successStep("1"))
+
+		result := plan.assertRun(t, core.Rejected)
+
+		result.assertNodeStatus(t, "1", core.NodeSucceeded)
+		result.assertNodeStatus(t, "onFailure", core.NodeSucceeded)
+		result.assertNodeStatus(t, "onExit", core.NodeSucceeded)
 	})
 	t.Run("CancelOnSignal", func(t *testing.T) {
 		r := setupRunner(t)
@@ -968,8 +1078,12 @@ func TestRunner(t *testing.T) {
 	t.Run("WorkingDirNoExist", func(t *testing.T) {
 		r := setupRunner(t)
 
+		blockingFile := filepath.Join(t.TempDir(), "not-a-directory")
+		require.NoError(t, os.WriteFile(blockingFile, nil, 0o600))
+		workingDir := filepath.Join(blockingFile, "child")
+
 		plan := r.newPlan(t,
-			newStep("1", withWorkingDir("/nonexistent"),
+			newStep("1", withWorkingDir(workingDir),
 				withScript("echo 1"),
 			),
 		)
@@ -978,11 +1092,25 @@ func TestRunner(t *testing.T) {
 
 		result.assertNodeStatus(t, "1", core.NodeFailed)
 
-		if windowsShellTest() {
-			require.Contains(t, strings.ToLower(result.Error.Error()), "cannot find the path specified")
-		} else {
-			require.Contains(t, result.Error.Error(), "no such file or directory")
-		}
+		require.Contains(t, result.Error.Error(), "failed to create working directory")
+	})
+	t.Run("InvalidWorkingDirReferencePreservesLiteralPathForScript", func(t *testing.T) {
+		r := setupRunner(t)
+
+		sentinel := filepath.Join(t.TempDir(), "executed")
+		plan := r.newPlan(t,
+			newStep("1", withWorkingDir("${consts.missing}"),
+				withScript(createEmptyFileCommand(sentinel)),
+			),
+		)
+
+		result := plan.assertRun(t, core.Succeeded)
+
+		node := plan.GetNodeByName("1")
+		require.NotNil(t, node)
+		result.assertNodeStatus(t, "1", core.NodeSucceeded)
+		assert.Equal(t, filepath.Join(plan.workDir, "${consts.missing}"), node.State().WorkingDir)
+		require.FileExists(t, sentinel)
 	})
 	t.Run("OutputVariables", func(t *testing.T) {
 		t.Parallel()
@@ -1056,9 +1184,9 @@ func TestRunner(t *testing.T) {
 	t.Run("HandlingJSONWithSpecialChars", func(t *testing.T) {
 		r := setupRunner(t)
 
-		jsonData := "{\n\t\"key\": \"value\"\n}"
+		jsonData := `{\n\t"key": "value"\n}\n`
 		plan := r.newPlan(t,
-			newStep("1", withCommand(test.Output(jsonData)), withOutput("OUT")),
+			newStep("1", withCommand(test.OutputEscaped(jsonData)), withOutput("OUT")),
 			newStep("2", withCommand(test.ExpandedOutput("${OUT.key}")), withDepends("1"), withOutput("RESULT")),
 		)
 
@@ -1522,7 +1650,7 @@ func TestRunner_StepLevelTimeout(t *testing.T) {
 		r := setupRunner(t)
 		plan := r.newPlan(t,
 			newStep("retry_timeout",
-				withCommand(test.JoinLines(
+				withCommand(test.JoinShellCommands(
 					test.Sleep(sleepDuration),
 					"exit 1",
 				)),
@@ -1675,34 +1803,96 @@ func TestRunner_DryRunWithHandlers(t *testing.T) {
 }
 
 func TestRunner_ConcurrentExecution(t *testing.T) {
-	steps := func() []core.Step {
+	sequentialGuardScript := func(name, lockDir string) string {
+		if windowsShellTest() {
+			return fmt.Sprintf(`
+				$lockDir = %s
+				if (-not (New-Item -ItemType Directory -Path $lockDir -ErrorAction SilentlyContinue)) {
+					Write-Error "sequential step %s overlapped another active step"
+					exit 1
+				}
+				try {
+					%s
+				} finally {
+					Remove-Item -LiteralPath $lockDir -Force
+				}
+			`, test.PowerShellQuote(shellTestPath(lockDir)), name, test.Sleep(platformTestDuration(300*time.Millisecond, 600*time.Millisecond)))
+		}
+
+		return fmt.Sprintf(`
+			lock_dir=%s
+			if ! mkdir "$lock_dir"; then
+				echo "sequential step %s overlapped another active step" >&2
+				exit 1
+			fi
+			trap 'rmdir "$lock_dir"' EXIT
+			%s
+		`, test.PosixQuote(lockDir), name, test.Sleep(300*time.Millisecond))
+	}
+
+	concurrentBarrierScript := func(name, readyDir string, readyCount int, timeout time.Duration) string {
+		if windowsShellTest() {
+			return fmt.Sprintf(`
+				$readyDir = %s
+				New-Item -ItemType Directory -Path $readyDir -Force | Out-Null
+				New-Item -ItemType File -Path (Join-Path $readyDir %s) -Force | Out-Null
+				$deadline = (Get-Date).AddSeconds(%d)
+				while (@(Get-ChildItem -LiteralPath $readyDir -File).Count -lt %d) {
+					if ((Get-Date) -ge $deadline) {
+						Write-Error "concurrent step %s did not observe all active steps"
+						exit 1
+					}
+					Start-Sleep -Milliseconds 50
+				}
+			`, test.PowerShellQuote(shellTestPath(readyDir)), test.PowerShellQuote(name), int(timeout/time.Second), readyCount, name)
+		}
+
+		return fmt.Sprintf(`
+			ready_dir=%s
+			mkdir -p "$ready_dir"
+			: > "$ready_dir/%s"
+			deadline=$(( $(date +%%s) + %d ))
+			while true; do
+				ready_count=$(find "$ready_dir" -type f | wc -l | tr -d '[:space:]')
+				if [ "$ready_count" -ge %d ]; then
+					break
+				fi
+				if [ "$(date +%%s)" -ge "$deadline" ]; then
+					echo "concurrent step %s did not observe all active steps" >&2
+					exit 1
+				fi
+				sleep 0.05
+			done
+		`, test.PosixQuote(readyDir), name, int(timeout/time.Second), readyCount, name)
+	}
+
+	steps := func(script func(string) string) []core.Step {
 		return []core.Step{
-			newStep("1", withScript("sleep 0.3")),
-			newStep("2", withScript("sleep 0.3")),
-			newStep("3", withScript("sleep 0.3")),
+			newStep("1", withScript(script("1"))),
+			newStep("2", withScript(script("2"))),
+			newStep("3", withScript(script("3"))),
 		}
 	}
 
+	lockDir := filepath.Join(t.TempDir(), "active-step")
 	sequential := setupRunner(t, withMaxActiveRuns(1))
-	planSequential := sequential.newPlan(t, steps()...)
-	startSequential := time.Now()
+	planSequential := sequential.newPlan(t, steps(func(name string) string {
+		return sequentialGuardScript(name, lockDir)
+	})...)
 	resultSequential := planSequential.assertRun(t, core.Succeeded)
-	elapsedSequential := time.Since(startSequential)
 	resultSequential.assertNodeStatus(t, "1", core.NodeSucceeded)
 	resultSequential.assertNodeStatus(t, "2", core.NodeSucceeded)
 	resultSequential.assertNodeStatus(t, "3", core.NodeSucceeded)
 
+	readyDir := filepath.Join(t.TempDir(), "ready")
 	concurrent := setupRunner(t, withMaxActiveRuns(3))
-	planConcurrent := concurrent.newPlan(t, steps()...)
-	startConcurrent := time.Now()
+	planConcurrent := concurrent.newPlan(t, steps(func(name string) string {
+		return concurrentBarrierScript(name, readyDir, 3, platformTestDuration(10*time.Second, 30*time.Second))
+	})...)
 	resultConcurrent := planConcurrent.assertRun(t, core.Succeeded)
-	elapsedConcurrent := time.Since(startConcurrent)
 	resultConcurrent.assertNodeStatus(t, "1", core.NodeSucceeded)
 	resultConcurrent.assertNodeStatus(t, "2", core.NodeSucceeded)
 	resultConcurrent.assertNodeStatus(t, "3", core.NodeSucceeded)
-
-	assert.Greater(t, elapsedSequential, elapsedConcurrent)
-	assert.Greater(t, elapsedSequential-elapsedConcurrent, 200*time.Millisecond)
 }
 
 func TestRunner_ErrorHandling(t *testing.T) {
@@ -1807,6 +1997,66 @@ func TestRunner_DAGPreconditions(t *testing.T) {
 		// Check that the runner was canceled
 		assert.Equal(t, core.Aborted, r.runner.Status(ctx, plan.Plan))
 	})
+}
+
+func TestRunner_DAGPreconditionShellReferencePreserved(t *testing.T) {
+	if windowsShellTest() {
+		t.Skip("DAG precondition shell reference test uses /bin/sh")
+	}
+
+	r := setupRunner(t)
+	plan := r.newPlan(t, successStep("1"))
+
+	dag := &core.DAG{
+		Name:       "test_dag",
+		WorkingDir: plan.workDir,
+		Shell:      "/bin/sh",
+		ShellArgs:  []string{"${params.shell_arg}"},
+		ParamDefs: []core.ParamDef{{
+			Name: "shell_arg",
+			Type: core.ParamDefTypeString,
+		}},
+		Preconditions: []*core.Condition{{
+			Condition: "exit 0",
+		}},
+	}
+	logFilename := fmt.Sprintf("%s_%s.log", dag.Name, r.cfg.DAGRunID)
+	logFilePath := filepath.Join(r.cfg.LogDir, logFilename)
+	ctx := runtime.NewContext(plan.Context, dag, r.cfg.DAGRunID, logFilePath)
+
+	err := r.runner.Run(ctx, plan.Plan, nil)
+	require.NoError(t, err)
+	assert.Equal(t, core.Aborted, r.runner.Status(ctx, plan.Plan))
+}
+
+func TestRunner_StepPreconditionReferencePreserved(t *testing.T) {
+	r := setupRunner(t)
+	plan := r.newPlan(t,
+		newStep("1",
+			withPrecondition(&core.Condition{Condition: "${params.ready}", Expected: "true"}),
+			withCommand("echo should_not_run"),
+		),
+	)
+
+	dag := &core.DAG{
+		Name:       "test_dag",
+		WorkingDir: plan.workDir,
+		ParamDefs: []core.ParamDef{{
+			Name: "ready",
+			Type: core.ParamDefTypeString,
+		}},
+	}
+	logFilename := fmt.Sprintf("%s_%s.log", dag.Name, r.cfg.DAGRunID)
+	logFilePath := filepath.Join(r.cfg.LogDir, logFilename)
+	ctx := runtime.NewContext(plan.Context, dag, r.cfg.DAGRunID, logFilePath)
+
+	err := r.runner.Run(ctx, plan.Plan, nil)
+	require.NoError(t, err)
+	assert.Equal(t, core.Succeeded, r.runner.Status(ctx, plan.Plan))
+
+	node := plan.GetNodeByName("1")
+	require.NotNil(t, node)
+	assert.Equal(t, core.NodeSkipped, node.State().Status)
 }
 
 func TestRunner_StatusDefersForcedStatusUntilTerminal(t *testing.T) {
@@ -2028,7 +2278,7 @@ func TestRunner_TimeoutDuringRetry(t *testing.T) {
 	// Step that will keep retrying until timeout
 	plan := r.newPlan(t,
 		newStep("1",
-			withCommand(test.JoinLines(
+			withCommand(test.JoinShellCommands(
 				test.Sleep(100*time.Millisecond),
 				"exit 1",
 			)),
@@ -2813,7 +3063,7 @@ func TestRunner_EventHandlerStepIDAccess(t *testing.T) {
 			),
 			newStep("worker_step",
 				withID("worker"),
-				withCommand(test.JoinLines(
+				withCommand(test.JoinShellCommands(
 					test.Output("Worker processing done"),
 					"exit 0",
 				)),
@@ -2856,7 +3106,7 @@ func TestRunner_EventHandlerStepIDAccess(t *testing.T) {
 			),
 			newStep("failing_step",
 				withID("failing"),
-				withCommand(test.JoinLines(
+				withCommand(test.JoinShellCommands(
 					test.Stderr("Error occurred"),
 					"exit 1",
 				)),
@@ -2970,7 +3220,7 @@ func TestRunner_EventHandlerStepIDAccess(t *testing.T) {
 		plan := r.newPlan(t,
 			newStep("main",
 				withID("main"),
-				withCommand(test.JoinLines(
+				withCommand(test.JoinShellCommands(
 					test.Output("Processing"),
 					"exit 0",
 				)),
@@ -3211,6 +3461,38 @@ func TestNewEnvWithStepInfo(t *testing.T) {
 }
 
 func TestRunner_ChatMessagesHandler(t *testing.T) {
+	t.Run("BuiltinHarnessSupportsChatMessages", func(t *testing.T) {
+		t.Parallel()
+
+		step := newStep("harness1", withExecutorType("harness"))
+		step.ExecutorConfig.Config = map[string]any{"provider": core.HarnessProviderBuiltin}
+
+		assert.True(t, runtime.StepSupportsChatMessages(step))
+	})
+
+	t.Run("BuiltinHarnessFallbackSupportsChatMessages", func(t *testing.T) {
+		t.Parallel()
+
+		step := newStep("harness1", withExecutorType("harness"))
+		step.ExecutorConfig.Config = map[string]any{
+			"provider": "codex",
+			"fallback": []any{
+				map[string]any{"provider": core.HarnessProviderBuiltin},
+			},
+		}
+
+		assert.True(t, runtime.StepSupportsChatMessages(step))
+	})
+
+	t.Run("CLIHarnessDoesNotSupportChatMessages", func(t *testing.T) {
+		t.Parallel()
+
+		step := newStep("harness1", withExecutorType("harness"))
+		step.ExecutorConfig.Config = map[string]any{"provider": "codex"}
+
+		assert.False(t, runtime.StepSupportsChatMessages(step))
+	})
+
 	t.Run("HandlerNotCalledForNonChatSteps", func(t *testing.T) {
 		t.Parallel()
 
@@ -3500,6 +3782,49 @@ func TestSetupPushBackConversation(t *testing.T) {
 		assert.Equal(t, "previous response", msgs[2].Content)
 	})
 
+	t.Run("LoadsOwnMessagesForPushedBackChatStep", func(t *testing.T) {
+		t.Parallel()
+
+		handler := newMockMessagesHandler()
+		handler.messages["chat1"] = []exec.LLMMessage{
+			{Role: exec.RoleSystem, Content: "be concise"},
+			{Role: exec.RoleUser, Content: "original prompt"},
+			{Role: exec.RoleAssistant, Content: "previous response"},
+		}
+		handler.messages["dep1"] = []exec.LLMMessage{
+			{Role: exec.RoleUser, Content: "dep message"},
+		}
+
+		r := setupRunner(t, withMessagesHandler(handler))
+
+		step := newStep("chat1",
+			withExecutorType(core.ExecutorTypeChat),
+			withDepends("dep1"),
+			withApproval(&core.ApprovalConfig{
+				Prompt: "review this",
+				Input:  []string{"FEEDBACK"},
+			}),
+		)
+
+		plan := r.newPlan(t, successStep("dep1"), step)
+		node := plan.GetNodeByName("chat1")
+		require.NotNil(t, node)
+		node.SetApprovalIteration(1)
+
+		ctx := context.Background()
+		r.runner.SetupChatMessages(ctx, node)
+		msgs := node.GetChatMessages()
+		require.Len(t, msgs, 1)
+		assert.Equal(t, "dep message", msgs[0].Content)
+
+		r.runner.SetupPushBackConversation(ctx, node)
+		msgs = node.GetChatMessages()
+		require.Len(t, msgs, 3)
+		assert.Equal(t, "be concise", msgs[0].Content)
+		assert.Equal(t, "original prompt", msgs[1].Content)
+		assert.Equal(t, "previous response", msgs[2].Content)
+	})
+
 	t.Run("NoOpForFirstExecution", func(t *testing.T) {
 		t.Parallel()
 
@@ -3553,12 +3878,13 @@ func TestSetupPushBackConversation(t *testing.T) {
 		assert.Empty(t, msgs)
 	})
 
-	t.Run("NoOpWithoutApproval", func(t *testing.T) {
+	t.Run("LoadsOwnMessagesForPushedBackAgentStepWithoutApprovalConfig", func(t *testing.T) {
 		t.Parallel()
 
 		handler := newMockMessagesHandler()
 		handler.messages["agent1"] = []exec.LLMMessage{
-			{Role: exec.RoleUser, Content: "should not load"},
+			{Role: exec.RoleUser, Content: "previous prompt"},
+			{Role: exec.RoleAssistant, Content: "previous response"},
 		}
 
 		r := setupRunner(t, withMessagesHandler(handler))
@@ -3575,7 +3901,9 @@ func TestSetupPushBackConversation(t *testing.T) {
 		r.runner.SetupPushBackConversation(ctx, node)
 
 		msgs := node.GetChatMessages()
-		assert.Empty(t, msgs)
+		require.Len(t, msgs, 2)
+		assert.Equal(t, "previous prompt", msgs[0].Content)
+		assert.Equal(t, "previous response", msgs[1].Content)
 	})
 
 	t.Run("GracefulOnReadError", func(t *testing.T) {
@@ -3602,6 +3930,158 @@ func TestSetupPushBackConversation(t *testing.T) {
 		msgs := node.GetChatMessages()
 		assert.Empty(t, msgs)
 	})
+}
+
+func TestPushBackInputsExposeJSONHistoryEnv(t *testing.T) {
+	t.Parallel()
+
+	if windowsShellTest() {
+		t.Skip("Skipping Unix-specific env assertion on Windows")
+	}
+
+	r := setupRunner(t)
+	step := newStep("review",
+		withScript("printf '%s\\n' \"$FEEDBACK\"\nprintf '%s\\n' \"$DAG_PUSHBACK_ITERATION\"\nprintf '%s\\n' \"$DAG_PUSHBACK_PREVIOUS_STDOUT_FILE\"\nprintf '%s' \"$DAG_PUSHBACK\""),
+		withApproval(&core.ApprovalConfig{
+			Input: []string{"FEEDBACK"},
+		}),
+	)
+
+	plan := r.newPlan(t, step)
+	node := plan.GetNodeByName("review")
+	require.NotNil(t, node)
+
+	node.SetApprovalIteration(1)
+	node.SetPushBackInputs(map[string]string{"FEEDBACK": "needs more detail"})
+	node.SetPushBackPreviousStdout("/tmp/review-prev.out")
+
+	result := plan.assertRun(t, core.Waiting)
+	result.assertNodeStatus(t, "review", core.NodeWaiting)
+
+	output, err := os.ReadFile(result.nodeByName(t, "review").GetStdout())
+	require.NoError(t, err)
+
+	lines := strings.SplitN(strings.TrimSpace(string(output)), "\n", 4)
+	require.Len(t, lines, 4)
+	assert.Equal(t, "needs more detail", lines[0])
+	assert.Equal(t, "1", lines[1])
+	assert.Equal(t, "/tmp/review-prev.out", lines[2])
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(lines[3]), &payload))
+
+	assert.Equal(t, float64(1), payload["iteration"])
+
+	inputs, ok := payload["inputs"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "needs more detail", inputs["FEEDBACK"])
+
+	history, ok := payload["history"].([]any)
+	require.True(t, ok)
+	require.Len(t, history, 1)
+
+	first, ok := history[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(1), first["iteration"])
+
+	historyInputs, ok := first["inputs"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "needs more detail", historyInputs["FEEDBACK"])
+}
+
+func TestPushBackInputsExposeJSONHistoryEnvForRewoundStep(t *testing.T) {
+	t.Parallel()
+
+	if windowsShellTest() {
+		t.Skip("Skipping Unix-specific env assertion on Windows")
+	}
+
+	r := setupRunner(t)
+	step := newStep("prepare",
+		withScript("printf '%s\\n' \"$FEEDBACK\"\nprintf '%s' \"$DAG_PUSHBACK\""),
+	)
+
+	plan := r.newPlan(t, step)
+	node := plan.GetNodeByName("prepare")
+	require.NotNil(t, node)
+
+	node.SetApprovalIteration(2)
+	node.SetPushBackInputs(map[string]string{"FEEDBACK": "rerun from review"})
+	node.SetPushBackHistory([]exec.PushBackEntry{
+		{
+			Iteration: 1,
+			By:        "reviewer-a",
+			At:        "2026-04-26T06:10:00Z",
+			Inputs:    map[string]string{"FEEDBACK": "first pass"},
+		},
+		{
+			Iteration: 2,
+			By:        "reviewer-b",
+			At:        "2026-04-26T06:20:00Z",
+			Inputs:    map[string]string{"FEEDBACK": "rerun from review"},
+		},
+	})
+
+	result := plan.assertRun(t, core.Succeeded)
+	result.assertNodeStatus(t, "prepare", core.NodeSucceeded)
+
+	output, err := os.ReadFile(result.nodeByName(t, "prepare").GetStdout())
+	require.NoError(t, err)
+
+	lines := strings.SplitN(strings.TrimSpace(string(output)), "\n", 2)
+	require.Len(t, lines, 2)
+	assert.Equal(t, "rerun from review", lines[0])
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(lines[1]), &payload))
+
+	assert.Equal(t, float64(2), payload["iteration"])
+	assert.Equal(t, "reviewer-b", payload["by"])
+	assert.Equal(t, "2026-04-26T06:20:00Z", payload["at"])
+
+	inputs, ok := payload["inputs"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "rerun from review", inputs["FEEDBACK"])
+
+	history, ok := payload["history"].([]any)
+	require.True(t, ok)
+	require.Len(t, history, 2)
+	second, ok := history[1].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "reviewer-b", second["by"])
+	assert.Equal(t, "2026-04-26T06:20:00Z", second["at"])
+}
+
+// TestPushBackPreconditionUsesSameEnvAsCommand verifies that rewound steps
+// evaluate preconditions with the same push-back env seen by the step command.
+func TestPushBackPreconditionUsesSameEnvAsCommand(t *testing.T) {
+	t.Parallel()
+
+	if windowsShellTest() {
+		t.Skip("Skipping Unix-specific env assertion on Windows")
+	}
+
+	r := setupRunner(t)
+	step := newStep("prepare",
+		withScript(`printf '%s' "$FEEDBACK"`),
+		withPrecondition(&core.Condition{
+			Condition: `test -n "$FEEDBACK"`,
+		}),
+	)
+
+	plan := r.newPlan(t, step)
+	node := plan.GetNodeByName("prepare")
+	require.NotNil(t, node)
+
+	node.SetApprovalIteration(1)
+	node.SetPushBackInputs(map[string]string{"FEEDBACK": "rerun from review"})
+
+	result := plan.assertRun(t, core.Succeeded)
+	result.assertNodeStatus(t, "prepare", core.NodeSucceeded)
+
+	output, err := os.ReadFile(result.nodeByName(t, "prepare").GetStdout())
+	require.NoError(t, err)
+	assert.Equal(t, "rerun from review", strings.TrimSpace(string(output)))
 }
 
 func TestWaitStep(t *testing.T) {

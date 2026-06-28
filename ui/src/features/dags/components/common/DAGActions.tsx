@@ -19,25 +19,27 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'; // Import Shadcn Tooltip
 import dayjs from '@/lib/dayjs';
-import ActionButton from '@/ui/ActionButton';
-import StatusChip from '@/ui/StatusChip';
+import ActionButton from '@/components/ui/action-button';
+import StatusChip from '@/components/ui/status-chip';
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/ui/CustomDialog';
+} from '@/components/ui/dialog';
 import { AlertTriangle, Ban, Play, RefreshCw, Square, X } from 'lucide-react';
 import React from 'react';
 import { Button } from '@/components/ui/button';
 import { components, NodeStatus, Status } from '../../../../api/v1/schema';
-import { AppBarContext } from '../../../../contexts/AppBarContext';
+import { useCanManageProfiles } from '../../../../contexts/AuthContext';
 import { useConfig } from '../../../../contexts/ConfigContext';
+import { useRemoteNode } from '../../../../contexts/RemoteNodeContext';
 import { useUnsavedChanges } from '../../../../contexts/UnsavedChangesContext';
-import { useClient } from '../../../../hooks/api';
-import ConfirmModal from '../../../../ui/ConfirmModal';
-import LabeledItem from '../../../../ui/LabeledItem';
+import { useClient, useQuery } from '../../../../hooks/api';
+import { whenEnabled } from '../../../../hooks/queryUtils';
+import ConfirmModal from '@/components/ui/confirm-dialog';
+import LabeledItem from '@/components/ui/labeled-item';
 import { getDAGRunTerminateActionDetails } from '../../../dag-runs/components/common/terminateAction';
 import { DAGContext } from '../../contexts/DAGContext';
 import { StartDAGModal } from '../dag-execution';
@@ -75,12 +77,12 @@ function DAGActions({
   displayMode = 'compact',
   navigateToStatusTab,
 }: Props) {
-  const appBarContext = React.useContext(AppBarContext);
   const dagContext = React.useContext(DAGContext);
   const config = useConfig();
   const { hasUnsavedChanges } = useUnsavedChanges();
   const { showError } = useErrorModal();
   const { showToast } = useSimpleToast();
+  const canManageProfiles = useCanManageProfiles();
   const [isEnqueueModal, setIsEnqueueModal] = React.useState(false);
   const [startModalDag, setStartModalDag] =
     React.useState<components['schemas']['DAGDetails']>();
@@ -107,6 +109,35 @@ function DAGActions({
     React.useState(false);
 
   const client = useClient();
+  const remoteNode = useRemoteNode();
+  const profilesQuery = React.useMemo(
+    () =>
+      whenEnabled(canManageProfiles, {
+        params: {
+          query: { remoteNode },
+        },
+      }),
+    [canManageProfiles, remoteNode]
+  );
+  const { data: profilesData, isLoading: profilesLoading } = useQuery(
+    '/profiles',
+    profilesQuery
+  );
+  const runtimeProfiles = profilesData?.profiles || [];
+  const dagSettingsQuery = React.useMemo(
+    () =>
+      whenEnabled(isEnqueueModal && !!fileName, {
+        params: {
+          path: { fileName },
+          query: { remoteNode },
+        },
+      }),
+    [fileName, isEnqueueModal, remoteNode]
+  );
+  const { data: dagSettingsData, isLoading: dagSettingsLoading } = useQuery(
+    '/dags/{fileName}/settings',
+    dagSettingsQuery
+  );
 
   React.useEffect(() => {
     if (!isRetryModal || !status?.name || !retryDagRunId) {
@@ -125,7 +156,7 @@ function DAGActions({
               dagRunId: retryDagRunId,
             },
             query: {
-              remoteNode: appBarContext.selectedRemoteNode || 'local',
+              remoteNode,
             },
           },
         });
@@ -151,13 +182,7 @@ function DAGActions({
     return () => {
       cancelled = true;
     };
-  }, [
-    appBarContext.selectedRemoteNode,
-    client,
-    isRetryModal,
-    retryDagRunId,
-    status?.name,
-  ]);
+  }, [client, isRetryModal, remoteNode, retryDagRunId, status?.name]);
 
   // Auto-open start modal when requested (e.g., from cockpit preview)
   React.useEffect(() => {
@@ -181,7 +206,7 @@ function DAGActions({
           params: {
             path: { fileName },
             query: {
-              remoteNode: appBarContext.selectedRemoteNode || 'local',
+              remoteNode,
             },
           },
         });
@@ -215,7 +240,7 @@ function DAGActions({
     return () => {
       cancelled = true;
     };
-  }, [appBarContext.selectedRemoteNode, client, fileName, isEnqueueModal]);
+  }, [client, fileName, isEnqueueModal, remoteNode]);
 
   /**
    * Reload DAG data after an action is performed
@@ -371,8 +396,7 @@ function DAGActions({
                             fileName: fileName,
                           },
                           query: {
-                            remoteNode:
-                              appBarContext.selectedRemoteNode || 'local',
+                            remoteNode,
                           },
                         },
                       }
@@ -467,8 +491,7 @@ function DAGActions({
                             stepName: node.step.name,
                           },
                           query: {
-                            remoteNode:
-                              appBarContext.selectedRemoteNode || 'local',
+                            remoteNode,
                           },
                         },
                         body: { reason: rejectReason || undefined },
@@ -511,7 +534,7 @@ function DAGActions({
                 params: {
                   path: { fileName },
                   query: {
-                    remoteNode: appBarContext.selectedRemoteNode || 'local',
+                    remoteNode,
                   },
                 },
               });
@@ -533,7 +556,7 @@ function DAGActions({
                   {
                     params: {
                       query: {
-                        remoteNode: appBarContext.selectedRemoteNode || 'local',
+                        remoteNode,
                       },
                       path: {
                         name: status.name,
@@ -639,7 +662,7 @@ function DAGActions({
                         dagRunId: retryDagRunId,
                       },
                       query: {
-                        remoteNode: appBarContext.selectedRemoteNode || 'local',
+                        remoteNode,
                       },
                     },
                     body: {
@@ -683,7 +706,7 @@ function DAGActions({
                         dagRunId: retryDagRunId,
                       },
                       query: {
-                        remoteNode: appBarContext.selectedRemoteNode || 'local',
+                        remoteNode,
                       },
                     },
                     body: {
@@ -816,26 +839,50 @@ function DAGActions({
           loading={startModalLoading}
           loadError={startModalLoadError}
           action={dagContext.forceEnqueue ? 'enqueue' : undefined}
-          onSubmit={async (params, dagRunId, immediate) => {
+          profiles={runtimeProfiles}
+          profilesLoading={profilesLoading}
+          defaultProfile={dagSettingsData?.profile}
+          defaultProfileLoading={dagSettingsLoading}
+          onSubmit={async (params, dagRunId, immediate, profile) => {
             if (dagContext.onEnqueue) {
-              await dagContext.onEnqueue(params, dagRunId, immediate);
+              const result =
+                profile !== undefined
+                  ? await dagContext.onEnqueue(
+                      params,
+                      dagRunId,
+                      immediate,
+                      profile
+                    )
+                  : await dagContext.onEnqueue(params, dagRunId, immediate);
+              const startedRunId =
+                typeof result === 'string' && result ? result : dagRunId;
+              if (startedRunId) {
+                await dagContext.onRunStarted?.(startedRunId);
+              }
               return;
             }
 
-            const body: { params: string; dagRunId?: string } = { params };
+            const body: {
+              params: string;
+              dagRunId?: string;
+              profile?: string;
+            } = { params };
             if (dagRunId) {
               body.dagRunId = dagRunId;
             }
+            if (profile !== undefined) {
+              body.profile = profile;
+            }
 
             // Use /start endpoint if immediate is true, otherwise use /enqueue
-            const { error } = await (immediate
+            const { data, error } = await (immediate
               ? client.POST('/dags/{fileName}/start', {
                   params: {
                     path: {
                       fileName: fileName,
                     },
                     query: {
-                      remoteNode: appBarContext.selectedRemoteNode || 'local',
+                      remoteNode,
                     },
                   },
                   body,
@@ -846,7 +893,7 @@ function DAGActions({
                       fileName: fileName,
                     },
                     query: {
-                      remoteNode: appBarContext.selectedRemoteNode || 'local',
+                      remoteNode,
                     },
                   },
                   body,
@@ -857,6 +904,9 @@ function DAGActions({
               );
             }
 
+            if (data?.dagRunId) {
+              await dagContext.onRunStarted?.(data.dagRunId);
+            }
             // Just refresh the current page data
             reloadData();
             // Navigate to status tab after execution (if available)

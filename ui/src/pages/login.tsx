@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { useAuth, TOKEN_KEY } from '@/contexts/AuthContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { useConfig } from '@/contexts/ConfigContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { setAuthSession } from '@/lib/authSession';
 import { AlertCircle, LogIn, KeyRound, CheckCircle } from 'lucide-react';
 
 export default function LoginPage() {
@@ -22,15 +23,17 @@ export default function LoginPage() {
 
   const from = (location.state as { from?: Location })?.from?.pathname || '/';
 
-  // Handle OIDC callback token and messages from URL params
+  // Handle OIDC callback: token from hash fragment, error/welcome from query params
   useEffect(() => {
-    const tokenParam = searchParams.get('token');
+    // Token is in the hash fragment so it never appears in server access logs
+    const hashParams = new URLSearchParams(location.hash.slice(1));
+    const tokenParam = hashParams.get('token');
     const errorParam = searchParams.get('error');
     const welcomeParam = searchParams.get('welcome');
 
     // Handle OIDC callback token - store in localStorage and navigate to home
     if (tokenParam) {
-      localStorage.setItem(TOKEN_KEY, tokenParam);
+      setAuthSession(tokenParam, null, 'oidc');
       // Navigate to home immediately - AuthProvider will validate token on next page load
       navigate(from, { replace: true });
       return;
@@ -42,7 +45,7 @@ export default function LoginPage() {
     if (welcomeParam === 'true') {
       setWelcomeMessage('Welcome! Your account has been created.');
     }
-  }, [searchParams, navigate, from]);
+  }, [searchParams, location.hash, navigate, from]);
 
   // Redirect to setup page if initial admin account hasn't been created.
   // Wait for auth state to settle (isLoading=false) to avoid acting on

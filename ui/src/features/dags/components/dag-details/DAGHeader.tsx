@@ -6,7 +6,7 @@ import React, { useCallback, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { components, Status } from '../../../../api/v1/schema';
 import dayjs from '../../../../lib/dayjs';
-import StatusChip from '../../../../ui/StatusChip';
+import StatusChip from '@/components/ui/status-chip';
 import AutoRetryBadge from '../../../dag-runs/components/common/AutoRetryBadge';
 import { RootDAGRunContext } from '../../contexts/RootDAGRunContext';
 import { DAGActions } from '../common';
@@ -19,6 +19,7 @@ interface DAGHeaderProps {
   refreshFn: () => void;
   formatDuration: (startDate: string, endDate: string) => string;
   navigateToStatusTab?: () => void;
+  buildScopedUrl?: (path: string) => string;
 }
 
 const DAGHeader: React.FC<DAGHeaderProps> = ({
@@ -29,6 +30,7 @@ const DAGHeader: React.FC<DAGHeaderProps> = ({
   refreshFn,
   formatDuration,
   navigateToStatusTab,
+  buildScopedUrl,
 }) => {
   const navigate = useNavigate();
   const params = useParams<{ tab?: string }>();
@@ -36,6 +38,11 @@ const DAGHeader: React.FC<DAGHeaderProps> = ({
   const [isRefreshing, setIsRefreshing] = React.useState(false);
   const [currentDuration, setCurrentDuration] = React.useState<string>('--');
   const [copiedPath, setCopiedPath] = React.useState(false);
+
+  const scopedUrl = useCallback(
+    (path: string) => (buildScopedUrl ? buildScopedUrl(path) : path),
+    [buildScopedUrl]
+  );
 
   const copyFilePath = useCallback(async () => {
     if (!filePath) return;
@@ -97,17 +104,30 @@ const DAGHeader: React.FC<DAGHeaderProps> = ({
   const handleRootDAGRunClick = (e: React.MouseEvent) => {
     e.preventDefault();
     if (!dagRunToDisplay) return;
-    navigate(
-      `/dags/${fileName}?dagRunId=${dagRunToDisplay.rootDAGRunId}&dagRunName=${encodeURIComponent(dagRunToDisplay.rootDAGRunName)}`
-    );
+    if (!dagRunToDisplay.rootDAGRunId || !dagRunToDisplay.rootDAGRunName) {
+      return;
+    }
+    const searchParams = new URLSearchParams();
+    searchParams.set('dagRunId', dagRunToDisplay.rootDAGRunId);
+    searchParams.set('dagRunName', dagRunToDisplay.rootDAGRunName);
+    navigate(scopedUrl(`/dags/${fileName}?${searchParams.toString()}`));
   };
 
   const handleParentDAGRunClick = (e: React.MouseEvent) => {
     e.preventDefault();
     if (!dagRunToDisplay) return;
-    navigate(
-      `/dags/${fileName}?subDAGRunId=${dagRunToDisplay.parentDAGRunId}&dagRunId=${dagRunToDisplay.rootDAGRunId}&dagRunName=${encodeURIComponent(dagRunToDisplay.rootDAGRunName)}`
-    );
+    if (
+      !dagRunToDisplay.parentDAGRunId ||
+      !dagRunToDisplay.rootDAGRunId ||
+      !dagRunToDisplay.rootDAGRunName
+    ) {
+      return;
+    }
+    const searchParams = new URLSearchParams();
+    searchParams.set('subDAGRunId', dagRunToDisplay.parentDAGRunId);
+    searchParams.set('dagRunId', dagRunToDisplay.rootDAGRunId);
+    searchParams.set('dagRunName', dagRunToDisplay.rootDAGRunName);
+    navigate(scopedUrl(`/dags/${fileName}?${searchParams.toString()}`));
   };
 
   const handleRefresh = () => {
@@ -161,34 +181,42 @@ const DAGHeader: React.FC<DAGHeaderProps> = ({
     dagRunToDisplay.dagRunId === dagRunToDisplay.rootDAGRunId;
 
   return (
-    <div className="bg-card rounded-2xl p-6 border border-border shadow-sm">
+    <div className="min-w-0 rounded-xl border border-border bg-card p-4 shadow-sm sm:rounded-2xl sm:p-6">
       {/* Header with title and actions */}
-      <div className="flex items-start justify-between gap-6 mb-4">
+      <div className="mb-4 flex min-w-0 flex-col items-stretch gap-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
         <div className="flex-1 min-w-0">
           {/* Breadcrumb navigation */}
           {dagRunToDisplay && (
             <nav className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground mb-2">
-              {dagRunToDisplay.rootDAGRunId && dagRunToDisplay.rootDAGRunId !== dagRunToDisplay.dagRunId && (
-                <>
-                  <a
-                    href={`/dags/${fileName}?dagRunId=${dagRunToDisplay.rootDAGRunId}&dagRunName=${encodeURIComponent(dagRunToDisplay.rootDAGRunName)}`}
-                    onClick={handleRootDAGRunClick}
-                    className="text-primary hover:text-primary hover:underline transition-colors font-medium"
-                  >
-                    {dagRunToDisplay.rootDAGRunName}
-                  </a>
-                  <span className="text-muted-foreground mx-1">/</span>
-                </>
-              )}
+              {dagRunToDisplay.rootDAGRunId &&
+                dagRunToDisplay.rootDAGRunName &&
+                dagRunToDisplay.rootDAGRunId !== dagRunToDisplay.dagRunId && (
+                  <>
+                    <a
+                      href={scopedUrl(
+                        `/dags/${fileName}?dagRunId=${encodeURIComponent(dagRunToDisplay.rootDAGRunId)}&dagRunName=${encodeURIComponent(dagRunToDisplay.rootDAGRunName)}`
+                      )}
+                      onClick={handleRootDAGRunClick}
+                      className="text-primary hover:text-primary hover:underline transition-colors font-medium"
+                    >
+                      {dagRunToDisplay.rootDAGRunName}
+                    </a>
+                    <span className="text-muted-foreground mx-1">/</span>
+                  </>
+                )}
 
               {dagRunToDisplay.parentDAGRunName &&
                 dagRunToDisplay.parentDAGRunId &&
+                dagRunToDisplay.rootDAGRunId &&
+                dagRunToDisplay.rootDAGRunName &&
                 dagRunToDisplay.parentDAGRunName !==
                   dagRunToDisplay.rootDAGRunName &&
                 dagRunToDisplay.parentDAGRunName !== dagRunToDisplay.name && (
                   <>
                     <a
-                      href={`/dags/${fileName}?dagRunId=${dagRunToDisplay.rootDAGRunId}&subDAGRunId=${dagRunToDisplay.parentDAGRunId}&dagRunName=${encodeURIComponent(dagRunToDisplay.rootDAGRunName)}`}
+                      href={scopedUrl(
+                        `/dags/${fileName}?dagRunId=${encodeURIComponent(dagRunToDisplay.rootDAGRunId)}&subDAGRunId=${encodeURIComponent(dagRunToDisplay.parentDAGRunId)}&dagRunName=${encodeURIComponent(dagRunToDisplay.rootDAGRunName)}`
+                      )}
                       onClick={handleParentDAGRunClick}
                       className="text-primary hover:text-primary hover:underline transition-colors font-medium"
                     >
@@ -200,8 +228,8 @@ const DAGHeader: React.FC<DAGHeaderProps> = ({
             </nav>
           )}
 
-          <div className="flex items-center gap-2 min-w-0">
-            <h1 className="text-2xl font-bold text-foreground truncate">
+          <div className="flex min-w-0 items-center gap-2">
+            <h1 className="min-w-0 break-words text-2xl font-bold text-foreground sm:truncate">
               {dagRunToDisplay?.name || dag.name}
             </h1>
             {filePath && (
@@ -220,9 +248,8 @@ const DAGHeader: React.FC<DAGHeaderProps> = ({
           </div>
         </div>
 
-        {/* Actions - always show for root runs or when no run data */}
         {showActions && (
-          <div className="flex-shrink-0">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 sm:flex-shrink-0 sm:justify-end">
             <DAGActions
               status={dagRunToDisplay}
               dag={dag}
@@ -239,7 +266,7 @@ const DAGHeader: React.FC<DAGHeaderProps> = ({
       {dagRunToDisplay &&
         dagRunToDisplay.status !== undefined &&
         dagRunToDisplay.status !== null && (
-          <div className="flex flex-wrap items-center gap-2 text-sm">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
             <StatusChip status={dagRunToDisplay.status} size="md">
               {dagRunToDisplay.statusLabel || ''}
             </StatusChip>
@@ -261,11 +288,13 @@ const DAGHeader: React.FC<DAGHeaderProps> = ({
               <span>Refresh</span>
             </button>
 
-            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+            <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
               <Calendar className="h-3 w-3" />
-              {dagRunToDisplay?.startedAt
-                ? dayjs(dagRunToDisplay.startedAt).format('MMM D, HH:mm:ss')
-                : '--'}
+              <span className="truncate">
+                {dagRunToDisplay?.startedAt
+                  ? dayjs(dagRunToDisplay.startedAt).format('MMM D, HH:mm:ss')
+                  : '--'}
+              </span>
             </span>
 
             <span className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -279,11 +308,13 @@ const DAGHeader: React.FC<DAGHeaderProps> = ({
             {dagRunToDisplay.workerId && (
               <span className="flex items-center gap-1 text-xs text-muted-foreground">
                 <Server className="h-3 w-3" />
-                <span className="font-mono">{dagRunToDisplay.workerId}</span>
+                <span className="min-w-0 truncate font-mono">
+                  {dagRunToDisplay.workerId}
+                </span>
               </span>
             )}
 
-            <code className="text-xs font-mono text-muted-foreground">
+            <code className="max-w-full break-all text-xs font-mono text-muted-foreground sm:max-w-xs sm:truncate">
               {dagRunToDisplay.rootDAGRunId}
             </code>
           </div>

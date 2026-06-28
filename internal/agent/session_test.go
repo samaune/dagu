@@ -281,11 +281,11 @@ func TestSessionManager_EnqueueChatMessage_MergesWhileWorking(t *testing.T) {
 		t.Fatal("timed out waiting for active turn")
 	}
 
-	queued, err := sm.EnqueueChatMessage(context.Background(), provider, "config-id", "provider-model", "second")
+	queued, err := sm.EnqueueChatMessageWithLLMContent(context.Background(), provider, "config-id", "provider-model", "second", "second llm")
 	require.NoError(t, err)
 	assert.True(t, queued)
 
-	queued, err = sm.EnqueueChatMessage(context.Background(), provider, "config-id", "provider-model", "third")
+	queued, err = sm.EnqueueChatMessageWithLLMContent(context.Background(), provider, "config-id", "provider-model", "third", "third llm")
 	require.NoError(t, err)
 	assert.True(t, queued)
 
@@ -294,17 +294,19 @@ func TestSessionManager_EnqueueChatMessage_MergesWhileWorking(t *testing.T) {
 	assert.Equal(t, "first", msgs[0].Content)
 	assert.True(t, sm.HasQueuedChatInput())
 
-	text, ok := sm.BeginQueuedChatFlush()
+	text, llmText, ok := sm.BeginQueuedChatFlush()
 	require.True(t, ok)
 	assert.Equal(t, "second\n\nthird", text)
+	assert.Equal(t, "second llm\n\nthird llm", llmText)
 	assert.True(t, sm.HasQueuedChatInput(), "flush marker should keep queued state visible")
 
-	sm.RestoreQueuedChatInput(text)
+	sm.RestoreQueuedChatInput(text, llmText)
 	assert.True(t, sm.HasQueuedChatInput())
 
-	text, ok = sm.BeginQueuedChatFlush()
+	text, llmText, ok = sm.BeginQueuedChatFlush()
 	require.True(t, ok)
 	assert.Equal(t, "second\n\nthird", text)
+	assert.Equal(t, "second llm\n\nthird llm", llmText)
 	sm.CompleteQueuedChatFlush()
 	assert.False(t, sm.HasQueuedChatInput())
 
@@ -482,6 +484,24 @@ func TestSessionManager_GetSession(t *testing.T) {
 		assert.Equal(t, "sess-123", sess.ID)
 		assert.Equal(t, "user-456", sess.UserID)
 		assert.False(t, sess.CreatedAt.IsZero())
+	})
+
+	t.Run("uses first user message as title", func(t *testing.T) {
+		t.Parallel()
+
+		sm := NewSessionManager(SessionManagerConfig{
+			ID:   "sess-title",
+			User: UserIdentity{UserID: "user-title"},
+		})
+
+		_, err := sm.RecordExternalMessage(context.Background(), Message{
+			Type:    MessageTypeUser,
+			Content: "find flaky tests and summarize the root cause",
+		})
+		require.NoError(t, err)
+
+		sess := sm.GetSession()
+		assert.Equal(t, "find flaky tests and summarize the root cause", sess.Title)
 	})
 }
 
@@ -1703,4 +1723,35 @@ func TestSessionManager_EmitUserPrompt_ForcesFreeText(t *testing.T) {
 		require.NotNil(t, msgs[0].UserPrompt)
 		assert.False(t, msgs[0].UserPrompt.AllowFreeText, "approval prompts should not force free text")
 	})
+}
+
+func TestSessionManager_EmitUIAction_PersistsInHistory(t *testing.T) {
+	t.Parallel()
+
+	var persisted []Message
+	sm := NewSessionManager(SessionManagerConfig{
+		ID: "ui-action-test",
+		OnMessage: func(_ context.Context, msg Message) error {
+			persisted = append(persisted, msg)
+			return nil
+		},
+	})
+
+	emitFn := sm.createEmitUIActionFunc()
+	emitFn(UIAction{
+		Type: UIActionNavigate,
+		Path: "/dags/github_webhook_codex_analysis",
+	})
+
+	msgs := sm.GetMessages()
+	require.Len(t, msgs, 1)
+	assert.Equal(t, MessageTypeUIAction, msgs[0].Type)
+	require.NotNil(t, msgs[0].UIAction)
+	assert.Equal(t, UIActionNavigate, msgs[0].UIAction.Type)
+	assert.Equal(t, "/dags/github_webhook_codex_analysis", msgs[0].UIAction.Path)
+
+	require.Len(t, persisted, 1)
+	assert.Equal(t, MessageTypeUIAction, persisted[0].Type)
+	require.NotNil(t, persisted[0].UIAction)
+	assert.Equal(t, "/dags/github_webhook_codex_analysis", persisted[0].UIAction.Path)
 }

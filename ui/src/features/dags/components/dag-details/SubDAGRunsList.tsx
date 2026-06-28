@@ -1,11 +1,15 @@
+// Copyright (C) 2026 Yota Hamada
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { components, StatusLabel } from '@/api/v1/schema';
-import { AppBarContext } from '@/contexts/AppBarContext';
+import { useRemoteNode } from '@/contexts/RemoteNodeContext';
 import { useQuery } from '@/hooks/api';
 import { whenEnabled } from '@/hooks/queryUtils';
 import dayjs from '@/lib/dayjs';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { useContext, useEffect, useMemo, useState } from 'react';
-import { STATUS_DISPLAY_LABELS, StatusDot } from '../common';
+import { useEffect, useMemo, useState } from 'react';
+import { StatusDot } from '../common/StatusDot';
+import { STATUS_DISPLAY_LABELS } from '../common/statusLabels';
 
 type SubDAGRun = components['schemas']['SubDAGRun'];
 type SubDAGRunDetail = components['schemas']['SubDAGRunDetail'];
@@ -44,8 +48,7 @@ export function SubDAGRunsList({
   onToggleExpand,
   onNavigate,
 }: Props) {
-  const appBarContext = useContext(AppBarContext);
-  const remoteNode = appBarContext.selectedRemoteNode || 'local';
+  const remoteNode = useRemoteNode();
   const dagRunIdsKey = allSubRuns.map((sr) => sr.dagRunId).join('|');
   const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all');
 
@@ -137,7 +140,10 @@ export function SubDAGRunsList({
     counts.set('all', subRunsWithTiming.length);
 
     for (const subRun of subRunsWithTiming) {
-      const statusLabel = 'statusLabel' in subRun ? subRun.statusLabel : statusLabelMap.get(subRun.dagRunId);
+      const statusLabel =
+        'statusLabel' in subRun
+          ? subRun.statusLabel
+          : statusLabelMap.get(subRun.dagRunId);
       if (!statusLabel) continue;
 
       counts.set(statusLabel, (counts.get(statusLabel) || 0) + 1);
@@ -153,16 +159,21 @@ export function SubDAGRunsList({
     }
 
     return subRunsWithTiming.filter((subRun) => {
-      const statusLabel = 'statusLabel' in subRun ? subRun.statusLabel : statusLabelMap.get(subRun.dagRunId);
+      const statusLabel =
+        'statusLabel' in subRun
+          ? subRun.statusLabel
+          : statusLabelMap.get(subRun.dagRunId);
       return statusLabel === statusFilter;
     });
   }, [subRunsWithTiming, statusFilter, statusLabelMap]);
 
   // Get available filters (only show filters that have items)
   const availableFilters = useMemo(() => {
-    const filters: { value: StatusFilterValue; label: string; count: number }[] = [
-      { value: 'all', label: 'All', count: statusCounts.get('all') || 0 },
-    ];
+    const filters: {
+      value: StatusFilterValue;
+      label: string;
+      count: number;
+    }[] = [{ value: 'all', label: 'All', count: statusCounts.get('all') || 0 }];
 
     // Add filters for each status that has items, in a consistent order
     const statusOrder: StatusLabel[] = [
@@ -252,14 +263,17 @@ export function SubDAGRunsList({
                 }}
                 className={`
                   px-1.5 py-0.5 text-xs rounded transition-colors
-                  ${isActive
-                    ? 'bg-primary/15 text-primary'
-                    : 'bg-muted text-muted-foreground hover:bg-accent'
+                  ${
+                    isActive
+                      ? 'bg-primary/15 text-primary'
+                      : 'bg-muted text-muted-foreground hover:bg-accent'
                   }
                 `}
               >
                 {filter.label}
-                <span className={`ml-1 ${isActive ? 'text-primary' : 'text-muted-foreground'}`}>
+                <span
+                  className={`ml-1 ${isActive ? 'text-primary' : 'text-muted-foreground'}`}
+                >
                   {filter.count}
                 </span>
               </button>

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Yota Hamada
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { RefreshButton } from '@/components/ui/refresh-button';
@@ -10,7 +13,6 @@ import {
 } from '@/components/ui/select';
 import { Filter } from 'lucide-react';
 import React from 'react';
-import type { components } from '../api/v1/schema';
 import {
   PathsDagsGetParametersQueryOrder,
   PathsDagsGetParametersQuerySort,
@@ -26,9 +28,10 @@ import DashboardTimeChart from '../features/dashboard/components/DashboardTimech
 import { optionalPositiveInt } from '../hooks/queryUtils';
 import PathsCard from '../features/system-status/components/PathsCard';
 import dayjs from '../lib/dayjs';
-import Title from '../ui/Title';
-
-type DAGRunSummary = components['schemas']['DAGRunSummary'];
+import {
+  workspaceSelectionKey,
+  workspaceSelectionQuery,
+} from '../lib/workspace';
 
 type Metrics = Record<Status, number>;
 
@@ -75,6 +78,7 @@ function compareDAGNames(left: string, right: string): number {
 async function fetchAllDashboardDAGNames(
   client: ReturnType<typeof useClient>,
   remoteNode: string,
+  workspaceQuery: ReturnType<typeof workspaceSelectionQuery>,
   signal: AbortSignal
 ): Promise<string[]> {
   const names = new Set<string>();
@@ -89,6 +93,7 @@ async function fetchAllDashboardDAGNames(
           perPage: 100,
           sort: PathsDagsGetParametersQuerySort.name,
           order: PathsDagsGetParametersQueryOrder.asc,
+          ...workspaceQuery,
         },
       },
       signal,
@@ -127,7 +132,20 @@ function Dashboard(): React.ReactElement | null {
   const config = useConfig();
   const searchState = useSearchState();
   const remoteNode = appBarContext.selectedRemoteNode || 'local';
-  const remoteKey = remoteNode;
+  const workspaceSelection = appBarContext.workspaceSelection;
+  const workspaceQuery = React.useMemo(
+    () => workspaceSelectionQuery(workspaceSelection),
+    [workspaceSelection]
+  );
+  const workspaceKey = workspaceSelectionKey(workspaceSelection);
+  const searchStateScope = React.useMemo(
+    () =>
+      JSON.stringify({
+        remoteNode,
+        workspace: workspaceKey,
+      }),
+    [remoteNode, workspaceKey]
+  );
 
   const [modalDAGRun, setModalDAGRun] = React.useState<{
     name: string;
@@ -195,7 +213,7 @@ function Dashboard(): React.ReactElement | null {
   React.useEffect(() => {
     const stored = searchState.readState<DashboardFilters>(
       'dashboard',
-      remoteKey
+      searchStateScope
     );
     const base = defaultFilters;
     const next = stored
@@ -214,7 +232,7 @@ function Dashboard(): React.ReactElement | null {
     const current = currentFiltersRef.current;
     if (current && areFiltersEqual(current, next)) {
       if (!stored) {
-        searchState.writeState('dashboard', remoteKey, next);
+        searchState.writeState('dashboard', searchStateScope, next);
       }
       lastPersistedFiltersRef.current = next;
       return;
@@ -223,8 +241,8 @@ function Dashboard(): React.ReactElement | null {
     setSelectedDAGRun(next.selectedDAGRun);
     setDateRange(next.dateRange);
     lastPersistedFiltersRef.current = next;
-    searchState.writeState('dashboard', remoteKey, next);
-  }, [defaultFilters, remoteKey, searchState]);
+    searchState.writeState('dashboard', searchStateScope, next);
+  }, [defaultFilters, searchState, searchStateScope]);
 
   React.useEffect(() => {
     const persisted = lastPersistedFiltersRef.current;
@@ -232,8 +250,8 @@ function Dashboard(): React.ReactElement | null {
       return;
     }
     lastPersistedFiltersRef.current = currentFilters;
-    searchState.writeState('dashboard', remoteKey, currentFilters);
-  }, [currentFilters, remoteKey, searchState]);
+    searchState.writeState('dashboard', searchStateScope, currentFilters);
+  }, [currentFilters, searchState, searchStateScope]);
 
   const handleDateChange = (startTimestamp: number, endTimestamp: number) => {
     setDateRange({
@@ -254,6 +272,7 @@ function Dashboard(): React.ReactElement | null {
       toDate: dateRange.endDate,
       name: selectedDAGName,
       status: DASHBOARD_VISIBLE_STATUSES,
+      ...workspaceQuery,
       ...(dashboardPageLimit !== undefined
         ? { limit: dashboardPageLimit }
         : {}),
@@ -264,6 +283,7 @@ function Dashboard(): React.ReactElement | null {
       dateRange.startDate,
       remoteNode,
       selectedDAGName,
+      workspaceQuery,
     ]
   );
 
@@ -315,7 +335,7 @@ function Dashboard(): React.ReactElement | null {
 
   React.useEffect(() => {
     if (appBarContext) {
-      appBarContext.setTitle('Dashboard');
+      appBarContext.setTitle('Timeline');
     }
   }, [appBarContext]);
 
@@ -323,7 +343,12 @@ function Dashboard(): React.ReactElement | null {
     const controller = new AbortController();
     setAvailableDAGNames([]);
 
-    void fetchAllDashboardDAGNames(client, remoteNode, controller.signal)
+    void fetchAllDashboardDAGNames(
+      client,
+      remoteNode,
+      workspaceQuery,
+      controller.signal
+    )
       .then((names) => {
         if (!controller.signal.aborted) {
           setAvailableDAGNames(names);
@@ -336,7 +361,7 @@ function Dashboard(): React.ReactElement | null {
       });
 
     return () => controller.abort();
-  }, [client, remoteNode]);
+  }, [client, remoteNode, workspaceQuery]);
 
   React.useEffect(() => {
     lastWindowScrollYRef.current = window.scrollY;
@@ -416,8 +441,6 @@ function Dashboard(): React.ReactElement | null {
 
   return (
     <div className="flex flex-col max-w-7xl h-full overflow-hidden">
-      <Title>Dashboard</Title>
-
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-h-0 gap-3 p-1">
         {/* Toolbar - Top */}

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dagucloud/dagu/internal/cmn/eval"
+	cmnvalue "github.com/dagucloud/dagu/internal/cmn/value"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -216,7 +216,7 @@ func TestSSHExecutor_ShellPriority(t *testing.T) {
 	}
 }
 
-func TestSSHExecutor_GetEvalOptions(t *testing.T) {
+func TestSSHExecutorCommandResolution(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -277,17 +277,9 @@ func TestSSHExecutor_GetEvalOptions(t *testing.T) {
 				ctx = WithSSHClient(ctx, &Client{Shell: tt.dagShell})
 			}
 
-			opts := tt.step.EvalOptions(ctx)
-			evalOpts := eval.NewOptions()
-			for _, opt := range opts {
-				opt(evalOpts)
-			}
-
-			if tt.expectSkipShell {
-				require.False(t, evalOpts.ExpandShell, "expected WithoutExpandShell option")
-			} else {
-				require.False(t, evalOpts.EscapeDollar, "expected WithoutDollarEscape option")
-			}
+			command := tt.step.CommandResolution(ctx)
+			require.Equal(t, cmnvalue.CommandTargetSSH, command.Target)
+			require.Equal(t, !tt.expectSkipShell, command.ShellConfigured)
 		})
 	}
 }
@@ -660,6 +652,17 @@ func TestFromMapConfig_WithBastion(t *testing.T) {
 			bastion: map[string]any{
 				"host":     "bastion.example.com",
 				"port":     "2222",
+				"user":     "bastionuser",
+				"password": "bastionpass",
+			},
+			expectedHostPort: "bastion.example.com:2222",
+			expectedUser:     "bastionuser",
+		},
+		{
+			name: "NumericPort",
+			bastion: map[string]any{
+				"host":     "bastion.example.com",
+				"port":     2222,
 				"user":     "bastionuser",
 				"password": "bastionpass",
 			},

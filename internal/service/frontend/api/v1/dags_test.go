@@ -19,6 +19,7 @@ import (
 	"github.com/dagucloud/dagu/internal/service/coordinator"
 	"github.com/dagucloud/dagu/internal/service/scheduler"
 	"github.com/dagucloud/dagu/internal/test"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -88,6 +89,13 @@ func apiStatusOutputValue(t *testing.T, status *exec.DAGRunStatus, key string) s
 
 	t.Fatalf("output %q not found in DAG-run status", key)
 	return ""
+}
+
+func TestDAGRunHistoryReturnsNotFoundForMissingDAG(t *testing.T) {
+	server := test.SetupServer(t)
+
+	server.Client().Get("/api/v1/dags/missing-dag/dag-runs").
+		ExpectStatus(http.StatusNotFound).Send(t)
 }
 
 func TestDAGWritesDisabledInReadOnlyMode(t *testing.T) {
@@ -166,9 +174,9 @@ func TestDAGSpecInheritsBaseGraphType(t *testing.T) {
 	spec := `
 steps:
   - name: build
-    command: echo build
+    run: echo build
   - name: test
-    command: echo test
+    run: echo test
     depends: [build]
 `
 	dagName := "inherits_base_graph_type"
@@ -384,7 +392,7 @@ params:
   - key2: default2
 steps:
   - name: echo_params
-    command: echo "key1=${key1} key2=${key2}"
+    run: echo "key1=${key1} key2=${key2}"
 `
 		dagName := "test_json_params"
 
@@ -426,7 +434,7 @@ steps:
 		spec := `
 steps:
   - name: show_json
-    command: echo "key1=${1.key1} key2=${1.key2}"
+    run: echo "key1=${1.key1} key2=${1.key2}"
 `
 		dagName := "test_json_positional"
 
@@ -467,7 +475,7 @@ steps:
 params: "p1 p2"
 steps:
   - name: echo
-    command: echo "${1} ${2}"
+    run: echo "${1} ${2}"
 `
 		dagName := "test_positional_fewer_allowed"
 
@@ -501,7 +509,7 @@ steps:
 params: "p1 p2"
 steps:
   - name: echo
-    command: echo "${1} ${2}"
+    run: echo "${1} ${2}"
 `
 		dagName := "test_positional_too_many_rejected"
 
@@ -523,47 +531,56 @@ steps:
 		_ = server.Client().Delete("/api/v1/dags/" + dagName).ExpectStatus(http.StatusNoContent).Send(t)
 	})
 
-	t.Run("ExecuteDAGWithTags", func(t *testing.T) {
+	t.Run("ExecuteDAGWithLabels", func(t *testing.T) {
 		spec := `
 steps:
-  - name: echo_tags
-    command: echo "tagged"
+  - name: echo_labels
+    run: echo "labeled"
 `
-		dagName := "test_tags_dag"
+		dagName := "test_labels_dag"
 
 		_ = server.Client().Post("/api/v1/dags", api.CreateNewDAGJSONRequestBody{
 			Name: dagName,
 			Spec: &spec,
 		}).ExpectStatus(http.StatusCreated).Send(t)
 
-		tags := []string{"env=prod", "team=backend"}
+		labels := []string{"env=prod", "team=backend"}
 		resp := server.Client().Post("/api/v1/dags/"+dagName+"/start", api.ExecuteDAGJSONRequestBody{
-			Tags: &tags,
+			Labels: &labels,
 		}).ExpectStatus(http.StatusOK).Send(t)
 
 		var execResp api.ExecuteDAG200JSONResponse
 		resp.Unmarshal(t, &execResp)
 		require.NotEmpty(t, execResp.DagRunId)
 
+		var details api.GetDAGRunDetails200JSONResponse
+		require.Eventually(t, func() bool {
+			if !getJSONWhenAvailable(t, server, fmt.Sprintf("/api/v1/dag-runs/%s/%s", dagName, execResp.DagRunId), &details) {
+				return false
+			}
+			return details.DagRunDetails.Labels != nil
+		}, 5*time.Second, 250*time.Millisecond)
+		assert.ElementsMatch(t, labels, *details.DagRunDetails.Labels)
+
 		_ = server.Client().Delete("/api/v1/dags/" + dagName).ExpectStatus(http.StatusNoContent).Send(t)
 	})
 
-	t.Run("ExecuteDAGWithInvalidTags", func(t *testing.T) {
+	t.Run("ExecuteDAGWithInvalidLabels", func(t *testing.T) {
 		spec := `
 steps:
   - name: echo
-    command: echo "test"
+    run: echo "test"
 `
-		dagName := "test_invalid_tags_dag"
+		dagName := "test_invalid_labels_dag"
 
 		_ = server.Client().Post("/api/v1/dags", api.CreateNewDAGJSONRequestBody{
 			Name: dagName,
 			Spec: &spec,
 		}).ExpectStatus(http.StatusCreated).Send(t)
 
-		tags := []string{"!!!invalid"}
+		labels := []string{"!!!invalid"}
 		resp := server.Client().Post("/api/v1/dags/"+dagName+"/start", api.ExecuteDAGJSONRequestBody{
-			Tags: &tags,
+			Labels: &labels,
 		}).ExpectStatus(http.StatusBadRequest).Send(t)
 
 		var errResp api.Error
@@ -573,47 +590,56 @@ steps:
 		_ = server.Client().Delete("/api/v1/dags/" + dagName).ExpectStatus(http.StatusNoContent).Send(t)
 	})
 
-	t.Run("EnqueueDAGWithTags", func(t *testing.T) {
+	t.Run("EnqueueDAGWithLabels", func(t *testing.T) {
 		spec := `
 steps:
-  - name: echo_tags
-    command: echo "enqueued"
+  - name: echo_labels
+    run: echo "enqueued"
 `
-		dagName := "test_enqueue_tags_dag"
+		dagName := "test_enqueue_labels_dag"
 
 		_ = server.Client().Post("/api/v1/dags", api.CreateNewDAGJSONRequestBody{
 			Name: dagName,
 			Spec: &spec,
 		}).ExpectStatus(http.StatusCreated).Send(t)
 
-		tags := []string{"env=staging", "priority=low"}
+		labels := []string{"env=staging", "priority=low"}
 		resp := server.Client().Post("/api/v1/dags/"+dagName+"/enqueue", api.EnqueueDAGDAGRunJSONRequestBody{
-			Tags: &tags,
+			Labels: &labels,
 		}).ExpectStatus(http.StatusOK).Send(t)
 
 		var enqResp api.EnqueueDAGDAGRun200JSONResponse
 		resp.Unmarshal(t, &enqResp)
 		require.NotEmpty(t, enqResp.DagRunId)
 
+		var details api.GetDAGRunDetails200JSONResponse
+		require.Eventually(t, func() bool {
+			if !getJSONWhenAvailable(t, server, fmt.Sprintf("/api/v1/dag-runs/%s/%s", dagName, enqResp.DagRunId), &details) {
+				return false
+			}
+			return details.DagRunDetails.Labels != nil
+		}, 5*time.Second, 250*time.Millisecond)
+		assert.ElementsMatch(t, labels, *details.DagRunDetails.Labels)
+
 		_ = server.Client().Delete("/api/v1/dags/" + dagName).ExpectStatus(http.StatusNoContent).Send(t)
 	})
 
-	t.Run("EnqueueDAGWithInvalidTags", func(t *testing.T) {
+	t.Run("EnqueueDAGWithInvalidLabels", func(t *testing.T) {
 		spec := `
 steps:
   - name: echo
-    command: echo "test"
+    run: echo "test"
 `
-		dagName := "test_enqueue_invalid_tags_dag"
+		dagName := "test_enqueue_invalid_labels_dag"
 
 		_ = server.Client().Post("/api/v1/dags", api.CreateNewDAGJSONRequestBody{
 			Name: dagName,
 			Spec: &spec,
 		}).ExpectStatus(http.StatusCreated).Send(t)
 
-		tags := []string{"@@@bad-tag"}
+		labels := []string{"@@@bad-label"}
 		resp := server.Client().Post("/api/v1/dags/"+dagName+"/enqueue", api.EnqueueDAGDAGRunJSONRequestBody{
-			Tags: &tags,
+			Labels: &labels,
 		}).ExpectStatus(http.StatusBadRequest).Send(t)
 
 		var errResp api.Error
@@ -657,11 +683,11 @@ steps:
 type: graph
 steps:
   - name: c_leaf
-    command: echo c
+    run: echo c
   - name: a_root
-    command: echo a
+    run: echo a
   - name: b_mid
-    command: echo b
+    run: echo b
     depends: [a_root]
 `
 		dagName := "test_history_execution_order"
@@ -713,7 +739,7 @@ env:
   - EXPORTED_SECRET: ${API_START_EXPLICIT_ENV}
 steps:
   - name: capture
-    command: %q
+    run: %q
     output: RESULT
 `, test.EnvOutput("EXPORTED_SECRET", "API_START_EXPLICIT_ENV"))
 		dagName := "api_start_explicit_env"
@@ -762,7 +788,7 @@ env:
   - EXPORTED_SECRET: ${API_ENQUEUE_EXPLICIT_ENV}
 steps:
   - name: capture
-    command: %q
+    run: %q
     output: RESULT
 `, test.EnvOutput("EXPORTED_SECRET", "API_ENQUEUE_EXPLICIT_ENV"))
 		dagName := "api_enqueue_explicit_env"
@@ -827,4 +853,33 @@ steps:
 		require.NoError(t, err)
 		require.Equal(t, "from-host|", apiStatusOutputValue(t, latestStatus, "RESULT"))
 	})
+}
+
+func TestListDAGsMatchesFileNameWhenDagNameDiffers(t *testing.T) {
+	server := test.SetupServer(t)
+
+	spec := `
+name: test_name
+steps:
+  - run: echo test
+`
+	server.Client().Post("/api/v1/dags", api.CreateNewDAGJSONRequestBody{
+		Name: "approvaltest",
+		Spec: &spec,
+	}).ExpectStatus(http.StatusCreated).Send(t)
+	t.Cleanup(func() {
+		server.Client().Delete("/api/v1/dags/approvaltest").Send(t)
+	})
+
+	resp := server.Client().
+		Get("/api/v1/dags?name=approvaltest").
+		ExpectStatus(http.StatusOK).
+		Send(t)
+
+	var body api.ListDAGs200JSONResponse
+	resp.Unmarshal(t, &body)
+
+	require.Len(t, body.Dags, 1)
+	require.Equal(t, "approvaltest", body.Dags[0].FileName)
+	require.Equal(t, "test_name", body.Dags[0].Dag.Name)
 }

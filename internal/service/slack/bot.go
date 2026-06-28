@@ -74,10 +74,13 @@ type Bot struct {
 	chats                 sync.Map // conversationKey -> *chatState
 	activeThreads         sync.Map // "channelID:threadTS" -> true
 	allowedChannels       map[string]struct{}
+	recentGatewayEventsMu sync.Mutex
+	recentGatewayEvents   map[string][]recentGatewayEvent
 	eventService          *eventstore.Service
 	notificationStateFile string
 	logger                *slog.Logger
 	incomingDelay         time.Duration
+	incomingAfterFunc     func(time.Duration, func()) *time.Timer
 }
 
 // New creates a new Slack bot instance.
@@ -117,6 +120,7 @@ func New(cfg Config, agentAPI AgentService, logger *slog.Logger) (*Bot, error) {
 		notificationStateFile: cfg.NotificationStateFile,
 		logger:                logger,
 		incomingDelay:         defaultIncomingBatchDelay,
+		incomingAfterFunc:     time.AfterFunc,
 	}, nil
 }
 
@@ -167,7 +171,7 @@ func (b *Bot) handleEvent(ctx context.Context, evt socketmode.Event) {
 		if !ok {
 			return
 		}
-		b.socketClient.Ack(*evt.Request)
+		b.ackEvent(*evt.Request)
 		b.handleEventsAPI(ctx, eventsAPIEvent)
 
 	case socketmode.EventTypeInteractive:
@@ -175,7 +179,7 @@ func (b *Bot) handleEvent(ctx context.Context, evt socketmode.Event) {
 		if !ok {
 			return
 		}
-		b.socketClient.Ack(*evt.Request)
+		b.ackEvent(*evt.Request)
 		b.handleInteraction(ctx, callback)
 
 	case socketmode.EventTypeSlashCommand:
@@ -183,11 +187,20 @@ func (b *Bot) handleEvent(ctx context.Context, evt socketmode.Event) {
 		if !ok {
 			return
 		}
-		b.socketClient.Ack(*evt.Request)
+		b.ackEvent(*evt.Request)
 		b.handleSlashCommand(ctx, cmd)
 
 	default:
 		// Ignore other socket mode events (connecting, hello, errors, etc.)
+	}
+}
+
+func (b *Bot) ackEvent(req socketmode.Request) {
+	if err := b.socketClient.Ack(req); err != nil {
+		b.logger.Warn("Failed to acknowledge Slack socket mode event",
+			slog.String("envelope_id", req.EnvelopeID),
+			slog.String("error", err.Error()),
+		)
 	}
 }
 
@@ -326,7 +339,7 @@ func (b *Bot) enqueueIncomingMessage(ctx context.Context, cs *chatState, convKey
 	if delay <= 0 {
 		delay = defaultIncomingBatchDelay
 	}
-	time.AfterFunc(delay, func() {
+	b.incomingAfterFunc(delay, func() {
 		b.flushIncomingMessages(ctx, cs, convKey, gen)
 	})
 }
@@ -338,6 +351,7 @@ func (b *Bot) flushIncomingMessages(ctx context.Context, cs *chatState, convKey 
 	}
 
 	b.ensureThinkingIndicator(cs)
+	ctx = b.withRecentGatewayEventsContext(ctx, convKey)
 	user := b.userIdentity(convKey)
 
 	if cs.SessionID() == "" {

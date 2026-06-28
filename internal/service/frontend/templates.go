@@ -55,17 +55,12 @@ func formatAssetVersion(version string, bundle []byte) string {
 
 func currentAssetVersion() string {
 	assetVersionOnce.Do(func() {
-		switch config.Version {
-		case "", "0.0.0", "dev":
-			data, err := assetsFS.ReadFile("assets/bundle.js")
-			if err != nil {
-				assetVersion = config.Version
-				return
-			}
-			assetVersion = formatAssetVersion(config.Version, data)
-		default:
+		data, err := assetsFS.ReadFile("assets/bundle.js")
+		if err != nil {
 			assetVersion = config.Version
+			return
 		}
+		assetVersion = formatAssetVersion(config.Version, data)
 	})
 	return assetVersion
 }
@@ -87,15 +82,23 @@ func (srv *Server) useTemplate(ctx context.Context, layout, name string) func(ht
 	}
 
 	return func(w http.ResponseWriter, data any) {
-		var buf bytes.Buffer
-		if err := tmpl.ExecuteTemplate(&buf, baseTemplateName, data); err != nil {
+		rendered, err := executeTemplate(tmpl, baseTemplateName, data)
+		if err != nil {
 			logger.Error(ctx, "Template execution failed", tag.Error(err))
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = io.Copy(w, &buf)
+		_, _ = io.Copy(w, rendered)
 	}
+}
+
+func executeTemplate(tmpl *template.Template, name string, data any) (*bytes.Buffer, error) {
+	var buf bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buf, name, data); err != nil {
+		return nil, err
+	}
+	return &buf, nil
 }
 
 // SetupRequiredChecker determines whether initial admin setup is still needed.

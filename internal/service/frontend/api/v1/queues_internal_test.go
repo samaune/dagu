@@ -13,22 +13,25 @@ import (
 	"github.com/dagucloud/dagu/internal/cmn/config"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
-	"github.com/dagucloud/dagu/internal/persis/filedagrun"
-	"github.com/dagucloud/dagu/internal/persis/filedistributed"
-	"github.com/dagucloud/dagu/internal/persis/fileproc"
-	"github.com/dagucloud/dagu/internal/persis/filequeue"
+	"github.com/dagucloud/dagu/internal/persis/file"
+	"github.com/dagucloud/dagu/internal/persis/file/dagrun"
+	"github.com/dagucloud/dagu/internal/persis/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func newTestDAGRunLeaseStore(distributedDir string) *store.DAGRunLeaseStore {
+	return store.NewDAGRunLeaseStore(file.NewCollection(filepath.Join(distributedDir, "leases")))
+}
 
 func TestGetQueueFiltersDistributedRunsByLeaseFreshness(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 	tmpDir := t.TempDir()
-	dagRunStore := filedagrun.New(filepath.Join(tmpDir, "dag-runs"))
-	leaseStore := filedistributed.NewDAGRunLeaseStore(filepath.Join(tmpDir, "distributed"))
-	procStore := fileproc.New(filepath.Join(tmpDir, "proc"))
+	dagRunStore := dagrun.New(filepath.Join(tmpDir, "dag-runs"))
+	leaseStore := newTestDAGRunLeaseStore(filepath.Join(tmpDir, "distributed"))
+	procStore := newTestProcStore(filepath.Join(tmpDir, "proc"))
 
 	createDistributedQueueRun(t, ctx, dagRunStore, leaseStore, "lease-q", "fresh-run", "lease-q", time.Now())
 	createDistributedQueueRun(t, ctx, dagRunStore, leaseStore, "lease-q", "stale-run", "lease-q", time.Now().Add(-2*time.Minute))
@@ -58,9 +61,9 @@ func TestGetQueueFallsBackToDAGNameWhenLeaseQueueIsEmpty(t *testing.T) {
 
 	ctx := context.Background()
 	tmpDir := t.TempDir()
-	dagRunStore := filedagrun.New(filepath.Join(tmpDir, "dag-runs"))
-	leaseStore := filedistributed.NewDAGRunLeaseStore(filepath.Join(tmpDir, "distributed"))
-	procStore := fileproc.New(filepath.Join(tmpDir, "proc"))
+	dagRunStore := dagrun.New(filepath.Join(tmpDir, "dag-runs"))
+	leaseStore := newTestDAGRunLeaseStore(filepath.Join(tmpDir, "distributed"))
+	procStore := newTestProcStore(filepath.Join(tmpDir, "proc"))
 
 	createDistributedQueueRun(t, ctx, dagRunStore, leaseStore, "fallback-q", "fresh-run", "", time.Now())
 
@@ -83,15 +86,61 @@ func TestGetQueueFallsBackToDAGNameWhenLeaseQueueIsEmpty(t *testing.T) {
 	assert.Equal(t, "fresh-run", queueResp.Running[0].DagRunId)
 }
 
+func TestGetQueueCountsFreshLeaseForClaimedAttemptAsRunning(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		status core.Status
+	}{
+		{name: "Queued", status: core.Queued},
+		{name: "NotStarted", status: core.NotStarted},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			tmpDir := t.TempDir()
+			dagRunStore := dagrun.New(filepath.Join(tmpDir, "dag-runs"))
+			leaseStore := newTestDAGRunLeaseStore(filepath.Join(tmpDir, "distributed"))
+			procStore := newTestProcStore(filepath.Join(tmpDir, "proc"))
+
+			createDistributedQueueRunWithStatus(t, ctx, dagRunStore, leaseStore, "lease-q", "claimed-run", "lease-q", time.Now(), tt.status)
+
+			a := &API{
+				dagRunStore:         dagRunStore,
+				dagRunLeaseStore:    leaseStore,
+				procStore:           procStore,
+				config:              &config.Config{},
+				leaseStaleThreshold: time.Minute,
+			}
+
+			resp, err := a.GetQueue(ctx, openapiv1.GetQueueRequestObject{
+				Name: "lease-q",
+			})
+			require.NoError(t, err)
+
+			queueResp, ok := resp.(openapiv1.GetQueue200JSONResponse)
+			require.True(t, ok)
+			require.Len(t, queueResp.Running, 1)
+			assert.Equal(t, 1, queueResp.RunningCount)
+			assert.Equal(t, "claimed-run", queueResp.Running[0].DagRunId)
+			assert.Equal(t, openapiv1.StatusRunning, queueResp.Running[0].Status)
+		})
+	}
+}
+
 func TestGetQueueCountsQueuedItemsSeparatelyFromRunningItems(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 	tmpDir := t.TempDir()
-	dagRunStore := filedagrun.New(filepath.Join(tmpDir, "dag-runs"))
-	leaseStore := filedistributed.NewDAGRunLeaseStore(filepath.Join(tmpDir, "distributed"))
-	queueStore := filequeue.New(filepath.Join(tmpDir, "queue"))
-	procStore := fileproc.New(filepath.Join(tmpDir, "proc"))
+	dagRunStore := dagrun.New(filepath.Join(tmpDir, "dag-runs"))
+	leaseStore := newTestDAGRunLeaseStore(filepath.Join(tmpDir, "distributed"))
+	queueStore := store.NewQueueStore(file.NewCollection(filepath.Join(tmpDir, "queue")))
+	procStore := newTestProcStore(filepath.Join(tmpDir, "proc"))
 
 	createDistributedQueueRun(t, ctx, dagRunStore, leaseStore, "mixed-q", "running-run", "mixed-q", time.Now())
 	createQueuedQueueRun(t, ctx, dagRunStore, queueStore, "mixed-q", "queued-run", core.Queued)
@@ -121,9 +170,9 @@ func TestListQueueItemsUsesCursorPaginationAndSkipsRunningEntries(t *testing.T) 
 
 	ctx := context.Background()
 	tmpDir := t.TempDir()
-	dagRunStore := filedagrun.New(filepath.Join(tmpDir, "dag-runs"))
-	queueStore := filequeue.New(filepath.Join(tmpDir, "queue"))
-	procStore := fileproc.New(filepath.Join(tmpDir, "proc"))
+	dagRunStore := dagrun.New(filepath.Join(tmpDir, "dag-runs"))
+	queueStore := store.NewQueueStore(file.NewCollection(filepath.Join(tmpDir, "queue")))
+	procStore := newTestProcStore(filepath.Join(tmpDir, "proc"))
 
 	createQueuedQueueRun(t, ctx, dagRunStore, queueStore, "cursor-q", "run-1", core.Queued)
 	createQueuedQueueRun(t, ctx, dagRunStore, queueStore, "cursor-q", "run-2", core.Running)
@@ -204,6 +253,21 @@ func createDistributedQueueRun(
 	lastHeartbeatAt time.Time,
 ) {
 	t.Helper()
+	createDistributedQueueRunWithStatus(t, ctx, store, leaseStore, name, dagRunID, leaseQueueName, lastHeartbeatAt, core.Running)
+}
+
+func createDistributedQueueRunWithStatus(
+	t *testing.T,
+	ctx context.Context,
+	store exec.DAGRunStore,
+	leaseStore exec.DAGRunLeaseStore,
+	name string,
+	dagRunID string,
+	leaseQueueName string,
+	lastHeartbeatAt time.Time,
+	status core.Status,
+) {
+	t.Helper()
 
 	dag := &core.DAG{
 		Name: name,
@@ -219,16 +283,18 @@ func createDistributedQueueRun(
 		require.NoError(t, attempt.Close(ctx))
 	}()
 
-	status := exec.InitialStatus(dag)
-	status.Status = core.Running
-	status.DAGRunID = dagRunID
-	status.AttemptID = attempt.ID()
-	status.ProcGroup = name
-	status.WorkerID = "worker-1"
-	status.StartedAt = time.Now().UTC().Format(time.RFC3339)
-	status.CreatedAt = time.Now().UnixMilli()
+	runStatus := exec.InitialStatus(dag)
+	runStatus.Status = status
+	runStatus.DAGRunID = dagRunID
+	runStatus.AttemptID = attempt.ID()
+	runStatus.ProcGroup = name
+	runStatus.WorkerID = "worker-1"
+	if status == core.Running {
+		runStatus.StartedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	runStatus.CreatedAt = time.Now().UnixMilli()
 
-	require.NoError(t, attempt.Write(ctx, status))
+	require.NoError(t, attempt.Write(ctx, runStatus))
 	require.NoError(t, leaseStore.Upsert(ctx, exec.DAGRunLease{
 		AttemptKey:      exec.GenerateAttemptKey(name, dagRunID, name, dagRunID, attempt.ID()),
 		DAGRun:          exec.NewDAGRunRef(name, dagRunID),

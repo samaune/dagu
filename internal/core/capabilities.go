@@ -7,7 +7,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/dagucloud/dagu/internal/cmn/eval"
+	cmnvalue "github.com/dagucloud/dagu/internal/cmn/value"
 )
 
 // ExecutorCapabilities defines what an executor can do.
@@ -30,9 +30,10 @@ type ExecutorCapabilities struct {
 	LLM bool
 	// Agent indicates whether the executor supports the agent field.
 	Agent bool
-	// GetEvalOptions returns eval options for command argument evaluation.
-	// If nil, default evaluation is used.
-	GetEvalOptions func(ctx context.Context, step Step) []eval.Option
+	// CommandContext returns command execution facts for command field resolution.
+	CommandContext func(ctx context.Context, step Step) cmnvalue.CommandContext
+	// ScriptContext returns command execution facts for script field resolution.
+	ScriptContext func(ctx context.Context, step Step) cmnvalue.CommandContext
 }
 
 // executorCapabilitiesRegistry is a typed registry of executor capabilities.
@@ -52,6 +53,13 @@ func (r *executorCapabilitiesRegistry) Register(executorType string, caps Execut
 	r.caps[executorType] = caps
 }
 
+// Unregister removes capabilities for an executor type.
+func (r *executorCapabilitiesRegistry) Unregister(executorType string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.caps, executorType)
+}
+
 // Get returns capabilities for an executor type.
 // Returns an empty ExecutorCapabilities if not registered.
 func (r *executorCapabilitiesRegistry) Get(executorType string) ExecutorCapabilities {
@@ -67,6 +75,11 @@ func (r *executorCapabilitiesRegistry) Get(executorType string) ExecutorCapabili
 // RegisterExecutorCapabilities registers capabilities for an executor type.
 func RegisterExecutorCapabilities(executorType string, caps ExecutorCapabilities) {
 	executorCapabilities.Register(executorType, caps)
+}
+
+// UnregisterExecutorCapabilities removes capabilities for an executor type.
+func UnregisterExecutorCapabilities(executorType string) {
+	executorCapabilities.Unregister(executorType)
 }
 
 // SupportsCommand returns whether the executor type supports the command field.
@@ -114,12 +127,23 @@ func SupportsAgent(executorType string) bool {
 	return executorCapabilities.Get(executorType).Agent
 }
 
-// EvalOptions returns eval options for this step's executor type.
-// Returns nil if no special eval options are needed.
-func (s Step) EvalOptions(ctx context.Context) []eval.Option {
+// CommandResolution returns command execution facts for command field resolution.
+func (s Step) CommandResolution(ctx context.Context) cmnvalue.CommandContext {
 	caps := executorCapabilities.Get(s.ExecutorConfig.Type)
-	if caps.GetEvalOptions != nil {
-		return caps.GetEvalOptions(ctx, s)
+	if caps.CommandContext != nil {
+		return caps.CommandContext(ctx, s)
 	}
-	return nil
+	return cmnvalue.CommandContext{}
+}
+
+// ScriptResolution returns command execution facts for script field resolution.
+func (s Step) ScriptResolution(ctx context.Context) cmnvalue.CommandContext {
+	caps := executorCapabilities.Get(s.ExecutorConfig.Type)
+	if caps.ScriptContext != nil {
+		return caps.ScriptContext(ctx, s)
+	}
+	if caps.CommandContext != nil {
+		return caps.CommandContext(ctx, s)
+	}
+	return cmnvalue.CommandContext{}
 }

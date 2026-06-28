@@ -5,17 +5,20 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/ui/CustomDialog';
+} from '@/components/ui/dialog';
 import { Check, RotateCcw, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { components } from '../../../../api/v1/schema';
+import PushBackHistory from '../common/PushBackHistory';
 
 type Step = components['schemas']['Step'];
+type PushBackHistoryEntry = components['schemas']['PushBackHistoryEntry'];
 
 type Props = {
   visible: boolean;
   dismissModal: () => void;
   step: Step;
+  pushBackHistory?: PushBackHistoryEntry[];
   onApprove?: (inputs: Record<string, string>) => Promise<void>;
   onPushBack?: (inputs: Record<string, string>) => Promise<void>;
 };
@@ -24,6 +27,7 @@ export function StepReviewModal({
   visible,
   dismissModal,
   step,
+  pushBackHistory,
   onApprove,
   onPushBack,
 }: Props) {
@@ -34,9 +38,11 @@ export function StepReviewModal({
   const inputFields = step.approval?.input || [];
   const requiredFields = step.approval?.required || [];
 
-  const isValid = onApprove || requiredFields.every(
-    (field) => inputs[field] && inputs[field].trim() !== ''
-  );
+  const isValid =
+    onApprove ||
+    requiredFields.every(
+      (field) => inputs[field] && inputs[field].trim() !== ''
+    );
 
   useEffect(() => {
     if (visible) {
@@ -83,10 +89,12 @@ export function StepReviewModal({
   };
 
   const actionLabel = onApprove ? 'Approve' : 'Retry';
-  const actionIcon = onApprove
-    ? <Check className="h-4 w-4" />
-    : <RotateCcw className="h-4 w-4" />;
-  const actionVariant = onApprove ? 'primary' as const : 'outline' as const;
+  const actionIcon = onApprove ? (
+    <Check className="h-4 w-4" />
+  ) : (
+    <RotateCcw className="h-4 w-4" />
+  );
+  const actionVariant = onApprove ? ('primary' as const) : ('outline' as const);
 
   return (
     <Dialog open={visible} onOpenChange={dismissModal}>
@@ -98,6 +106,13 @@ export function StepReviewModal({
         </DialogHeader>
 
         <div className="py-2 space-y-3" onKeyDown={handleKeyDown}>
+          {onPushBack && pushBackHistory && pushBackHistory.length > 0 && (
+            <PushBackHistory
+              history={pushBackHistory}
+              title="Previous Push-backs"
+            />
+          )}
+
           {inputFields.length > 0 && !onApprove && (
             <div className="space-y-3">
               {inputFields.map((field) => {
@@ -105,7 +120,10 @@ export function StepReviewModal({
                 const fieldId = `review-input-${field}`;
                 return (
                   <div key={field}>
-                    <label htmlFor={fieldId} className="block text-sm font-medium mb-1">
+                    <label
+                      htmlFor={fieldId}
+                      className="block text-sm font-medium mb-1"
+                    >
                       {field}
                       {isRequired && <span className="text-error ml-1">*</span>}
                     </label>
@@ -114,7 +132,10 @@ export function StepReviewModal({
                       type="text"
                       value={inputs[field] || ''}
                       onChange={(e) =>
-                        setInputs((prev) => ({ ...prev, [field]: e.target.value }))
+                        setInputs((prev) => ({
+                          ...prev,
+                          [field]: e.target.value,
+                        }))
                       }
                       className="w-full px-3 py-1 text-sm border border-border rounded bg-background focus:outline-none focus:border-ring"
                       placeholder={`Enter ${field}`}

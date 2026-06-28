@@ -14,7 +14,7 @@ import (
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
 	"github.com/dagucloud/dagu/internal/core/spec"
-	"github.com/dagucloud/dagu/internal/persis/filedagrun"
+	"github.com/dagucloud/dagu/internal/persis/file/dagrun"
 	legacymodel "github.com/dagucloud/dagu/internal/persis/legacy/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -106,7 +106,7 @@ func (m *mockDAGStore) LoadSpec(_ context.Context, _ []byte, _ ...spec.LoadOptio
 	return nil, nil
 }
 
-func (m *mockDAGStore) TagList(_ context.Context) ([]string, []string, error) {
+func (m *mockDAGStore) LabelList(_ context.Context) ([]string, []string, error) {
 	return nil, nil, nil
 }
 
@@ -492,7 +492,7 @@ func TestFullMigration(t *testing.T) {
 	require.NoError(t, os.WriteFile(dagPath, []byte("name: test-dag"), 0600))
 
 	// Set up stores
-	dagRunStore := filedagrun.New(dagRunsDir)
+	dagRunStore := dagrun.New(dagRunsDir)
 	dagStore := &mockDAGStore{
 		dags: map[string]*core.DAG{
 			dagPath: testDAG,

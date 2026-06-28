@@ -12,10 +12,11 @@ import (
 	"github.com/dagucloud/dagu/internal/core/exec"
 	"github.com/dagucloud/dagu/internal/core/spec"
 	"github.com/dagucloud/dagu/internal/runtime/agent"
+	"github.com/dagucloud/dagu/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
-var dryFlags = []commandLineFlag{paramsFlag, nameFlag}
+var dryFlags = []commandLineFlag{paramsFlag, nameFlag, profileFlag}
 
 // Dry returns the cobra command for dry-run simulation.
 func Dry() *cobra.Command {
@@ -72,6 +73,10 @@ func runDry(ctx *Context, args []string) error {
 	}
 
 	as := ctx.agentStores()
+	profileName, err := runtimeProfileNameParam(ctx)
+	if err != nil {
+		return err
+	}
 
 	ag := agent.New(
 		dagRunID,
@@ -83,7 +88,13 @@ func runDry(ctx *Context, args []string) error {
 		agent.Options{
 			Dry:                        true,
 			DAGRunStore:                ctx.DAGRunStore,
+			QueueStore:                 ctx.QueueStore,
+			StateStore:                 ctx.StateStore,
+			SecretStore:                as.SecretStore,
+			ProfileStore:               as.ProfileStore,
+			ProfileName:                profileName,
 			ServiceRegistry:            ctx.ServiceRegistry,
+			SubWorkflowRunnerFactory:   ctx.SubWorkflowRunnerFactory(),
 			RootDAGRun:                 exec.NewDAGRunRef(dag.Name, dagRunID),
 			PeerConfig:                 ctx.Config.Core.Peer,
 			DefaultExecMode:            ctx.Config.DefaultExecMode,
@@ -93,6 +104,8 @@ func runDry(ctx *Context, args []string) error {
 			AgentSoulStore:             as.SoulStore,
 			AgentOAuthManager:          as.OAuthManager,
 			AgentRemoteContextResolver: as.ContextResolver,
+			DAGRunLogDir:               ctx.Config.Paths.LogDir,
+			DAGRunArtifactDir:          ctx.Config.Paths.ArtifactDir,
 		},
 	)
 
@@ -111,6 +124,7 @@ func runDry(ctx *Context, args []string) error {
 func loadDAGForDryRun(ctx *Context, args []string) (*core.DAG, error) {
 	loadOpts := []spec.LoadOption{
 		spec.WithBaseConfig(ctx.Config.Paths.BaseConfig),
+		spec.WithWorkspaceBaseConfigDir(workspace.BaseConfigDir(ctx.Config.Paths.DAGsDir)),
 		spec.WithDAGsDir(ctx.Config.Paths.DAGsDir),
 	}
 

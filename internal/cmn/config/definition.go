@@ -7,14 +7,16 @@ package config
 // Fields are organized into logical groups for clarity.
 type Definition struct {
 	// Server settings
-	Host         string  `mapstructure:"host"`
-	Port         int     `mapstructure:"port"`
-	BasePath     string  `mapstructure:"base_path"`
-	APIBasePath  string  `mapstructure:"api_base_path"`
-	APIBaseURL   string  `mapstructure:"api_base_url"` // Deprecated: use APIBasePath
-	Headless     *bool   `mapstructure:"headless"`
-	CheckUpdates *bool   `mapstructure:"check_updates"`
-	TLS          *TLSDef `mapstructure:"tls"`
+	Host               string   `mapstructure:"host"`
+	Port               int      `mapstructure:"port"`
+	PublicURL          string   `mapstructure:"public_url"`
+	BasePath           string   `mapstructure:"base_path"`
+	APIBasePath        string   `mapstructure:"api_base_path"`
+	APIBaseURL         string   `mapstructure:"api_base_url"` // Deprecated: use APIBasePath
+	Headless           *bool    `mapstructure:"headless"`
+	CheckUpdates       *bool    `mapstructure:"check_updates"`
+	TLS                *TLSDef  `mapstructure:"tls"`
+	CORSAllowedOrigins []string `mapstructure:"cors_allowed_origins"`
 
 	// Core settings
 	Debug                  bool     `mapstructure:"debug"`
@@ -84,6 +86,7 @@ type Definition struct {
 	Terminal   *TerminalDef   `mapstructure:"terminal"`
 	Audit      *AuditDef      `mapstructure:"audit"`
 	EventStore *EventStoreDef `mapstructure:"event_store"`
+	Webhooks   *WebhooksDef   `mapstructure:"webhooks"`
 	Session    *SessionDef    `mapstructure:"session"`
 	SSE        *SSEDef        `mapstructure:"sse"`
 	GitSync    *GitSyncDef    `mapstructure:"git_sync"`
@@ -185,7 +188,9 @@ type PathsDef struct {
 	Executable         string `mapstructure:"executable"`
 	LogDir             string `mapstructure:"log_dir"`
 	ArtifactDir        string `mapstructure:"artifact_dir"`
+	DAGStateDir        string `mapstructure:"dag_state_dir"`
 	DataDir            string `mapstructure:"data_dir"`
+	ToolsDir           string `mapstructure:"tools_dir"`
 	SuspendFlagsDir    string `mapstructure:"suspend_flags_dir"`
 	AdminLogsDir       string `mapstructure:"admin_logs_dir"`
 	EventStoreDir      string `mapstructure:"event_store_dir"`
@@ -202,6 +207,7 @@ type PathsDef struct {
 	ContextsDir        string `mapstructure:"contexts_dir"`
 	RemoteNodesDir     string `mapstructure:"remote_nodes_dir"`
 	WorkspacesDir      string `mapstructure:"workspaces_dir"`
+	ViewsDir           string `mapstructure:"views_dir"`
 }
 
 // SecretsDef configures shared defaults for secret providers.
@@ -367,6 +373,11 @@ type EventStoreDef struct {
 	RetentionDays *int  `mapstructure:"retention_days"` // Default: 1
 }
 
+// WebhooksDef configures webhook trigger endpoints.
+type WebhooksDef struct {
+	MaxPayloadSize *int `mapstructure:"max_payload_size"` // Default: 1MiB
+}
+
 // SessionDef configures agent session storage.
 type SessionDef struct {
 	MaxPerUser *int `mapstructure:"max_per_user"` // Default: 100; 0 = unlimited
@@ -459,6 +470,7 @@ type BotsDef struct {
 	Telegram *TelegramBotDef `mapstructure:"telegram"`
 	Slack    *SlackBotDef    `mapstructure:"slack"`
 	Discord  *DiscordBotDef  `mapstructure:"discord"`
+	Line     *LineBotDef     `mapstructure:"line"`
 }
 
 // TelegramBotDef configures the Telegram bot.
@@ -481,6 +493,15 @@ type SlackBotDef struct {
 type DiscordBotDef struct {
 	Token                string   `mapstructure:"token"`
 	AllowedChannelIDs    []string `mapstructure:"allowed_channel_ids"`
+	InterestedEventTypes []string `mapstructure:"interested_event_types"`
+	RespondToAll         *bool    `mapstructure:"respond_to_all"` // Default: true
+}
+
+// LineBotDef configures the LINE bot.
+type LineBotDef struct {
+	ChannelAccessToken   string   `mapstructure:"channel_access_token"`
+	ChannelSecret        string   `mapstructure:"channel_secret"`
+	AllowedSourceIDs     []string `mapstructure:"allowed_source_ids"`
 	InterestedEventTypes []string `mapstructure:"interested_event_types"`
 	RespondToAll         *bool    `mapstructure:"respond_to_all"` // Default: true
 }

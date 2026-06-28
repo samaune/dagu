@@ -7,7 +7,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dagucloud/dagu/internal/cmn/eval"
+	cmnvalue "github.com/dagucloud/dagu/internal/cmn/value"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
 	"github.com/dagucloud/dagu/internal/runtime"
@@ -33,7 +33,7 @@ func TestEvalString(t *testing.T) {
 	env.Scope = env.Scope.WithEntries(map[string]string{
 		"TEST_VAR":    "hello",
 		"ANOTHER_VAR": "world",
-	}, eval.EnvSourceStepEnv)
+	}, cmnvalue.EnvSourceStepEnv)
 	ctx = runtime.WithEnv(ctx, env)
 
 	tests := []struct {
@@ -70,11 +70,87 @@ func TestEvalString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := runtime.EvalString(ctx, tt.input)
+			result, err := runtime.ResolveString(ctx, tt.input, cmnvalue.WorkflowField("test"))
 			require.NoError(t, err)
 			require.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestEvalStringResolvesConstsOnlyReservedBinding(t *testing.T) {
+	t.Parallel()
+
+	ctx := runtime.NewContext(context.Background(), &core.DAG{
+		Name: "test-dag",
+		Consts: map[string]any{
+			"service": "api",
+		},
+		ParamDefs: []core.ParamDef{
+			{Name: "environment", Type: core.ParamDefTypeString},
+		},
+		Params: []string{"environment=prod"},
+	}, "", "")
+	env := runtime.NewEnv(ctx, core.Step{Name: "test-step"})
+	env.Scope = env.Scope.WithEntries(map[string]string{
+		"HOME": "workspace",
+	}, cmnvalue.EnvSourceStepEnv)
+	outputs := `{"image":"repo/api:v1"}`
+	env.StepMap = map[string]cmnvalue.StepInfo{
+		"build": {DeclaredOutputs: &outputs},
+	}
+	ctx = runtime.WithEnv(ctx, env)
+
+	got, err := runtime.ResolveString(ctx, "${consts.service} ${params.environment} ${env.HOME} ${steps.build.outputs.image}", cmnvalue.WorkflowField("test"))
+	require.NoError(t, err)
+	assert.Equal(t, "api prod workspace repo/api:v1", got)
+}
+
+func TestEvalStringPreservesBacktickSubstitution(t *testing.T) {
+	t.Parallel()
+
+	ctx := runtime.NewContext(context.Background(), &core.DAG{Name: "test-dag"}, "", "")
+	env := runtime.NewEnv(ctx, core.Step{Name: "test-step"})
+	ctx = runtime.WithEnv(ctx, env)
+
+	got, err := runtime.ResolveString(ctx, "`echo resolved`", cmnvalue.WorkflowField("test"))
+	require.NoError(t, err)
+	assert.Equal(t, "`echo resolved`", got)
+}
+
+func TestEvalStringModeDirectCommandUsesHostOnlyEnvFallback(t *testing.T) {
+	t.Setenv("DAGU_RUNTIME_DIRECT_HOST_ONLY", "from-os")
+
+	ctx := runtime.NewContext(context.Background(), &core.DAG{Name: "test-dag"}, "", "")
+	env := runtime.NewEnv(ctx, core.Step{Name: "test-step"})
+	env.Scope = env.Scope.WithEntry("SCOPED", "from-scope", cmnvalue.EnvSourceStepEnv)
+	ctx = runtime.WithEnv(ctx, env)
+
+	got, err := runtime.ResolveString(ctx, "$SCOPED:$DAGU_RUNTIME_DIRECT_HOST_ONLY", cmnvalue.DirectCommandField("command", cmnvalue.CommandContext{}))
+	require.NoError(t, err)
+	assert.Equal(t, "from-scope:from-os", got)
+}
+
+func TestEvalStringPreservesUnsupportedStepsReferenceText(t *testing.T) {
+	t.Parallel()
+
+	ctx := runtime.NewContext(context.Background(), &core.DAG{
+		Name: "test-dag",
+		Steps: []core.Step{
+			{
+				Name: "build",
+				ID:   "build",
+				StructuredOutput: map[string]core.StepOutputEntry{
+					"image": {},
+				},
+			},
+		},
+	}, "", "")
+	env := runtime.NewEnv(ctx, core.Step{Name: "test-step"})
+	ctx = runtime.WithEnv(ctx, env)
+
+	got, err := runtime.ResolveString(ctx, "${steps.build.output.image}", cmnvalue.WorkflowField("test"))
+	require.NoError(t, err)
+	assert.Equal(t, "${steps.build.output.image}", got)
 }
 
 func TestEvalBool(t *testing.T) {
@@ -87,7 +163,7 @@ func TestEvalBool(t *testing.T) {
 		"ONE_VAR":     "1",
 		"ZERO_VAR":    "0",
 		"INVALID_VAR": "not-a-bool",
-	}, eval.EnvSourceStepEnv)
+	}, cmnvalue.EnvSourceStepEnv)
 	ctx = runtime.WithEnv(ctx, env)
 
 	tests := []struct {
@@ -179,7 +255,7 @@ func TestEvalObject(t *testing.T) {
 		"NAME_VAR":   "John",
 		"DESC_VAR":   "Developer",
 		"NESTED_VAR": "NestedValue",
-	}, eval.EnvSourceStepEnv)
+	}, cmnvalue.EnvSourceStepEnv)
 	ctx = runtime.WithEnv(ctx, env)
 
 	// Create a test struct
@@ -223,7 +299,7 @@ func TestEvalObjectWithExecutorConfig(t *testing.T) {
 		"EXECUTOR_TYPE": "docker",
 		"HOST_VAR":      "localhost",
 		"PORT_VAR":      "8080",
-	}, eval.EnvSourceStepEnv)
+	}, cmnvalue.EnvSourceStepEnv)
 	ctx = runtime.WithEnv(ctx, env)
 
 	// Create an ExecutorConfig with variables
@@ -266,6 +342,30 @@ func TestEvalObjectWithExecutorConfig(t *testing.T) {
 	require.True(t, ok, "expected nested should be a map[string]any")
 
 	require.Equal(t, nestedExpected["value"], nestedResult["value"])
+}
+
+func TestEvalObjectWithExecutorConfig_PreservesUnresolvedPlaceholderWhenOptionalParamIsOmitted(t *testing.T) {
+	t.Parallel()
+
+	ctx := exec.NewContext(
+		context.Background(),
+		&core.DAG{
+			Name: "test-dag",
+			ParamDefs: []core.ParamDef{
+				{Name: "HOME", Type: core.ParamDefTypeString},
+			},
+		},
+		"",
+		"",
+	)
+	env := runtime.NewEnv(ctx, core.Step{Name: "test-step"})
+	ctx = runtime.WithEnv(ctx, env)
+
+	result, err := runtime.EvalObject(ctx, map[string]any{
+		"key": "${HOME}/.ssh/id_ed25519",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "${HOME}/.ssh/id_ed25519", result["key"])
 }
 
 func TestGenerateSubDAGRunID(t *testing.T) {
@@ -351,7 +451,7 @@ func TestEvalObjectWithComplexNestedStructures(t *testing.T) {
 		"VAR1": "value1",
 		"VAR2": "value2",
 		"NUM":  "42",
-	}, eval.EnvSourceStepEnv)
+	}, cmnvalue.EnvSourceStepEnv)
 	ctx = runtime.WithEnv(ctx, env)
 
 	tests := []struct {
@@ -513,7 +613,7 @@ func TestEvalStringEdgeCases(t *testing.T) {
 		"EMPTY":   "",
 		"SPACES":  "  ",
 		"SPECIAL": "special!@#",
-	}, eval.EnvSourceStepEnv)
+	}, cmnvalue.EnvSourceStepEnv)
 	ctx = runtime.WithEnv(ctx, env)
 
 	tests := []struct {
@@ -562,7 +662,7 @@ func TestEvalStringEdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := runtime.EvalString(ctx, tt.input)
+			result, err := runtime.ResolveString(ctx, tt.input, cmnvalue.WorkflowField("test"))
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -581,7 +681,7 @@ func TestEvalObjectWithDirectStringEvaluation(t *testing.T) {
 		"STRING_VAR": "evaluated_string",
 		"PATH_VAR":   "/path/to/file",
 		"COMBINED":   "prefix",
-	}, eval.EnvSourceStepEnv)
+	}, cmnvalue.EnvSourceStepEnv)
 	ctx = runtime.WithEnv(ctx, env)
 
 	tests := []struct {
@@ -671,7 +771,7 @@ func TestEvalBoolEdgeCases(t *testing.T) {
 		"OFF": "off",
 		"T":   "t",
 		"F":   "f",
-	}, eval.EnvSourceStepEnv)
+	}, cmnvalue.EnvSourceStepEnv)
 
 	ctx = runtime.WithEnv(ctx, env)
 

@@ -22,6 +22,7 @@ import (
 
 	"github.com/spf13/viper"
 
+	agentstore "github.com/dagucloud/dagu/internal/agent"
 	"github.com/dagucloud/dagu/internal/cmn/cmdutil"
 	"github.com/dagucloud/dagu/internal/cmn/config"
 	"github.com/dagucloud/dagu/internal/cmn/fileutil"
@@ -30,15 +31,15 @@ import (
 	"github.com/dagucloud/dagu/internal/core"
 	exec1 "github.com/dagucloud/dagu/internal/core/exec"
 	"github.com/dagucloud/dagu/internal/core/spec"
-	"github.com/dagucloud/dagu/internal/persis/filebaseconfig"
-	"github.com/dagucloud/dagu/internal/persis/filedag"
-	"github.com/dagucloud/dagu/internal/persis/filedagrun"
-	"github.com/dagucloud/dagu/internal/persis/filedistributed"
-	"github.com/dagucloud/dagu/internal/persis/filequeue"
-	"github.com/dagucloud/dagu/internal/persis/fileserviceregistry"
+	"github.com/dagucloud/dagu/internal/dagstate"
+	"github.com/dagucloud/dagu/internal/launcher"
+	"github.com/dagucloud/dagu/internal/node"
+	"github.com/dagucloud/dagu/internal/persis/file"
+	"github.com/dagucloud/dagu/internal/persis/store"
 	runtimepkg "github.com/dagucloud/dagu/internal/runtime"
 	"github.com/dagucloud/dagu/internal/runtime/agent"
 	"github.com/dagucloud/dagu/internal/service/frontend"
+	"github.com/dagucloud/dagu/internal/workspace"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -74,7 +75,7 @@ type Options struct {
 	CoordinatorPort      int
 	ServerOptions        []frontend.ServerOption
 	UseBuiltExecutable   bool // UseBuiltExecutable builds the current ./cmd binary for subprocess-based tests
-	// Coordinator handler options for shared-nothing worker tests
+	// Coordinator handler options for worker tests
 	WithStatusPersistence   bool          // Enable status persistence via DAGRunStore
 	WithLogPersistence      bool          // Enable log persistence to filesystem
 	WithArtifactPersistence bool          // Enable artifact persistence to filesystem
@@ -269,36 +270,32 @@ func Setup(t *testing.T, opts ...HelperOption) Helper {
 	ctx = config.WithConfig(ctx, cfg)
 
 	if cfg.Paths.BaseConfig != "" {
-		baseConfigStore, err := filebaseconfig.New(
+		baseConfigStore, err := file.NewBaseConfigStore(
 			cfg.Paths.BaseConfig,
-			filebaseconfig.WithSkipDefault(cfg.Core.SkipExamples),
+			file.WithBaseConfigSkipDefault(cfg.Core.SkipExamples),
 		)
 		require.NoError(t, err)
 		require.NoError(t, baseConfigStore.Initialize())
 	}
 
-	dagStore := filedag.New(
-		cfg.Paths.DAGsDir,
-		filedag.WithFlagsBaseDir(cfg.Paths.SuspendFlagsDir),
-		filedag.WithBaseConfig(cfg.Paths.BaseConfig),
-		filedag.WithSkipExamples(true),
-	)
-	runStore := filedagrun.New(
-		cfg.Paths.DAGRunsDir,
-		filedagrun.WithArtifactDir(cfg.Paths.ArtifactDir),
-	)
+	dagStore, err := file.NewDAGStore(cfg, file.WithDAGSkipExamples(true))
+	require.NoError(t, err)
+	runStore := file.NewDAGRunStore(cfg)
 	procStore := newProcStore(cfg)
-	queueStore := filequeue.New(cfg.Paths.QueueDir)
-	serviceMonitor := fileserviceregistry.New(cfg.Paths.ServiceRegistryDir)
+	queueStore := store.NewQueueStore(file.NewCollection(cfg.Paths.QueueDir))
+	stateStore := store.NewDAGStateStore(file.NewCollection(cfg.Paths.DAGStateDir))
+	serviceMonitor := file.NewServiceRegistry(cfg)
 	distributedDir := filepath.Join(cfg.Paths.DataDir, "distributed")
-	var dispatchStoreOpts []filedistributed.DispatchTaskStoreOption
+	var dispatchStoreOpts []store.DispatchTaskStoreOption
 	if options.StaleLeaseThreshold > 0 {
-		dispatchStoreOpts = append(dispatchStoreOpts, filedistributed.WithDispatchReservationTTL(options.StaleLeaseThreshold))
+		dispatchStoreOpts = append(dispatchStoreOpts, store.WithDispatchReservationTTL(options.StaleLeaseThreshold))
 	}
-	dispatchTaskStore := filedistributed.NewDispatchTaskStore(distributedDir, dispatchStoreOpts...)
-	workerHeartbeatStore := filedistributed.NewWorkerHeartbeatStore(distributedDir)
-	dagRunLeaseStore := filedistributed.NewDAGRunLeaseStore(distributedDir)
-	activeDistributedRunStore := filedistributed.NewActiveDistributedRunStore(distributedDir)
+	dispatchTaskStore := store.NewDispatchTaskStore(file.NewCollection(distributedDir), dispatchStoreOpts...)
+	workerHeartbeatStore := store.NewWorkerHeartbeatStore(file.NewCollection(filepath.Join(distributedDir, "workers")))
+	leaseCollection := file.NewCollection(filepath.Join(distributedDir, "leases"))
+	activeRunCollection := file.NewCollection(filepath.Join(distributedDir, "active-runs"))
+	dagRunLeaseStore := store.NewDAGRunLeaseStore(leaseCollection)
+	activeDistributedRunStore := store.NewActiveDistributedRunStore(activeRunCollection)
 
 	drm := runtimepkg.NewManager(runStore, procStore, cfg)
 
@@ -311,12 +308,13 @@ func Setup(t *testing.T, opts ...HelperOption) Helper {
 		DAGRunStore:               runStore,
 		ProcStore:                 procStore,
 		QueueStore:                queueStore,
+		StateStore:                stateStore,
 		ServiceRegistry:           serviceMonitor,
 		DispatchTaskStore:         dispatchTaskStore,
 		WorkerHeartbeatStore:      workerHeartbeatStore,
 		DAGRunLeaseStore:          dagRunLeaseStore,
 		ActiveDistributedRunStore: activeDistributedRunStore,
-		SubCmdBuilder:             runtimepkg.NewSubCmdBuilder(cfg),
+		SubCmdBuilder:             launcher.NewSubCmdBuilder(cfg),
 		ServerOptions:             options.ServerOptions,
 		StaleHeartbeatThreshold:   options.StaleHeartbeatThreshold,
 		StaleLeaseThreshold:       options.StaleLeaseThreshold,
@@ -517,12 +515,13 @@ type Helper struct {
 	DAGRunMgr                 runtimepkg.Manager
 	ProcStore                 exec1.ProcStore
 	QueueStore                exec1.QueueStore
+	StateStore                dagstate.Store
 	ServiceRegistry           exec1.ServiceRegistry
 	DispatchTaskStore         exec1.DispatchTaskStore
 	WorkerHeartbeatStore      exec1.WorkerHeartbeatStore
 	DAGRunLeaseStore          exec1.DAGRunLeaseStore
 	ActiveDistributedRunStore exec1.ActiveDistributedRunStore
-	SubCmdBuilder             *runtimepkg.SubCmdBuilder
+	SubCmdBuilder             *launcher.SubCmdBuilder
 	ServerOptions             []frontend.ServerOption
 	StaleHeartbeatThreshold   time.Duration
 	StaleLeaseThreshold       time.Duration
@@ -565,6 +564,7 @@ func (h Helper) DAG(t *testing.T, yamlContent string) DAG {
 	if h.Config.Paths.BaseConfig != "" {
 		loadOpts = append(loadOpts, spec.WithBaseConfig(h.Config.Paths.BaseConfig))
 	}
+	loadOpts = append(loadOpts, spec.WithWorkspaceBaseConfigDir(workspace.BaseConfigDir(h.Config.Paths.DAGsDir)))
 	dag, err := spec.Load(h.Context, testFile, loadOpts...)
 	require.NoError(t, err, "failed to load test DAG")
 
@@ -718,7 +718,7 @@ func (d *DAG) ReadOutputs(t *testing.T) map[string]string {
 		if err != nil {
 			return err
 		}
-		if info.Name() == filedagrun.OutputsFile {
+		if info.Name() == file.DAGRunOutputsFileName {
 			outputsPath = path
 			return filepath.SkipAll
 		}
@@ -778,10 +778,32 @@ func (d *DAG) Agent(opts ...AgentOption) *Agent {
 	root := exec1.NewDAGRunRef(d.Name, dagRunID)
 
 	helper.opts.DAGRunStore = d.DAGRunStore
+	helper.opts.QueueStore = d.QueueStore
 	helper.opts.ServiceRegistry = d.ServiceRegistry
 	helper.opts.RootDAGRun = root
 	helper.opts.PeerConfig = d.Config.Core.Peer
 	helper.opts.DefaultExecMode = d.Config.DefaultExecMode
+	helper.opts.DAGRunLogDir = d.Config.Paths.LogDir
+	helper.opts.DAGRunArtifactDir = d.Config.Paths.ArtifactDir
+	if helper.opts.SubWorkflowRunnerFactory == nil {
+		helper.opts.SubWorkflowRunnerFactory = node.NewSubWorkflowRunnerFactory(node.SubWorkflowRunnerConfig{
+			DAGRunMgr:   d.DAGRunMgr,
+			DAGStore:    d.DAGStore,
+			DAGRunStore: d.DAGRunStore,
+			QueueStore:  d.QueueStore,
+			StateStore:  d.StateStore,
+			AgentStores: agentstore.RuntimeStores{
+				SecretStore:  helper.opts.SecretStore,
+				ProfileStore: helper.opts.ProfileStore,
+			},
+			ServiceRegistry:   d.ServiceRegistry,
+			PeerConfig:        d.Config.Core.Peer,
+			DefaultExecMode:   d.Config.DefaultExecMode,
+			WorkerID:          "local",
+			DAGRunLogDir:      d.Config.Paths.LogDir,
+			DAGRunArtifactDir: d.Config.Paths.ArtifactDir,
+		})
+	}
 
 	helper.Agent = agent.New(
 		dagRunID,
@@ -925,8 +947,8 @@ func testShellPath(t *testing.T) string {
 		if shPath := windowsSystemPowerShellPath(); shPath != "" {
 			return shPath
 		}
-		if shPath := strings.TrimSpace(os.Getenv("COMSPEC")); shPath != "" {
-			if _, err := os.Stat(shPath); err == nil {
+		if shPath := cleanWindowsEnvExecutablePath(os.Getenv("COMSPEC"), "cmd.exe"); shPath != "" {
+			if testFileExists(shPath) {
 				return shPath
 			}
 		}
@@ -944,7 +966,7 @@ func testShellPath(t *testing.T) string {
 }
 
 func windowsSystemPowerShellPath() string {
-	systemRoot := strings.TrimSpace(os.Getenv("SystemRoot"))
+	systemRoot := cleanWindowsSystemRoot(os.Getenv("SystemRoot"))
 	if systemRoot == "" {
 		return ""
 	}
@@ -953,12 +975,42 @@ func windowsSystemPowerShellPath() string {
 		filepath.Join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
 		filepath.Join(systemRoot, "Sysnative", "WindowsPowerShell", "v1.0", "powershell.exe"),
 	} {
-		if _, err := os.Stat(candidate); err == nil {
+		if testFileExists(candidate) {
 			return candidate
 		}
 	}
 
 	return ""
+}
+
+func cleanWindowsEnvExecutablePath(raw string, allowedNames ...string) string {
+	pathValue := filepath.Clean(strings.TrimSpace(raw))
+	if pathValue == "." || !filepath.IsAbs(pathValue) {
+		return ""
+	}
+	base := filepath.Base(pathValue)
+	for _, name := range allowedNames {
+		if strings.EqualFold(base, name) {
+			return pathValue
+		}
+	}
+	return ""
+}
+
+func cleanWindowsSystemRoot(raw string) string {
+	pathValue := filepath.Clean(strings.TrimSpace(raw))
+	if pathValue == "." || !filepath.IsAbs(pathValue) {
+		return ""
+	}
+	if filepath.VolumeName(pathValue) == "" {
+		return ""
+	}
+	return pathValue
+}
+
+func testFileExists(path string) bool {
+	_, err := os.Stat(path) //nolint:gosec // path is constrained by the caller before probing the test host.
+	return err == nil
 }
 
 func buildHelperChildEnv(base []string, daguHome, configFile, executablePath, shellPath string) []string {
@@ -1044,13 +1096,22 @@ func buildCurrentExecutable(t *testing.T, root string) string {
 	t.Helper()
 
 	builtExecutableOnce.Do(func() {
-		prebuiltPath := filepath.Join(root, ".local", "bin", "dagu")
-		if runtime.GOOS == "windows" {
-			prebuiltPath += ".exe"
-		}
-		if fi, err := os.Stat(prebuiltPath); err == nil && !fi.IsDir() {
-			builtExecutablePath = prebuiltPath
-			return
+		// On CI the build step already compiles .local/bin/dagu[.exe] from the
+		// current commit before tests run. Reusing that binary avoids a redundant
+		// compilation and — on Windows — prevents Windows Defender from scanning a
+		// freshly-compiled executable on first use, which can add 30–60 s of
+		// latency and cause flaky worker-registration timeouts. We only take this
+		// shortcut under CI=true to avoid using a stale binary during local dev
+		// (where the developer may not have rebuilt after changing cmd/).
+		if os.Getenv("CI") == "true" {
+			prebuilt := filepath.Join(root, ".local", "bin", "dagu")
+			if runtime.GOOS == "windows" {
+				prebuilt += ".exe"
+			}
+			if _, err := os.Stat(prebuilt); err == nil {
+				builtExecutablePath = prebuilt
+				return
+			}
 		}
 
 		tmpDir, err := os.MkdirTemp("", "dagu-test-bin-*")

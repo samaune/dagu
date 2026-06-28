@@ -4,6 +4,7 @@
 package cmd_test
 
 import (
+	"os"
 	"testing"
 
 	"github.com/dagucloud/dagu/internal/cmd"
@@ -17,13 +18,117 @@ func TestValidateCommand(t *testing.T) {
 	t.Run("ValidSpec", func(t *testing.T) {
 		dag := th.DAG(t, `
 steps:
-  - echo ok
+  - run: echo ok
 `)
 
 		th.RunCommand(t, cmd.Validate(), test.CmdTest{
-			Args:        []string{"validate", dag.Location},
-			ExpectedOut: []string{"DAG spec is valid"},
+			Args: []string{"validate", dag.Location},
 		})
+	})
+
+	t.Run("BaseConfigStepTypes", func(t *testing.T) {
+		require.NoError(t, os.WriteFile(th.Config.Paths.BaseConfig, []byte(`
+step_types:
+  greet:
+    type: command
+    input_schema:
+      type: object
+      additionalProperties: false
+      required: [message]
+      properties:
+        message:
+          type: string
+    template:
+      exec:
+        command: /bin/echo
+        args:
+          - {$input: message}
+`), 0600))
+
+		dagFile := th.CreateDAGFile(t, "base_config_step_type.yaml", `
+steps:
+  - type: greet
+    with:
+      message: hello
+`)
+
+		th.RunCommand(t, cmd.Validate(), test.CmdTest{
+			Args: []string{"validate", dagFile},
+		})
+	})
+
+	t.Run("LegacySyntaxWarnsButSucceeds", func(t *testing.T) {
+		th.LoggingOutput.Reset()
+		dagFile := th.CreateDAGFile(t, "legacy_syntax.yaml", `
+steps:
+  - command: echo legacy
+`)
+
+		th.RunCommand(t, cmd.Validate(), test.CmdTest{
+			Args:        []string{"validate", dagFile},
+			ExpectedOut: []string{"deprecated", "steps[0].command", "use run"},
+		})
+	})
+
+	t.Run("ValueReferenceNotices", func(t *testing.T) {
+		th.LoggingOutput.Reset()
+		dagFile := th.CreateDAGFile(t, "value_resolution_notice.yaml", `
+consts:
+  - image: ${consts.missing}
+steps:
+  - run: echo ok
+`)
+
+		th.RunCommand(t, cmd.Validate(), test.CmdTest{
+			Args:        []string{"validate", dagFile},
+			ExpectedOut: []string{"${consts.missing}", "was left unchanged", "consts.image"},
+		})
+	})
+
+	t.Run("StepOutputValueReferenceNoticeReason", func(t *testing.T) {
+		th.LoggingOutput.Reset()
+		dagFile := th.CreateDAGFile(t, "step_value_resolution_notice.yaml", `
+steps:
+  - id: build
+    run: printf 'image=v1\n' >> "$DAGU_OUTPUT_FILE"
+    outputs:
+      - name: image
+  - id: deploy
+    run: echo ${steps.build.outputs.image}
+`)
+
+		th.RunCommand(t, cmd.Validate(), test.CmdTest{
+			Args:        []string{"validate", dagFile},
+			ExpectedOut: []string{"${steps.build.outputs.image}", "was left unchanged", "reason=missing_dependency"},
+		})
+	})
+
+	t.Run("V2SyntaxDoesNotWarn", func(t *testing.T) {
+		th.LoggingOutput.Reset()
+		dagFile := th.CreateDAGFile(t, "v2_syntax.yaml", `
+steps:
+  - run: echo ok
+`)
+
+		th.RunCommand(t, cmd.Validate(), test.CmdTest{
+			Args: []string{"validate", dagFile},
+		})
+		require.NotContains(t, th.LoggingOutput.String(), "deprecated")
+	})
+
+	t.Run("MixedRunAndLegacyFails", func(t *testing.T) {
+		th.LoggingOutput.Reset()
+		dagFile := th.CreateDAGFile(t, "mixed_v2_legacy.yaml", `
+steps:
+  - run: echo ok
+    command: echo legacy
+`)
+
+		err := th.RunCommandWithError(t, cmd.Validate(), test.CmdTest{
+			Args: []string{"validate", dagFile},
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "run cannot be used together with command")
 	})
 
 	t.Run("InvalidDependency", func(t *testing.T) {
@@ -31,9 +136,9 @@ steps:
 		dagFile := th.CreateDAGFile(t, "invalid.yaml", `
 type: graph
 steps:
-  - echo A
+  - run: echo A
   - name: "b"
-    command: echo B
+    run: echo B
     depends: ["missing_step"]
 `)
 
@@ -49,7 +154,7 @@ steps:
 		dagFile := th.CreateDAGFile(t, "invalid_yaml.yaml", `
 steps:
   - name: "test"
-    command: echo test
+    run: echo test
   invalid yaml here: [[[
 `)
 
@@ -58,6 +163,21 @@ steps:
 		})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "Validation failed")
+	})
+
+	t.Run("ResolvedPathValidationErrorUsesResolvedLocation", func(t *testing.T) {
+		dagFile := th.CreateDAGFile(t, "resolved_path.yaml", `
+name: invalid-entrypoint-name
+steps:
+  - run: echo ok
+`)
+
+		err := th.RunCommandWithError(t, cmd.Validate(), test.CmdTest{
+			Args: []string{"validate", "resolved_path.yaml"},
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Validation failed for "+dagFile)
+		require.NotContains(t, err.Error(), "Validation failed for resolved_path.yaml")
 	})
 
 	t.Run("MissingFile", func(t *testing.T) {

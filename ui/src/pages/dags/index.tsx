@@ -1,41 +1,53 @@
-import { debounce } from 'lodash';
+// Copyright (C) 2026 Yota Hamada
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import React from 'react';
 import { useLocation } from 'react-router-dom';
 import {
+  components,
   PathsDagsGetParametersQueryOrder,
   PathsDagsGetParametersQuerySort,
 } from '../../api/v1/schema';
-import SplitLayout from '../../components/SplitLayout';
-import { TabBar } from '../../components/TabBar';
+import { Button } from '@/components/ui/button';
 import { AppBarContext } from '../../contexts/AppBarContext';
 import { useSearchState } from '../../contexts/SearchStateContext';
-import { TabProvider, useTabContext } from '../../contexts/TabContext';
 import { useUserPreferences } from '../../contexts/UserPreference';
-import { DAGDetailsPanel } from '../../features/dags/components/dag-details';
+import { DAGDetailsModal } from '../../features/dags/components/dag-details';
 import { DAGErrors } from '../../features/dags/components/dag-editor';
 import { DAGTable } from '../../features/dags/components/dag-list';
 import DAGListHeader from '../../features/dags/components/dag-list/DAGListHeader';
-import { useQuery } from '../../hooks/api';
+import { useClient, useQuery } from '../../hooks/api';
 import { useDAGsListSSE } from '../../hooks/useDAGsListSSE';
 import {
   sseFallbackOptions,
   useSSECacheSync,
 } from '../../hooks/useSSECacheSync';
-import LoadingIndicator from '../../ui/LoadingIndicator';
+import {
+  withoutWorkspaceLabels,
+  workspaceSelectionKey,
+  workspaceSelectionQuery,
+} from '../../lib/workspace';
+import LoadingIndicator from '@/components/ui/loading-indicator';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 type DAGDefinitionsFilters = {
   searchText: string;
-  searchTags: string[];
-  page: number;
+  searchLabels: string[];
   sortField: string;
   sortOrder: string;
 };
 
-const areTagsEqual = (a: string[], b: string[]): boolean => {
+type DAGsPageResponse = {
+  dags: components['schemas']['DAGFile'][];
+  errors: string[];
+  pagination: components['schemas']['Pagination'];
+};
+
+const areLabelsEqual = (a: string[], b: string[]): boolean => {
   if (a.length !== b.length) return false;
   const sortedA = [...a].sort();
   const sortedB = [...b].sort();
-  return sortedA.every((tag, i) => tag === sortedB[i]);
+  return sortedA.every((label, i) => label === sortedB[i]);
 };
 
 const areDAGDefinitionsFiltersEqual = (
@@ -43,10 +55,84 @@ const areDAGDefinitionsFiltersEqual = (
   b: DAGDefinitionsFilters
 ) =>
   a.searchText === b.searchText &&
-  areTagsEqual(a.searchTags, b.searchTags) &&
-  a.page === b.page &&
+  areLabelsEqual(a.searchLabels, b.searchLabels) &&
   a.sortField === b.sortField &&
   a.sortOrder === b.sortOrder;
+
+function mergeUniqueDAGFiles(
+  head: components['schemas']['DAGFile'][],
+  older: components['schemas']['DAGFile'][]
+): components['schemas']['DAGFile'][] {
+  const merged: components['schemas']['DAGFile'][] = [];
+  const seen = new Set<string>();
+
+  for (const dag of [...head, ...older]) {
+    if (seen.has(dag.fileName)) {
+      continue;
+    }
+    seen.add(dag.fileName);
+    merged.push(dag);
+  }
+
+  return merged;
+}
+
+function getNextPage(
+  pagination: components['schemas']['Pagination'] | undefined
+): number | null {
+  if (!pagination) {
+    return null;
+  }
+
+  if (
+    pagination.nextPage > pagination.currentPage &&
+    pagination.nextPage <= pagination.totalPages
+  ) {
+    return pagination.nextPage;
+  }
+
+  if (pagination.currentPage < pagination.totalPages) {
+    return pagination.currentPage + 1;
+  }
+
+  return null;
+}
+
+function getDAGListQueryKey(query: Record<string, unknown>): string {
+  return JSON.stringify(
+    Object.entries(query)
+      .filter(([, value]) => value !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+  );
+}
+
+function useAutoLoadMore(
+  sentinelRef: React.RefObject<HTMLDivElement | null>,
+  enabled: boolean,
+  onLoadMore: () => void
+) {
+  React.useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !enabled || typeof IntersectionObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) {
+          onLoadMore();
+        }
+      },
+      { threshold: 0.1 }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [enabled, onLoadMore, sentinelRef]);
+}
+
+function supportsIntersectionObserver(): boolean {
+  return typeof IntersectionObserver !== 'undefined';
+}
 
 function DAGsContent() {
   const location = useLocation();
@@ -57,16 +143,37 @@ function DAGsContent() {
   const group = query.get('group') || '';
   const appBarContext = React.useContext(AppBarContext);
   const searchState = useSearchState();
+  const client = useClient();
   const remoteNode = appBarContext.selectedRemoteNode || 'local';
-  const { preferences, updatePreference } = useUserPreferences();
-  const { tabs, activeTabId, selectDAG, addTab, closeTab, getActiveFileName } =
-    useTabContext();
+  const workspaceSelection = appBarContext.workspaceSelection;
+  const workspaceQuery = React.useMemo(
+    () => workspaceSelectionQuery(workspaceSelection),
+    [workspaceSelection]
+  );
+  const workspaceKey = workspaceSelectionKey(workspaceSelection);
+  const searchStateScope = JSON.stringify({
+    remoteNode,
+    workspace: workspaceKey,
+  });
+  const { preferences } = useUserPreferences();
+  const previousWorkspaceKeyRef = React.useRef(workspaceKey);
+  const [selectedDAG, setSelectedDAG] = React.useState<string | null>(null);
+  const [olderDAGFiles, setOlderDAGFiles] = React.useState<
+    components['schemas']['DAGFile'][]
+  >([]);
+  const [continuationPageOverride, setContinuationPageOverride] =
+    React.useState<number | null | undefined>(undefined);
+  const [isLoadingMore, setIsLoadingMore] = React.useState(false);
+  const [loadMoreError, setLoadMoreError] = React.useState<string | null>(null);
+  const loadMoreSentinelRef = React.useRef<HTMLDivElement>(null);
+  const autoLoadPendingRef = React.useRef(false);
+  const loadMoreControllerRef = React.useRef<AbortController | null>(null);
+  const paginationGenerationRef = React.useRef(0);
 
   const defaultFilters = React.useMemo<DAGDefinitionsFilters>(
     () => ({
       searchText: '',
-      searchTags: [],
-      page: 1,
+      searchLabels: [],
       sortField: 'name',
       sortOrder: 'asc',
     }),
@@ -74,31 +181,40 @@ function DAGsContent() {
   );
 
   const [searchText, setSearchText] = React.useState(defaultFilters.searchText);
-  const [searchTags, setSearchTags] = React.useState<string[]>(
-    defaultFilters.searchTags
-  );
-  const [page, setPage] = React.useState<number>(defaultFilters.page);
-  const [apiSearchText, setAPISearchText] = React.useState(
-    defaultFilters.searchText
-  );
-  const [apiSearchTags, setAPISearchTags] = React.useState<string[]>(
-    defaultFilters.searchTags
+  const [searchLabels, setSearchLabels] = React.useState<string[]>(
+    defaultFilters.searchLabels
   );
   const [sortField, setSortField] = React.useState(defaultFilters.sortField);
   const [sortOrder, setSortOrder] = React.useState(defaultFilters.sortOrder);
+  const debouncedSearchText = useDebouncedValue(searchText, 500);
+  const debouncedSearchLabels = useDebouncedValue(searchLabels, 500);
 
-  // Get selected DAG from tab context
-  const selectedDAG = getActiveFileName();
+  React.useEffect(() => {
+    if (previousWorkspaceKeyRef.current === workspaceKey) {
+      return;
+    }
+    previousWorkspaceKeyRef.current = workspaceKey;
+    setSelectedDAG(null);
+  }, [workspaceKey]);
+
+  const resetLoadedPages = React.useCallback(() => {
+    paginationGenerationRef.current += 1;
+    loadMoreControllerRef.current?.abort();
+    loadMoreControllerRef.current = null;
+    setOlderDAGFiles([]);
+    setContinuationPageOverride(undefined);
+    setLoadMoreError(null);
+    setIsLoadingMore(false);
+  }, []);
 
   const currentFilters = React.useMemo<DAGDefinitionsFilters>(
     () => ({
       searchText,
-      searchTags,
-      page,
+      searchLabels,
       sortField,
       sortOrder,
     }),
-    [searchText, searchTags, page, sortField, sortOrder]
+    [searchText, searchLabels, sortField, sortOrder]
   );
 
   const currentFiltersRef = React.useRef(currentFilters);
@@ -114,7 +230,7 @@ function DAGsContent() {
     const params = new URLSearchParams(location.search);
     const stored = searchState.readState<DAGDefinitionsFilters>(
       'dagDefinitions',
-      remoteNode
+      searchStateScope
     );
     const base: DAGDefinitionsFilters = {
       ...defaultFilters,
@@ -129,23 +245,16 @@ function DAGsContent() {
       hasUrlFilters = true;
     }
 
-    if (params.has('tags')) {
-      const tagsParam = params.get('tags') ?? '';
-      urlFilters.searchTags = tagsParam
-        ? tagsParam
+    if (params.has('labels') || params.has('tags')) {
+      const labelsParam = params.get('labels') ?? params.get('tags') ?? '';
+      urlFilters.searchLabels = labelsParam
+        ? labelsParam
             .split(',')
             .map((t) => t.trim().toLowerCase())
             .filter((t) => t !== '')
+            .filter((t) => withoutWorkspaceLabels([t]).length > 0)
         : [];
       hasUrlFilters = true;
-    }
-
-    if (params.has('page')) {
-      const pageParam = Number.parseInt(params.get('page') || '', 10);
-      if (!Number.isNaN(pageParam) && pageParam > 0) {
-        urlFilters.page = pageParam;
-        hasUrlFilters = true;
-      }
     }
 
     if (params.has('sort')) {
@@ -164,22 +273,19 @@ function DAGsContent() {
     if (current && areDAGDefinitionsFiltersEqual(current, next)) {
       if (hasUrlFilters) {
         lastPersistedFiltersRef.current = next;
-        searchState.writeState('dagDefinitions', remoteNode, next);
+        searchState.writeState('dagDefinitions', searchStateScope, next);
       }
       return;
     }
 
     setSearchText(next.searchText);
-    setSearchTags(next.searchTags);
-    setPage(next.page);
-    setAPISearchText(next.searchText);
-    setAPISearchTags(next.searchTags);
+    setSearchLabels(next.searchLabels);
     setSortField(next.sortField);
     setSortOrder(next.sortOrder);
 
     lastPersistedFiltersRef.current = next;
-    searchState.writeState('dagDefinitions', remoteNode, next);
-  }, [defaultFilters, location.search, remoteNode, searchState]);
+    searchState.writeState('dagDefinitions', searchStateScope, next);
+  }, [defaultFilters, location.search, searchState, searchStateScope]);
 
   React.useEffect(() => {
     const persisted = lastPersistedFiltersRef.current;
@@ -188,30 +294,36 @@ function DAGsContent() {
     }
 
     lastPersistedFiltersRef.current = currentFilters;
-    searchState.writeState('dagDefinitions', remoteNode, currentFilters);
-  }, [currentFilters, remoteNode, searchState]);
-
-  const handlePageLimitChange = (newLimit: number) => {
-    updatePreference('pageLimit', newLimit);
-  };
+    searchState.writeState('dagDefinitions', searchStateScope, currentFilters);
+  }, [currentFilters, searchState, searchStateScope]);
 
   const queryParams = React.useMemo(
     () => ({
-      page,
+      remoteNode,
+      page: 1,
       perPage: preferences.pageLimit || 200,
-      name: apiSearchText || undefined,
-      tags: apiSearchTags.length > 0 ? apiSearchTags.join(',') : undefined,
+      name: debouncedSearchText || undefined,
+      labels:
+        debouncedSearchLabels.length > 0
+          ? debouncedSearchLabels.join(',')
+          : undefined,
       sort: sortField,
       order: sortOrder,
+      ...workspaceQuery,
     }),
     [
-      page,
+      remoteNode,
       preferences.pageLimit,
-      apiSearchText,
-      apiSearchTags,
+      debouncedSearchText,
+      debouncedSearchLabels,
       sortField,
       sortOrder,
+      workspaceQuery,
     ]
+  );
+  const queryKey = React.useMemo(
+    () => getDAGListQueryKey(queryParams),
+    [queryParams]
   );
 
   const dagsListSSE = useDAGsListSSE(queryParams);
@@ -221,7 +333,6 @@ function DAGsContent() {
       params: {
         query: {
           ...queryParams,
-          remoteNode,
           sort: sortField as PathsDagsGetParametersQuerySort,
           order: sortOrder as PathsDagsGetParametersQueryOrder,
         },
@@ -229,6 +340,7 @@ function DAGsContent() {
     },
     {
       ...sseFallbackOptions(dagsListSSE),
+      keepPreviousData: true,
       revalidateIfStale: false,
       revalidateOnFocus: false,
       revalidateOnReconnect: false,
@@ -236,8 +348,15 @@ function DAGsContent() {
   );
   useSSECacheSync(dagsListSSE, mutate);
 
+  React.useEffect(() => {
+    resetLoadedPages();
+  }, [queryKey, resetLoadedPages]);
+
   const addSearchParam = (key: string, value: string | string[]) => {
     const locationQuery = new URLSearchParams(window.location.search);
+    if (key === 'labels') {
+      locationQuery.delete('tags');
+    }
     if (Array.isArray(value)) {
       if (value.length > 0) {
         locationQuery.set(key, value.join(','));
@@ -259,46 +378,26 @@ function DAGsContent() {
   };
 
   const refreshFn = React.useCallback(() => {
+    resetLoadedPages();
     setTimeout(() => mutate(), 500);
-  }, [mutate]);
+  }, [mutate, resetLoadedPages]);
+
+  const handleSelectDAG = React.useCallback((fileName: string) => {
+    setSelectedDAG(fileName);
+  }, []);
 
   React.useEffect(() => {
-    appBarContext.setTitle('DAG Definitions');
+    appBarContext.setTitle('Workflows');
   }, [appBarContext]);
-
-  const pageChange = (page: number) => {
-    addSearchParam('page', page.toString());
-    setPage(page);
-  };
-
-  const debouncedAPISearchText = React.useMemo(
-    () =>
-      debounce((searchText: string) => {
-        setAPISearchText(searchText);
-      }, 500),
-    []
-  );
-
-  const debouncedAPISearchTags = React.useMemo(
-    () =>
-      debounce((tags: string[]) => {
-        setAPISearchTags(tags);
-      }, 500),
-    []
-  );
 
   const searchTextChange = (searchText: string) => {
     addSearchParam('search', searchText);
     setSearchText(searchText);
-    setPage(1);
-    debouncedAPISearchText(searchText);
   };
 
-  const searchTagsChange = (tags: string[]) => {
-    addSearchParam('tags', tags);
-    setSearchTags(tags);
-    setPage(1);
-    debouncedAPISearchTags(tags);
+  const searchLabelsChange = (labels: string[]) => {
+    addSearchParam('labels', labels);
+    setSearchLabels(labels);
   };
 
   const handleSortChange = (field: string, order: string) => {
@@ -306,24 +405,125 @@ function DAGsContent() {
     addSearchParam('order', order);
     setSortField(field);
     setSortOrder(order);
-    setPage(1);
   };
 
+  const nextPage =
+    continuationPageOverride === undefined
+      ? getNextPage(data?.pagination)
+      : continuationPageOverride;
+  const hasMore = nextPage !== null;
   const { dagFiles, errorCount } = React.useMemo(() => {
     const dags = data?.dags ?? [];
+    const mergedDags = mergeUniqueDAGFiles(dags, olderDAGFiles);
     return {
-      dagFiles: dags,
-      errorCount: dags.filter((dag) => dag.errors?.length).length,
+      dagFiles: mergedDags,
+      errorCount: mergedDags.filter((dag) => dag.errors?.length).length,
     };
-  }, [data]);
+  }, [data?.dags, olderDAGFiles]);
 
-  const leftPanel = (
-    <div className="pl-4 md:pl-6 pr-2 pt-4 md:pt-6 pb-6">
+  const handleLoadMore = React.useCallback(async (): Promise<void> => {
+    if (isLoadingMore || !nextPage) {
+      return;
+    }
+
+    const generation = paginationGenerationRef.current;
+    loadMoreControllerRef.current?.abort();
+    const controller = new AbortController();
+    loadMoreControllerRef.current = controller;
+    setIsLoadingMore(true);
+    setLoadMoreError(null);
+
+    try {
+      const response = await client.GET('/dags', {
+        params: {
+          query: {
+            ...queryParams,
+            page: nextPage,
+            sort: sortField as PathsDagsGetParametersQuerySort,
+            order: sortOrder as PathsDagsGetParametersQueryOrder,
+          },
+        },
+        signal: controller.signal,
+      });
+
+      if (
+        controller.signal.aborted ||
+        generation !== paginationGenerationRef.current
+      ) {
+        return;
+      }
+
+      if (response.error) {
+        const message =
+          response.error &&
+          typeof response.error === 'object' &&
+          'message' in response.error
+            ? String(response.error.message)
+            : 'Failed to load more workflows';
+        setLoadMoreError(message);
+        return;
+      }
+
+      const pageData = (response.data ?? {
+        dags: [],
+        errors: [],
+        pagination: {
+          totalRecords: 0,
+          currentPage: nextPage,
+          totalPages: nextPage,
+          nextPage: 0,
+          prevPage: nextPage - 1,
+        },
+      }) as DAGsPageResponse;
+      setOlderDAGFiles((previous) =>
+        mergeUniqueDAGFiles(previous, pageData.dags ?? [])
+      );
+      setContinuationPageOverride(getNextPage(pageData.pagination));
+    } catch (caughtError) {
+      if (controller.signal.aborted) {
+        return;
+      }
+      setLoadMoreError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : 'Failed to load more workflows'
+      );
+    } finally {
+      if (loadMoreControllerRef.current === controller) {
+        loadMoreControllerRef.current = null;
+      }
+      if (generation === paginationGenerationRef.current) {
+        setIsLoadingMore(false);
+      }
+    }
+  }, [client, isLoadingMore, nextPage, queryParams, sortField, sortOrder]);
+
+  React.useEffect(() => {
+    if (!isLoadingMore) {
+      autoLoadPendingRef.current = false;
+    }
+  }, [isLoadingMore]);
+
+  const canAutoLoadMore = supportsIntersectionObserver();
+  useAutoLoadMore(
+    loadMoreSentinelRef,
+    canAutoLoadMore && hasMore && !isLoadingMore && !loadMoreError,
+    () => {
+      if (autoLoadPendingRef.current) {
+        return;
+      }
+      autoLoadPendingRef.current = true;
+      void handleLoadMore();
+    }
+  );
+
+  return (
+    <div className="max-w-7xl">
       <DAGListHeader onRefresh={refreshFn} />
       {data ? (
         <>
           <DAGErrors
-            dags={data.dags || []}
+            dags={dagFiles}
             errors={data.errors || []}
             hasError={(errorCount > 0 || data.errors?.length > 0) && !isLoading}
           />
@@ -333,80 +533,63 @@ function DAGsContent() {
             refreshFn={refreshFn}
             searchText={searchText}
             handleSearchTextChange={searchTextChange}
-            searchTags={searchTags}
-            handleSearchTagsChange={searchTagsChange}
-            pagination={{
-              totalPages: data.pagination.totalPages,
-              page: page,
-              pageChange: pageChange,
-              onPageLimitChange: handlePageLimitChange,
-              pageLimit: preferences.pageLimit,
-            }}
+            searchLabels={searchLabels}
+            handleSearchLabelsChange={searchLabelsChange}
             isLoading={isLoading}
             sortField={sortField}
             sortOrder={sortOrder}
             onSortChange={handleSortChange}
             selectedDAG={selectedDAG}
-            onSelectDAG={selectDAG}
+            onSelectDAG={handleSelectDAG}
           />
+          <div className="mt-3 flex flex-col items-center gap-2">
+            {loadMoreError && (
+              <div className="text-sm text-error">{loadMoreError}</div>
+            )}
+            {hasMore ? (
+              <>
+                <div ref={loadMoreSentinelRef} className="h-4 w-full" />
+                {isLoadingMore ? (
+                  <div className="text-sm text-muted-foreground">
+                    Loading more workflows...
+                  </div>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void handleLoadMore()}
+                  >
+                    {loadMoreError
+                      ? 'Retry loading more'
+                      : 'Load more workflows'}
+                  </Button>
+                )}
+              </>
+            ) : dagFiles.length > 0 ? (
+              <div className="text-sm text-muted-foreground">
+                All workflows are displayed.
+              </div>
+            ) : null}
+          </div>
         </>
       ) : (
         <LoadingIndicator />
       )}
-    </div>
-  );
 
-  // Handle adding a new tab - creates an empty tab that will be filled on next DAG selection
-  const handleAddTab = () => {
-    // Find a DAG to open in the new tab (first one not already open)
-    const openFileNames = new Set(tabs.map((t) => t.fileName));
-    const availableDAG = dagFiles.find((d) => !openFileNames.has(d.fileName));
-    if (availableDAG) {
-      addTab(availableDAG.fileName, availableDAG.dag.name);
-    }
-  };
-
-  // Handle closing the active tab
-  const handleCloseActiveTab = () => {
-    if (activeTabId) {
-      closeTab(activeTabId);
-    }
-  };
-
-  const rightPanel =
-    tabs.length > 0 ? (
-      <div className="flex flex-col h-full">
-        <TabBar onAddTab={handleAddTab} />
-        <div className="flex-1 overflow-hidden">
-          {selectedDAG && (
-            <DAGDetailsPanel
-              fileName={selectedDAG}
-              onClose={handleCloseActiveTab}
-            />
-          )}
-        </div>
-      </div>
-    ) : null;
-
-  return (
-    <div className="-m-4 md:-m-6 w-[calc(100%+2rem)] md:w-[calc(100%+3rem)] h-[calc(100%+2rem)] md:h-[calc(100%+3rem)]">
-      <SplitLayout
-        leftPanel={leftPanel}
-        rightPanel={rightPanel}
-        defaultLeftWidth={40}
-        emptyRightMessage="Select a DAG to view details"
-      />
+      {selectedDAG && (
+        <DAGDetailsModal
+          fileName={selectedDAG}
+          isOpen={!!selectedDAG}
+          onClose={() => setSelectedDAG(null)}
+        />
+      )}
     </div>
   );
 }
 
-// Wrap with TabProvider
 function DAGs() {
-  return (
-    <TabProvider>
-      <DAGsContent />
-    </TabProvider>
-  );
+  return <DAGsContent />;
 }
 
 export default DAGs;

@@ -1,4 +1,7 @@
-import { Server } from 'lucide-react';
+// Copyright (C) 2026 Yota Hamada
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { Server, SlidersHorizontal } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { components, Status } from '../../../../api/v1/schema';
 import {
@@ -7,8 +10,8 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-} from '../../../../components/ui/card';
-import StatusChip from '../../../../ui/StatusChip';
+} from '@/components/ui/card';
+import StatusChip from '@/components/ui/status-chip';
 import AutoRetryBadge from '../common/AutoRetryBadge';
 import { DAGRunDetailsModal } from '../../components/dag-run-details';
 
@@ -37,13 +40,18 @@ function DAGRunCard({ dagRun, timezoneInfo }: DAGRunCardProps) {
     };
   }, [isModalOpen]);
   return (
-    <Card className={`h-full hover: ${dagRun.status === Status.Running ? 'animate-running-row' : ''}`}>
+    <Card
+      className={`h-full hover: ${dagRun.status === Status.Running ? 'animate-running-row' : ''}`}
+    >
       <div
         className="block h-full no-underline text-inherit cursor-pointer"
         onClick={(e) => {
           if (e.ctrlKey || e.metaKey) {
             // Open in new tab
-            window.open(`/dag-runs/${dagRun.name}/${dagRun.dagRunId}`, '_blank');
+            window.open(
+              `/dag-runs/${dagRun.name}/${dagRun.dagRunId}`,
+              '_blank'
+            );
           } else {
             // Open modal
             setIsModalOpen(true);
@@ -89,6 +97,20 @@ function DAGRunCard({ dagRun, timezoneInfo }: DAGRunCardProps) {
               </span>
               <span className="truncate ml-2 font-mono text-xs">
                 {dagRun.workerId}
+              </span>
+            </div>
+          )}
+          {dagRun.profileName && (
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-muted-foreground text-xs flex items-center">
+                <SlidersHorizontal className="h-3 w-3 mr-1" />
+                Profile:
+              </span>
+              <span
+                className="truncate ml-2 font-mono text-xs"
+                title={dagRun.profileName}
+              >
+                {dagRun.profileName}
               </span>
             </div>
           )}

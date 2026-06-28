@@ -2,19 +2,21 @@
 
 > A powerful Workflow Orchestration Engine with simple declarative YAML API
 
-[![npm version](https://img.shields.io/npm/v/%40dagu-org%2Fdagu.svg)](https://www.npmjs.com/package/@dagucloud/dagu)
+[![npm version](https://img.shields.io/npm/v/%40dagucloud%2Fdagu.svg)](https://www.npmjs.com/package/@dagucloud/dagu)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 ## Installation
 
 ```bash
-npm install -g @dagucloud/dagu
+npm install -g --ignore-scripts=false @dagucloud/dagu
 ```
+
+`--ignore-scripts=false` ensures npm runs the postinstall script that downloads the Dagu binary.
 
 Or add to your project:
 
 ```bash
-npm install @dagucloud/dagu
+npm install --ignore-scripts=false @dagucloud/dagu
 ```
 
 ## Usage
@@ -62,7 +64,7 @@ This package provides pre-built binaries for:
 - **Linux**: x64, arm64, arm (v6/v7), ia32, ppc64le, s390x
 - **macOS**: x64 (Intel), arm64 (Apple Silicon)  
 - **Windows**: x64, ia32, arm64
-- **FreeBSD**: x64, arm64, ia32, arm
+- **FreeBSD**: x64, arm64
 - **OpenBSD**: x64, arm64
 
 If your platform is not supported, please build from source: https://github.com/dagucloud/dagu#building-from-source

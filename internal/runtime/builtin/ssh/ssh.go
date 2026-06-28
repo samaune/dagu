@@ -14,9 +14,9 @@ import (
 	"sync"
 
 	"github.com/dagucloud/dagu/internal/cmn/cmdutil"
-	"github.com/dagucloud/dagu/internal/cmn/eval"
 	"github.com/dagucloud/dagu/internal/cmn/logger"
 	"github.com/dagucloud/dagu/internal/cmn/logger/tag"
+	cmnvalue "github.com/dagucloud/dagu/internal/cmn/value"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/runtime/executor"
 	"golang.org/x/crypto/ssh"
@@ -55,7 +55,7 @@ type sshExecutor struct {
 func NewSSHExecutor(ctx context.Context, step core.Step) (executor.Executor, error) {
 	client, err := resolveSSHClient(ctx, step)
 	if err != nil {
-		return nil, fmt.Errorf("failed to setup ssh executor: %w", err)
+		return nil, fmt.Errorf("failed to set up ssh step: %w", err)
 	}
 	if client == nil {
 		return nil, fmt.Errorf("ssh configuration is not found")
@@ -242,13 +242,17 @@ func init() {
 		MultipleCommands: true,
 		Script:           true,
 		Shell:            true,
-		GetEvalOptions: func(ctx context.Context, step core.Step) []eval.Option {
-			if hasShellConfigured(ctx, step) {
-				// Shell is configured, shell features (expansion, pipes, etc.) are supported
-				return []eval.Option{eval.WithoutDollarEscape()}
+		CommandContext: func(ctx context.Context, step core.Step) cmnvalue.CommandContext {
+			return cmnvalue.CommandContext{
+				Target:          cmnvalue.CommandTargetSSH,
+				ShellConfigured: hasShellConfigured(ctx, step),
 			}
-			// No shell configured - skip shell expansion for remote execution
-			return []eval.Option{eval.WithoutExpandShell()}
+		},
+		ScriptContext: func(ctx context.Context, step core.Step) cmnvalue.CommandContext {
+			return cmnvalue.CommandContext{
+				Target:          cmnvalue.CommandTargetSSH,
+				ShellConfigured: hasShellConfigured(ctx, step),
+			}
 		},
 	}
 	executor.RegisterExecutor("ssh", NewSSHExecutor, nil, caps)

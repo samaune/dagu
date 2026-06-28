@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dagucloud/dagu/internal/workspace"
 )
 
 // Service defines the interface for Git sync operations.
@@ -154,6 +156,7 @@ func fileExtensionForID(id string) string {
 type serviceImpl struct {
 	cfg          *Config
 	dagsDir      string
+	baseConfig   string
 	dataDir      string
 	stateManager *StateManager
 	gitClient    *GitClient
@@ -163,11 +166,16 @@ type serviceImpl struct {
 }
 
 // NewService creates a new Git sync service.
-func NewService(cfg *Config, dagsDir, dataDir string) Service {
+func NewService(cfg *Config, dagsDir, dataDir string, baseConfigPath ...string) Service {
 	repoPath := filepath.Join(dataDir, "gitsync", "repo")
+	baseConfig := ""
+	if len(baseConfigPath) > 0 {
+		baseConfig = baseConfigPath[0]
+	}
 	return &serviceImpl{
 		cfg:          cfg,
 		dagsDir:      dagsDir,
+		baseConfig:   baseConfig,
 		dataDir:      dataDir,
 		stateManager: NewStateManager(dataDir),
 		gitClient:    NewGitClient(cfg, repoPath),
@@ -259,7 +267,10 @@ func (s *serviceImpl) syncFilesToDAGsDir(_ context.Context, pullResult *PullResu
 			continue
 		}
 		repoFilePath := s.gitClient.GetFilePath(file)
-		dagFilePath := s.dagIDToFilePath(dagID)
+		dagFilePath, err := s.safeDAGIDToFilePath(dagID)
+		if err != nil {
+			continue
+		}
 
 		// Read repo file content
 		repoContent, err := os.ReadFile(repoFilePath) //nolint:gosec // path constructed from internal repo
@@ -284,10 +295,7 @@ func (s *serviceImpl) syncFilesToDAGsDir(_ context.Context, pullResult *PullResu
 			}
 
 			// Local file doesn't exist, create it
-			if err := s.ensureDir(filepath.Dir(dagFilePath)); err != nil {
-				continue
-			}
-			if err := os.WriteFile(dagFilePath, repoContent, 0600); err != nil {
+			if err := s.writeDAGFile(dagID, dagFilePath, repoContent); err != nil {
 				continue
 			}
 			now := time.Now()
@@ -365,7 +373,7 @@ func (s *serviceImpl) syncFilesToDAGsDir(_ context.Context, pullResult *PullResu
 
 		// Only update local file if remote changed (and local wasn't modified)
 		if localHash != repoHash {
-			if err := os.WriteFile(dagFilePath, repoContent, 0600); err != nil {
+			if err := s.writeDAGFile(dagID, dagFilePath, repoContent); err != nil {
 				continue
 			}
 			now := time.Now()
@@ -453,6 +461,9 @@ func (s *serviceImpl) scanLocalDAGs(state *State) error {
 		}
 
 		dagID := strings.TrimSuffix(entry.Name(), ext)
+		if isConfigFile(dagID) {
+			continue
+		}
 
 		// Skip if already tracked
 		if _, exists := state.DAGs[dagID]; exists {
@@ -491,7 +502,54 @@ func (s *serviceImpl) scanLocalDAGs(state *State) error {
 	// Scan docs directory for .md files
 	s.scanDocFiles(state)
 
+	// Scan global and workspace base config files
+	s.scanConfigFiles(state)
+
 	return nil
+}
+
+// scanConfigFiles scans global and workspace base config files and adds them as untracked.
+func (s *serviceImpl) scanConfigFiles(state *State) {
+	s.scanConfigFile(state, baseConfigID, s.resolveBaseConfigPath(), DAGKindConfig)
+
+	workspaceConfigDir := workspace.BaseConfigDir(s.dagsDir)
+	entries, err := os.ReadDir(workspaceConfigDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || workspace.ValidateName(entry.Name()) != nil {
+			continue
+		}
+		itemID := path.Join(workspace.BaseConfigDirName, entry.Name(), workspace.BaseConfigStem())
+		s.scanConfigFile(state, itemID, workspace.BaseConfigPath(s.dagsDir, entry.Name()), DAGKindConfig)
+	}
+}
+
+func (s *serviceImpl) scanConfigFile(state *State, itemID, filePath string, kind DAGKind) {
+	if filePath == "" {
+		return
+	}
+	if _, exists := state.DAGs[itemID]; exists {
+		return
+	}
+
+	content, err := os.ReadFile(filePath) //nolint:gosec // path configured by server
+	if err != nil {
+		return
+	}
+
+	now := time.Now()
+	ds := &DAGState{
+		Status:     StatusUntracked,
+		Kind:       kind,
+		LocalHash:  ComputeContentHash(content),
+		ModifiedAt: &now,
+	}
+	if fi, err := os.Stat(filePath); err == nil {
+		updateStatCache(ds, fi)
+	}
+	state.DAGs[itemID] = ds
 }
 
 // scanMemoryFiles scans the memory directory for .md files and adds them as untracked.
@@ -858,11 +916,7 @@ func (s *serviceImpl) Publish(ctx context.Context, dagID, message string, force 
 		return nil, fmt.Errorf("failed to read DAG file: %w", err)
 	}
 
-	if err := s.ensureDir(filepath.Dir(repoAbsPath)); err != nil {
-		return nil, err
-	}
-
-	if err := os.WriteFile(repoAbsPath, content, 0600); err != nil {
+	if err := safeWriteFileWithinBase(s.gitClient.repoPath, repoAbsPath, content, 0600); err != nil {
 		return nil, fmt.Errorf("failed to write to repo: %w", err)
 	}
 
@@ -941,12 +995,7 @@ func (s *serviceImpl) PublishAll(ctx context.Context, message string, dagIDs []s
 			continue
 		}
 
-		if err := s.ensureDir(filepath.Dir(repoAbsPath)); err != nil {
-			result.Errors = append(result.Errors, SyncError{DAGID: dagID, Message: err.Error()})
-			continue
-		}
-
-		if err := os.WriteFile(repoAbsPath, content, 0600); err != nil {
+		if err := safeWriteFileWithinBase(s.gitClient.repoPath, repoAbsPath, content, 0600); err != nil {
 			result.Errors = append(result.Errors, SyncError{DAGID: dagID, Message: err.Error()})
 			continue
 		}
@@ -1049,7 +1098,7 @@ func (s *serviceImpl) Discard(_ context.Context, dagID string) error {
 	}
 
 	// Write to DAGs directory
-	if err := os.WriteFile(dagFilePath, repoContent, 0600); err != nil {
+	if err := s.writeDAGFile(dagID, dagFilePath, repoContent); err != nil {
 		return fmt.Errorf("failed to write DAG file: %w", err)
 	}
 
@@ -1428,6 +1477,12 @@ func (s *serviceImpl) Move(ctx context.Context, oldID, newID, message string, fo
 			Message: fmt.Sprintf("cannot move across kinds: source is %s, destination is %s", oldKind, newKind),
 		}
 	}
+	if oldKind == DAGKindConfig {
+		return &ValidationError{
+			Field:   "itemId",
+			Message: "config items cannot be moved",
+		}
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1535,10 +1590,7 @@ func (s *serviceImpl) Move(ctx context.Context, oldID, newID, message string, fo
 				return fmt.Errorf("failed to read source file: %w", err)
 			}
 			// Write to new location
-			if err := s.ensureDir(filepath.Dir(newLocalPath)); err != nil {
-				return err
-			}
-			if err := os.WriteFile(newLocalPath, content, 0600); err != nil {
+			if err := s.writeDAGFile(newID, newLocalPath, content); err != nil {
 				return fmt.Errorf("failed to write destination file: %w", err)
 			}
 			// Remove old file
@@ -1554,10 +1606,7 @@ func (s *serviceImpl) Move(ctx context.Context, oldID, newID, message string, fo
 
 	// Stage changes in repo
 	newRepoAbsPath := s.gitClient.GetFilePath(newRepoPath)
-	if err := s.ensureDir(filepath.Dir(newRepoAbsPath)); err != nil {
-		return err
-	}
-	if err := os.WriteFile(newRepoAbsPath, content, 0600); err != nil {
+	if err := safeWriteFileWithinBase(s.gitClient.repoPath, newRepoAbsPath, content, 0600); err != nil {
 		return fmt.Errorf("failed to write to repo: %w", err)
 	}
 
@@ -1987,6 +2036,12 @@ func (s *serviceImpl) dagIDToFilePath(dagID string) string {
 		dagID = decoded
 	}
 	dagID = normalizeDAGIDSeparators(dagID)
+	if dagID == baseConfigID {
+		return s.resolveBaseConfigPath()
+	}
+	if workspaceName, ok := workspaceBaseConfigNameFromID(dagID); ok {
+		return workspace.BaseConfigPath(s.dagsDir, workspaceName)
+	}
 	ext := fileExtensionForID(dagID)
 	return filepath.Join(s.dagsDir, filepath.FromSlash(dagID+ext))
 }
@@ -2015,6 +2070,13 @@ func decodeDAGID(dagID string) (string, error) {
 		}
 	}
 	return decoded, nil
+}
+
+func (s *serviceImpl) resolveBaseConfigPath() string {
+	if s.baseConfig != "" {
+		return s.baseConfig
+	}
+	return filepath.Join(s.dagsDir, workspace.BaseConfigFileName)
 }
 
 func normalizeDAGID(dagID string) (string, error) {
@@ -2092,10 +2154,95 @@ func safeJoinWithinBase(baseDir, relativePath string) (string, error) {
 	return fullPath, nil
 }
 
+func ensurePathWithinBase(baseDir, targetPath string) error {
+	baseAbs, err := filepath.Abs(baseDir)
+	if err != nil {
+		return &InvalidDAGIDError{
+			DAGID:  targetPath,
+			Reason: "cannot resolve base directory",
+		}
+	}
+	targetAbs, err := filepath.Abs(targetPath)
+	if err != nil {
+		return &InvalidDAGIDError{
+			DAGID:  targetPath,
+			Reason: "cannot resolve path safely",
+		}
+	}
+	relToBase, err := filepath.Rel(baseAbs, targetAbs)
+	if err != nil {
+		return &InvalidDAGIDError{
+			DAGID:  targetPath,
+			Reason: "cannot resolve path safely",
+		}
+	}
+	if relToBase == ".." || strings.HasPrefix(relToBase, ".."+string(filepath.Separator)) || filepath.IsAbs(relToBase) {
+		return &InvalidDAGIDError{
+			DAGID:  targetPath,
+			Reason: "path escapes allowed base directory",
+		}
+	}
+	return nil
+}
+
+func ensureExistingPathWithinBase(baseDir, targetPath string) error {
+	resolvedBase, err := filepath.EvalSymlinks(baseDir)
+	if err != nil {
+		return err
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(targetPath)
+	if err != nil {
+		return err
+	}
+	return ensurePathWithinBase(resolvedBase, resolvedTarget)
+}
+
+func safeWriteFileWithinBase(baseDir, targetPath string, content []byte, perm os.FileMode) error {
+	if err := ensurePathWithinBase(baseDir, targetPath); err != nil {
+		return err
+	}
+	parentDir := filepath.Dir(targetPath)
+	if err := ensurePathWithinBase(baseDir, parentDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(parentDir, 0750); err != nil {
+		return err
+	}
+	if err := ensureExistingPathWithinBase(baseDir, parentDir); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(targetPath); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to write through symlink: %s", targetPath)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return os.WriteFile(targetPath, content, perm) //nolint:gosec // targetPath is constrained to baseDir and symlink targets are rejected.
+}
+
+func (s *serviceImpl) writeDAGFile(dagID, filePath string, content []byte) error {
+	baseDir := s.dagsDir
+	normalized, err := normalizeDAGID(dagID)
+	if err != nil {
+		return err
+	}
+	if normalized == baseConfigID && s.baseConfig != "" {
+		baseDir = filepath.Dir(s.baseConfig)
+	}
+	return safeWriteFileWithinBase(baseDir, filePath, content, 0600)
+}
+
 func (s *serviceImpl) safeDAGIDToFilePath(dagID string) (string, error) {
 	normalized, err := normalizeDAGID(dagID)
 	if err != nil {
 		return "", err
+	}
+	if normalized == baseConfigID {
+		return s.resolveBaseConfigPath(), nil
+	}
+	if workspaceName, ok := workspaceBaseConfigNameFromID(normalized); ok {
+		return safeJoinWithinBase(s.dagsDir, filepath.FromSlash(path.Join(workspace.BaseConfigDirName, workspaceName, workspace.BaseConfigFileName)))
 	}
 	ext := fileExtensionForID(normalized)
 	return safeJoinWithinBase(s.dagsDir, filepath.FromSlash(normalized+ext))

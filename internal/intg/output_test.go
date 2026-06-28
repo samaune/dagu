@@ -15,7 +15,7 @@ import (
 
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
-	"github.com/dagucloud/dagu/internal/persis/filedagrun"
+	"github.com/dagucloud/dagu/internal/persis/file/dagrun"
 	"github.com/dagucloud/dagu/internal/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,13 +36,13 @@ func TestLargeOutput_128KB(t *testing.T) {
 	textFilePath := test.TestdataPath(t, "integration/large-output-128kb.txt")
 	dagSpec := `steps:
   - name: read-128kb-file
-    command: ` + fmt.Sprintf("cat %s", test.PosixQuote(textFilePath)) + `
+    run: ` + fmt.Sprintf("cat %s", test.PosixQuote(textFilePath)) + `
     output: OUTPUT_128KB
 `
 	if runtime.GOOS == "windows" {
 		dagSpec = fmt.Sprintf(`steps:
   - name: read-128kb-file
-    command: cmd /d /c type %s
+    run: cmd /d /c type %s
     output: OUTPUT_128KB
 `, `"`+textFilePath+`"`)
 	}
@@ -89,7 +89,7 @@ var outputsCollectionCases = []namedOutputsCollectionCase{
 			dagYAML: `
 steps:
   - name: produce-output
-    command: echo "RESULT=42"
+    run: echo "RESULT=42"
     output: RESULT
 `,
 			runFunc: func(t *testing.T, _ context.Context, agent *test.Agent) {
@@ -107,57 +107,24 @@ steps:
 		},
 	},
 	{
-		name: "OutputWithCustomKey",
+		name: "StructuredObjectOutputCollected",
 		outputsCollectionCase: outputsCollectionCase{
 			dagYAML: `
 steps:
-  - name: produce-output
-    command: echo "MY_VALUE=hello world"
+  - id: publish
     output:
-      name: MY_VALUE
-      key: customKeyName
+      version: v1.2.3
 `,
 			runFunc: func(t *testing.T, _ context.Context, agent *test.Agent) {
 				agent.RunSuccess(t)
 			},
 			validateFunc: func(t *testing.T, status exec.DAGRunStatus) {
 				require.Equal(t, core.Succeeded, status.Status)
+				require.Len(t, status.Nodes, 1)
 			},
 			validateOutputs: func(t *testing.T, outputs map[string]string) {
 				require.NotNil(t, outputs)
-				assert.Equal(t, "MY_VALUE=hello world", outputs["customKeyName"])
-				_, hasDefault := outputs["myValue"]
-				assert.False(t, hasDefault, "should not have default key when custom key is specified")
-			},
-		},
-	},
-	{
-		name: "OutputWithOmit",
-		outputsCollectionCase: outputsCollectionCase{
-			dagYAML: `
-steps:
-  - name: step1
-    command: echo "VISIBLE=yes"
-    output: VISIBLE
-
-  - name: step2
-    command: echo "HIDDEN=secret"
-    output:
-      name: HIDDEN
-      omit: true
-`,
-			runFunc: func(t *testing.T, _ context.Context, agent *test.Agent) {
-				agent.RunSuccess(t)
-			},
-			validateFunc: func(t *testing.T, status exec.DAGRunStatus) {
-				require.Equal(t, core.Succeeded, status.Status)
-				require.Len(t, status.Nodes, 2)
-			},
-			validateOutputs: func(t *testing.T, outputs map[string]string) {
-				require.NotNil(t, outputs)
-				assert.Equal(t, "VISIBLE=yes", outputs["visible"])
-				_, hasHidden := outputs["hidden"]
-				assert.False(t, hasHidden, "omitted output should not be in outputs.json")
+				assert.Equal(t, "v1.2.3", outputs["version"])
 			},
 		},
 	},
@@ -167,15 +134,15 @@ steps:
 			dagYAML: `
 steps:
   - name: step1
-    command: echo "COUNT=10"
+    run: echo "COUNT=10"
     output: COUNT
 
   - name: step2
-    command: echo "TOTAL=100"
+    run: echo "TOTAL=100"
     output: TOTAL
 
   - name: step3
-    command: echo "STATUS=completed"
+    run: echo "STATUS=completed"
     output: STATUS
 `,
 			runFunc: func(t *testing.T, _ context.Context, agent *test.Agent) {
@@ -201,12 +168,12 @@ steps:
 type: graph
 steps:
   - name: step1
-    command: echo "VALUE=first"
+    run: echo "VALUE=first"
     output: VALUE
 
   - name: step2
     depends: [step1]
-    command: echo "VALUE=second"
+    run: echo "VALUE=second"
     output: VALUE
 `,
 			runFunc: func(t *testing.T, _ context.Context, agent *test.Agent) {
@@ -227,7 +194,7 @@ steps:
 			dagYAML: `
 steps:
   - name: step1
-    command: echo "hello"
+    run: echo "hello"
 `,
 			runFunc: func(t *testing.T, _ context.Context, agent *test.Agent) {
 				agent.RunSuccess(t)
@@ -246,7 +213,7 @@ steps:
 			dagYAML: `
 steps:
   - name: step1
-    command: echo "MY_VAR=value123"
+    run: echo "MY_VAR=value123"
     output: $MY_VAR
 `,
 			runFunc: func(t *testing.T, _ context.Context, agent *test.Agent) {
@@ -262,25 +229,17 @@ steps:
 		},
 	},
 	{
-		name: "MixedOutputConfigurations",
+		name: "MixedStringAndStructuredOutputs",
 		outputsCollectionCase: outputsCollectionCase{
 			dagYAML: `
 steps:
   - name: simple
-    command: echo "SIMPLE_OUT=simple_value"
+    run: echo "SIMPLE_OUT=simple_value"
     output: SIMPLE_OUT
 
-  - name: with-key
-    command: echo "KEYED=keyed_value"
+  - id: publish
     output:
-      name: KEYED
-      key: renamedKey
-
-  - name: omitted
-    command: echo "SECRET=secret_value"
-    output:
-      name: SECRET
-      omit: true
+      version: v1.2.3
 `,
 			runFunc: func(t *testing.T, _ context.Context, agent *test.Agent) {
 				agent.RunSuccess(t)
@@ -292,9 +251,7 @@ steps:
 				require.NotNil(t, outputs)
 				assert.Len(t, outputs, 2)
 				assert.Equal(t, "SIMPLE_OUT=simple_value", outputs["simpleOut"])
-				assert.Equal(t, "KEYED=keyed_value", outputs["renamedKey"])
-				_, hasSecret := outputs["secret"]
-				assert.False(t, hasSecret)
+				assert.Equal(t, "v1.2.3", outputs["version"])
 			},
 		},
 	},
@@ -334,16 +291,16 @@ func TestOutputsCollection_FailedDAG(t *testing.T) {
 type: graph
 steps:
   - name: step1
-    command: echo "BEFORE_FAIL=collected"
+    run: echo "BEFORE_FAIL=collected"
     output: BEFORE_FAIL
 
   - name: step2
     depends: [step1]
-    command: exit 1
+    run: exit 1
 
   - name: step3
     depends: [step2]
-    command: echo "AFTER_FAIL=not_collected"
+    run: echo "AFTER_FAIL=not_collected"
     output: AFTER_FAIL
 `)
 	agent := dag.Agent()
@@ -369,7 +326,7 @@ func runOutputsCollectionCamelCaseConversion(t *testing.T, envVarName, expectedK
 	dag := th.DAG(t, `
 steps:
   - name: step1
-    command: echo "`+envVarName+`=test_value"
+    run: echo "`+envVarName+`=test_value"
     output: `+envVarName+`
 `)
 	agent := dag.Agent()
@@ -413,7 +370,7 @@ secrets:
 
 steps:
   - name: output-secret
-    command: echo "TOKEN=${API_TOKEN}"
+    run: echo "TOKEN=${API_TOKEN}"
     output: TOKEN
 `)
 	agent := dag.Agent()
@@ -441,7 +398,7 @@ func TestOutputsCollection_MetadataIncluded(t *testing.T) {
 	dag := th.DAG(t, `
 steps:
   - name: step1
-    command: echo "RESULT=42"
+    run: echo "RESULT=42"
     output: RESULT
 `)
 	agent := dag.Agent()
@@ -489,7 +446,7 @@ func readFullOutputsFile(t *testing.T, th test.Helper, dag *core.DAG) *exec.DAGR
 	var outputsPath string
 	_ = filepath.Walk(dagRunDir, func(path string, info os.FileInfo, err error) error {
 		require.NoError(t, err)
-		if info.Name() == filedagrun.OutputsFile {
+		if info.Name() == dagrun.OutputsFile {
 			outputsPath = path
 			return filepath.SkipAll
 		}

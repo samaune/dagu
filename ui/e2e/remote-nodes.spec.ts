@@ -33,7 +33,7 @@ test('adds a remote node and browses remote DAGs through the UI', async ({
 name: ${localDagName}
 steps:
   - name: local-step
-    command: echo "local only"
+    run: echo "local only"
 `
   );
   const remoteFileName = await writeRemoteDAG(
@@ -42,7 +42,7 @@ steps:
 name: ${remoteDagName}
 steps:
   - name: remote-step
-    command: echo "remote only"
+    run: echo "remote only"
 `
   );
 
@@ -81,7 +81,10 @@ steps:
   await expect(row).toContainText('OK');
 
   await selectRemoteNode(page, remoteNodeName);
-  await page.getByRole('link', { name: 'Definitions' }).click();
+  await page
+    .locator('aside')
+    .getByRole('link', { name: 'Workflows' })
+    .click();
   await expect(page).toHaveURL(/\/dags$/);
   await expect(page.getByRole('main')).toContainText(remoteDagName);
   await expect(page.getByRole('main')).not.toContainText(localDagName);

@@ -23,8 +23,14 @@ const (
 	// EnvKeyDAGRunStepStderrFile holds the path to the stderr log file for the current step.
 	EnvKeyDAGRunStepStderrFile = "DAG_RUN_STEP_STDERR_FILE"
 
+	// EnvKeyDAGUOutputFile holds the file path used for declared step outputs.
+	EnvKeyDAGUOutputFile = "DAGU_OUTPUT_FILE"
+
 	// EnvKeyDAGRunStatus holds the current status of the DAG run (e.g., "running", "success", "failed").
 	EnvKeyDAGRunStatus = "DAG_RUN_STATUS"
+
+	// EnvKeyDAGWaitingSteps holds comma-separated step names that are waiting for approval.
+	EnvKeyDAGWaitingSteps = "DAG_WAITING_STEPS"
 
 	// EnvKeyDAGParamsJSON exposes the resolved parameters encoded as JSON.
 	// When params were provided as JSON, the original payload is preserved.
@@ -42,6 +48,15 @@ const (
 
 	// EnvKeyDAGRunArtifactsDir holds the path to the per-DAG-run artifacts directory.
 	EnvKeyDAGRunArtifactsDir = "DAG_RUN_ARTIFACTS_DIR"
+
+	// EnvKeyDAGPushBack exposes the current push-back iteration and history as JSON.
+	EnvKeyDAGPushBack = "DAG_PUSHBACK"
+
+	// EnvKeyDAGPushBackIteration exposes the current push-back iteration as a plain value.
+	EnvKeyDAGPushBackIteration = "DAG_PUSHBACK_ITERATION"
+
+	// EnvKeyDAGPushBackPreviousStdoutFile exposes the previous stdout log path for a pushed-back step.
+	EnvKeyDAGPushBackPreviousStdoutFile = "DAG_PUSHBACK_PREVIOUS_STDOUT_FILE"
 
 	// EnvKeyExternalStepRetry enables parent-managed step retries for sub-DAG runs.
 	// When set, retriable step failures transition to a queued retry state instead of

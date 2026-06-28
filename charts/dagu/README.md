@@ -69,8 +69,8 @@ The chart deploys four components:
 - **Worker**: Executes DAG steps (configurable pools with independent replicas, HTTP health on 8092 by default)
 - **UI**: Web interface for managing DAGs (port 8080)
 
-All components share a single PersistentVolumeClaim with `ReadWriteMany` access mode.
-The chart mounts that shared volume at `/data`, sets `DAGU_HOME=/data`, and stores the shared base config at `/data/base.yaml` so fallback paths and inherited env stay aligned across UI, scheduler, coordinator, and workers.
+The UI, scheduler, and coordinator share a PersistentVolumeClaim with `ReadWriteMany` access mode.
+Workers connect to the coordinator service through `--worker.coordinators` and use local pod storage for their own runtime files.
 
 ## Configuration
 
@@ -84,6 +84,8 @@ If `persistence.storageClass` is the empty string, the rendered PVC omits `stora
 persistence:
   storageClass: "<your-rwx-storage-class>"
 ```
+
+The chart sets `podSecurityContext.fsGroup: 1000` by default so the shared `/data` volume stays writable after the image entrypoint drops from root to the default `PUID`/`PGID` user. If you override `PUID` or `PGID`, set `podSecurityContext.fsGroup` to the same group. Clusters that support `fsGroupChangePolicy` can add it under `podSecurityContext`; it is not set by default so the chart remains compatible with Kubernetes 1.19.
 
 ### Local Testing (Kind, Docker Desktop)
 
@@ -114,13 +116,17 @@ workerPools:
   general:
     replicas: 2
     labels: {}
+    dataVolume:
+      sizeLimit: "2Gi"
     resources:
       requests:
         memory: "128Mi"
         cpu: "100m"
+        ephemeral-storage: "1Gi"
       limits:
         memory: "256Mi"
         cpu: "200m"
+        ephemeral-storage: "2Gi"
     nodeSelector: {}
     tolerations: []
     affinity: {}
@@ -231,10 +237,17 @@ workerPools:
   general:
     replicas: 2
     labels: {}
+    dataVolume:
+      sizeLimit: "2Gi"
     resources:
       requests:
         memory: "128Mi"
         cpu: "100m"
+        ephemeral-storage: "1Gi"
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+        ephemeral-storage: "2Gi"
 
 ui:
   replicas: 1
@@ -265,7 +278,7 @@ kubectl port-forward svc/dagu-ui 8080:8080
 
 This chart reflects Dagu's current architecture:
 
-- **Shared filesystem required**: All components must share the same RWX volume
+- **Shared filesystem required for server-side state**: UI, scheduler, and coordinator share the RWX volume
 - **File-based state**: State is stored in files on the shared volume
 - **No database**: Dagu does not use a database for state management
 

@@ -4,13 +4,18 @@
 package intg_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/dagucloud/dagu/internal/cmd"
 	"github.com/dagucloud/dagu/internal/core"
+	"github.com/dagucloud/dagu/internal/core/exec"
 	"github.com/dagucloud/dagu/internal/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,7 +31,7 @@ func TestHistoryCommand_Basic(t *testing.T) {
 	dag := th.DAG(t, `name: test-history-basic
 steps:
   - name: simple-step
-    command: "echo test"
+    run: "echo test"
 `)
 
 	// Execute DAG
@@ -58,13 +63,13 @@ func TestHistoryCommand_FilterByName(t *testing.T) {
 	dag1 := th.DAG(t, `name: filter-test-1
 steps:
   - name: step1
-    command: "echo test1"
+    run: "echo test1"
 `)
 
 	dag2 := th.DAG(t, `name: filter-test-2
 steps:
   - name: step2
-    command: "echo test2"
+    run: "echo test2"
 `)
 
 	// Execute both DAGs
@@ -96,13 +101,13 @@ func TestHistoryCommand_FilterByStatus(t *testing.T) {
 	dagSuccess := th.DAG(t, `name: status-test-success
 steps:
   - name: success-step
-    command: "true"
+    run: "true"
 `)
 
 	dagFail := th.DAG(t, `name: status-test-fail
 steps:
   - name: fail-step
-    command: "false"
+    run: "false"
 `)
 
 	// Execute both
@@ -133,7 +138,7 @@ func TestHistoryCommand_JSONFormat(t *testing.T) {
 	dag := th.DAG(t, `name: test-json-format
 steps:
   - name: json-step
-    command: "echo json"
+    run: "echo json"
 `)
 
 	th.RunCommand(t, cmd.Start(), test.CmdTest{Args: []string{"start", dag.Location}})
@@ -160,7 +165,7 @@ func TestHistoryCommand_RunIDDisplay(t *testing.T) {
 	dag := th.DAG(t, `name: test-runid-full
 steps:
   - name: simple-step
-    command: "echo test"
+    run: "echo test"
 `)
 
 	// Execute with a long custom run ID
@@ -192,7 +197,7 @@ func TestHistoryCommand_DateFiltering(t *testing.T) {
 	dag := th.DAG(t, `name: test-date-filter
 steps:
   - name: simple-step
-    command: "echo test"
+    run: "echo test"
 `)
 
 	th.RunCommand(t, cmd.Start(), test.CmdTest{Args: []string{"start", dag.Location}})
@@ -285,28 +290,45 @@ func TestHistoryCommand_EmptyResults(t *testing.T) {
 	})
 }
 
-func TestHistoryCommand_Tags(t *testing.T) {
+func TestHistoryCommand_EmptyResultsJSONOutput(t *testing.T) {
+	th := test.SetupCommand(t)
+
+	stdout, stderr := captureOutput(t, func() {
+		th.RunCommand(t, cmd.History(), test.CmdTest{
+			Name: "EmptyJSON",
+			Args: []string{"history", "--run-id=non-existent-run-id", "--format=json"},
+		})
+	})
+
+	var payload []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload))
+	assert.Empty(t, payload)
+	assert.NotContains(t, stdout, "No DAG runs found")
+	assert.Contains(t, stderr, "No DAG runs found matching the specified filters.")
+}
+
+func TestHistoryCommand_Labels(t *testing.T) {
 	t.Parallel()
 
 	th := test.SetupCommand(t)
 	ctx := context.Background()
 
-	// Create DAGs with different tags
-	dag1 := th.DAG(t, `name: tagged-dag-1
-tags:
+	// Create DAGs with different labels
+	dag1 := th.DAG(t, `name: labeled-dag-1
+labels:
   - prod
   - critical
 steps:
   - name: step1
-    command: "echo test"
+    run: "echo test"
 `)
 
-	dag2 := th.DAG(t, `name: tagged-dag-2
-tags:
+	dag2 := th.DAG(t, `name: labeled-dag-2
+labels:
   - dev
 steps:
   - name: step2
-    command: "echo test"
+    run: "echo test"
 `)
 
 	th.RunCommand(t, cmd.Start(), test.CmdTest{Args: []string{"start", dag1.Location}})
@@ -318,12 +340,56 @@ steps:
 		return err1 == nil && err2 == nil && s1.Status == core.Succeeded && s2.Status == core.Succeeded
 	}, 5*time.Second, 100*time.Millisecond)
 
-	// Filter by tag - stdout table output is not captured,
+	// Filter by label - stdout table output is not captured,
 	// so we just verify the command runs without error
 	th.RunCommand(t, cmd.History(), test.CmdTest{
-		Name: "FilterByTag",
-		Args: []string{"history", "--tags=prod"},
+		Name: "FilterByLabel",
+		Args: []string{"history", "--labels=prod"},
 	})
+
+	statuses, err := th.DAGRunStore.ListStatuses(ctx, exec.WithLabels([]string{"prod"}), exec.WithAllHistory())
+	require.NoError(t, err)
+	names := make(map[string]bool, len(statuses))
+	for _, status := range statuses {
+		names[status.Name] = true
+	}
+	assert.True(t, names[dag1.Name])
+	assert.False(t, names[dag2.Name])
+}
+
+func captureOutput(t *testing.T, fn func()) (string, string) {
+	t.Helper()
+
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	stdoutR, stdoutW, err := os.Pipe()
+	require.NoError(t, err)
+	stderrR, stderrW, err := os.Pipe()
+	require.NoError(t, err)
+
+	os.Stdout = stdoutW
+	os.Stderr = stderrW
+	defer func() {
+		os.Stdout = oldStdout
+		os.Stderr = oldStderr
+	}()
+
+	fn()
+
+	require.NoError(t, stdoutW.Close())
+	require.NoError(t, stderrW.Close())
+
+	var stdout bytes.Buffer
+	_, err = io.Copy(&stdout, stdoutR)
+	require.NoError(t, err)
+	require.NoError(t, stdoutR.Close())
+
+	var stderr bytes.Buffer
+	_, err = io.Copy(&stderr, stderrR)
+	require.NoError(t, err)
+	require.NoError(t, stderrR.Close())
+
+	return stdout.String(), stderr.String()
 }
 
 func TestHistoryCommand_Limit(t *testing.T) {
@@ -335,7 +401,7 @@ func TestHistoryCommand_Limit(t *testing.T) {
 	dag := th.DAG(t, `name: test-limit
 steps:
   - name: step
-    command: "echo test"
+    run: "echo test"
 `)
 
 	// Create multiple runs, waiting for each to succeed before starting the next

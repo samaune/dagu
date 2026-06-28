@@ -8,6 +8,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -80,15 +81,53 @@ func TestClientDispatch(t *testing.T) {
 
 		client := coordinator.New(monitor, config)
 
-		task := &coordinatorv1.Task{
-			DagRunId: "test-dag-run",
+		task := &exec.DispatchTask{
+			DAGRunID: "test-dag-run",
 			Target:   "test.yaml",
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
 
-		err := client.Dispatch(ctx, task)
+		err := client.Dispatch(ctx, exec.DispatchRequest{Task: task})
+		require.NoError(t, err)
+	})
+
+	t.Run("SendsAdmissionReservationToken", func(t *testing.T) {
+		t.Parallel()
+		config := coordinator.DefaultConfig()
+		config.MaxRetries = 0
+		config.RequestTimeout = 100 * time.Millisecond
+
+		mockCoord := &mockCoordinatorService{
+			dispatchFunc: func(_ context.Context, req *coordinatorv1.DispatchRequest) (*coordinatorv1.DispatchResponse, error) {
+				assert.Equal(t, "reservation-token-a", req.AdmissionReservationToken)
+				return &coordinatorv1.DispatchResponse{}, nil
+			},
+		}
+
+		server, addr := startMockServer(t, mockCoord)
+		defer server.Stop()
+
+		host, port := parseHostPort(addr)
+		monitor := &mockServiceMonitor{
+			members: []exec.HostInfo{
+				{ID: "coord-1", Host: host, Port: port, Status: exec.ServiceStatusActive},
+			},
+		}
+
+		client := coordinator.New(monitor, config)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+
+		err := client.Dispatch(ctx, exec.DispatchRequest{
+			Task: &exec.DispatchTask{
+				DAGRunID: "test-dag-run",
+				Target:   "test.yaml",
+			},
+			AdmissionReservationToken: "reservation-token-a",
+		})
 		require.NoError(t, err)
 	})
 
@@ -105,15 +144,15 @@ func TestClientDispatch(t *testing.T) {
 
 		client := coordinator.New(monitor, config)
 
-		task := &coordinatorv1.Task{
-			DagRunId: "test-dag-run",
+		task := &exec.DispatchTask{
+			DAGRunID: "test-dag-run",
 			Target:   "test.yaml",
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
 
-		err := client.Dispatch(ctx, task)
+		err := client.Dispatch(ctx, exec.DispatchRequest{Task: task})
 		require.Error(t, err)
 		// Could be either error depending on timing
 		assert.True(t, strings.Contains(err.Error(), "no coordinators available") ||
@@ -147,9 +186,11 @@ func TestClientDispatch(t *testing.T) {
 
 		client := coordinator.New(monitor, config)
 
-		err := client.Dispatch(context.Background(), &coordinatorv1.Task{
-			DagRunId: "run-123",
-			Target:   "test-dag",
+		err := client.Dispatch(context.Background(), exec.DispatchRequest{
+			Task: &exec.DispatchTask{
+				DAGRunID: "run-123",
+				Target:   "test-dag",
+			},
 		})
 		require.Error(t, err)
 		require.ErrorIs(t, err, backoff.ErrPermanent)
@@ -452,6 +493,495 @@ func TestClientGetWorkers_PartialFailureStillReturnsWorkers(t *testing.T) {
 	assert.ErrorContains(t, err, "coordinator unavailable")
 }
 
+func TestClientStateMutationDoesNotRetryAfterRPCError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("PutState", func(t *testing.T) {
+		t.Parallel()
+
+		config := coordinator.DefaultConfig()
+		config.RequestTimeout = 100 * time.Millisecond
+
+		var firstCalls atomic.Int32
+		firstCoord := &mockCoordinatorService{
+			putStateFunc: func(context.Context, *coordinatorv1.PutStateRequest) (*coordinatorv1.PutStateResponse, error) {
+				firstCalls.Add(1)
+				return nil, status.Error(codes.Unavailable, "ambiguous write")
+			},
+		}
+		firstServer, firstAddr := startMockServer(t, firstCoord)
+		defer firstServer.Stop()
+
+		var secondCalls atomic.Int32
+		secondCoord := &mockCoordinatorService{
+			putStateFunc: func(context.Context, *coordinatorv1.PutStateRequest) (*coordinatorv1.PutStateResponse, error) {
+				secondCalls.Add(1)
+				return nil, status.Error(codes.Unavailable, "ambiguous write")
+			},
+		}
+		secondServer, secondAddr := startMockServer(t, secondCoord)
+		defer secondServer.Stop()
+
+		firstHost, firstPort := parseHostPort(firstAddr)
+		secondHost, secondPort := parseHostPort(secondAddr)
+		monitor := &mockServiceMonitor{
+			members: []exec.HostInfo{
+				{ID: "coord-b", Host: secondHost, Port: secondPort, Status: exec.ServiceStatusActive},
+				{ID: "coord-a", Host: firstHost, Port: firstPort, Status: exec.ServiceStatusActive},
+			},
+		}
+
+		stateClient, ok := coordinator.New(monitor, config).(coordinator.StateClient)
+		require.True(t, ok)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+
+		_, err := stateClient.PutState(ctx, &coordinatorv1.PutStateRequest{
+			Ref:   &coordinatorv1.StateRef{Scope: "dag", Namespace: "daily-agent", Key: "cursor"},
+			Value: []byte(`1`),
+		})
+		require.Error(t, err)
+		assert.Equal(t, int32(1), firstCalls.Load()+secondCalls.Load())
+	})
+
+	t.Run("DeleteState", func(t *testing.T) {
+		t.Parallel()
+
+		config := coordinator.DefaultConfig()
+		config.RequestTimeout = 100 * time.Millisecond
+
+		var firstCalls atomic.Int32
+		firstCoord := &mockCoordinatorService{
+			deleteStateFunc: func(context.Context, *coordinatorv1.DeleteStateRequest) (*coordinatorv1.DeleteStateResponse, error) {
+				firstCalls.Add(1)
+				return nil, status.Error(codes.Unavailable, "ambiguous delete")
+			},
+		}
+		firstServer, firstAddr := startMockServer(t, firstCoord)
+		defer firstServer.Stop()
+
+		var secondCalls atomic.Int32
+		secondCoord := &mockCoordinatorService{
+			deleteStateFunc: func(context.Context, *coordinatorv1.DeleteStateRequest) (*coordinatorv1.DeleteStateResponse, error) {
+				secondCalls.Add(1)
+				return nil, status.Error(codes.Unavailable, "ambiguous delete")
+			},
+		}
+		secondServer, secondAddr := startMockServer(t, secondCoord)
+		defer secondServer.Stop()
+
+		firstHost, firstPort := parseHostPort(firstAddr)
+		secondHost, secondPort := parseHostPort(secondAddr)
+		monitor := &mockServiceMonitor{
+			members: []exec.HostInfo{
+				{ID: "coord-b", Host: secondHost, Port: secondPort, Status: exec.ServiceStatusActive},
+				{ID: "coord-a", Host: firstHost, Port: firstPort, Status: exec.ServiceStatusActive},
+			},
+		}
+
+		stateClient, ok := coordinator.New(monitor, config).(coordinator.StateClient)
+		require.True(t, ok)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+
+		_, err := stateClient.DeleteState(ctx, &coordinatorv1.DeleteStateRequest{
+			Ref: &coordinatorv1.StateRef{Scope: "dag", Namespace: "daily-agent", Key: "cursor"},
+		})
+		require.Error(t, err)
+		assert.Equal(t, int32(1), firstCalls.Load()+secondCalls.Load())
+	})
+}
+
+func TestClientStateOperationsUsePinnedCoordinator(t *testing.T) {
+	t.Parallel()
+
+	config := coordinator.DefaultConfig()
+	config.RequestTimeout = 100 * time.Millisecond
+
+	ref := &coordinatorv1.StateRef{Scope: "dag", Namespace: "daily-agent", Key: "cursor"}
+	entry := &coordinatorv1.StateEntry{Ref: ref, Value: []byte(`1`), Version: 1}
+
+	var firstGets atomic.Int32
+	var firstPuts atomic.Int32
+	var firstDeletes atomic.Int32
+	var firstLists atomic.Int32
+	firstCoord := &mockCoordinatorService{
+		getStateFunc: func(context.Context, *coordinatorv1.GetStateRequest) (*coordinatorv1.GetStateResponse, error) {
+			firstGets.Add(1)
+			return &coordinatorv1.GetStateResponse{Found: true, Entry: entry}, nil
+		},
+		putStateFunc: func(context.Context, *coordinatorv1.PutStateRequest) (*coordinatorv1.PutStateResponse, error) {
+			firstPuts.Add(1)
+			return &coordinatorv1.PutStateResponse{Entry: entry}, nil
+		},
+		deleteStateFunc: func(context.Context, *coordinatorv1.DeleteStateRequest) (*coordinatorv1.DeleteStateResponse, error) {
+			firstDeletes.Add(1)
+			return &coordinatorv1.DeleteStateResponse{Deleted: true}, nil
+		},
+		listStateFunc: func(context.Context, *coordinatorv1.ListStateRequest) (*coordinatorv1.ListStateResponse, error) {
+			firstLists.Add(1)
+			return &coordinatorv1.ListStateResponse{Entries: []*coordinatorv1.StateEntry{entry}}, nil
+		},
+	}
+	firstServer, firstAddr := startMockServer(t, firstCoord)
+	defer firstServer.Stop()
+
+	var secondCalls atomic.Int32
+	secondCoord := &mockCoordinatorService{
+		getStateFunc: func(context.Context, *coordinatorv1.GetStateRequest) (*coordinatorv1.GetStateResponse, error) {
+			secondCalls.Add(1)
+			return &coordinatorv1.GetStateResponse{Found: true, Entry: entry}, nil
+		},
+		putStateFunc: func(context.Context, *coordinatorv1.PutStateRequest) (*coordinatorv1.PutStateResponse, error) {
+			secondCalls.Add(1)
+			return &coordinatorv1.PutStateResponse{Entry: entry}, nil
+		},
+		deleteStateFunc: func(context.Context, *coordinatorv1.DeleteStateRequest) (*coordinatorv1.DeleteStateResponse, error) {
+			secondCalls.Add(1)
+			return &coordinatorv1.DeleteStateResponse{Deleted: true}, nil
+		},
+		listStateFunc: func(context.Context, *coordinatorv1.ListStateRequest) (*coordinatorv1.ListStateResponse, error) {
+			secondCalls.Add(1)
+			return &coordinatorv1.ListStateResponse{Entries: []*coordinatorv1.StateEntry{entry}}, nil
+		},
+	}
+	secondServer, secondAddr := startMockServer(t, secondCoord)
+	defer secondServer.Stop()
+
+	firstHost, firstPort := parseHostPort(firstAddr)
+	secondHost, secondPort := parseHostPort(secondAddr)
+	monitor := &mockServiceMonitor{
+		members: []exec.HostInfo{
+			{ID: "coord-b", Host: secondHost, Port: secondPort, Status: exec.ServiceStatusActive},
+			{ID: "coord-a", Host: firstHost, Port: firstPort, Status: exec.ServiceStatusActive},
+		},
+	}
+
+	stateClient, ok := coordinator.New(monitor, config).(coordinator.StateClient)
+	require.True(t, ok)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	_, err := stateClient.PutState(ctx, &coordinatorv1.PutStateRequest{Ref: ref, Value: []byte(`1`)})
+	require.NoError(t, err)
+	_, err = stateClient.GetState(ctx, &coordinatorv1.GetStateRequest{Ref: ref})
+	require.NoError(t, err)
+	_, err = stateClient.ListState(ctx, &coordinatorv1.ListStateRequest{Scope: "dag", Namespace: "daily-agent"})
+	require.NoError(t, err)
+	_, err = stateClient.DeleteState(ctx, &coordinatorv1.DeleteStateRequest{Ref: ref})
+	require.NoError(t, err)
+
+	firstCalls := firstPuts.Load() + firstGets.Load() + firstLists.Load() + firstDeletes.Load()
+	secondCallCount := secondCalls.Load()
+	assert.True(t, firstCalls == 4 || secondCallCount == 4)
+	assert.True(t, firstCalls == 0 || secondCallCount == 0)
+}
+
+func TestClientStateCoordinatorPinIsDeterministicByNamespaceAcrossClients(t *testing.T) {
+	t.Parallel()
+
+	config := coordinator.DefaultConfig()
+	config.RequestTimeout = 100 * time.Millisecond
+
+	ref := &coordinatorv1.StateRef{Scope: "dag", Namespace: "daily-agent", Key: "cursor"}
+	entry := &coordinatorv1.StateEntry{Ref: ref, Value: []byte(`1`), Version: 1}
+
+	var firstPuts atomic.Int32
+	firstCoord := &mockCoordinatorService{
+		putStateFunc: func(context.Context, *coordinatorv1.PutStateRequest) (*coordinatorv1.PutStateResponse, error) {
+			firstPuts.Add(1)
+			return &coordinatorv1.PutStateResponse{Entry: entry}, nil
+		},
+	}
+	firstServer, firstAddr := startMockServer(t, firstCoord)
+	defer firstServer.Stop()
+
+	var secondPuts atomic.Int32
+	secondCoord := &mockCoordinatorService{
+		putStateFunc: func(context.Context, *coordinatorv1.PutStateRequest) (*coordinatorv1.PutStateResponse, error) {
+			secondPuts.Add(1)
+			return &coordinatorv1.PutStateResponse{Entry: entry}, nil
+		},
+	}
+	secondServer, secondAddr := startMockServer(t, secondCoord)
+	defer secondServer.Stop()
+
+	firstHost, firstPort := parseHostPort(firstAddr)
+	secondHost, secondPort := parseHostPort(secondAddr)
+	monitor := &mockServiceMonitor{
+		members: []exec.HostInfo{
+			{ID: "coord-b", Host: secondHost, Port: secondPort, Status: exec.ServiceStatusActive},
+			{ID: "coord-a", Host: firstHost, Port: firstPort, Status: exec.ServiceStatusActive},
+		},
+	}
+
+	firstClient, ok := coordinator.New(monitor, config).(coordinator.StateClient)
+	require.True(t, ok)
+	secondClient, ok := coordinator.New(monitor, config).(coordinator.StateClient)
+	require.True(t, ok)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	_, err := firstClient.PutState(ctx, &coordinatorv1.PutStateRequest{Ref: ref, Value: []byte(`1`)})
+	require.NoError(t, err)
+	_, err = secondClient.PutState(ctx, &coordinatorv1.PutStateRequest{Ref: ref, Value: []byte(`2`)})
+	require.NoError(t, err)
+
+	firstCallCount := firstPuts.Load()
+	secondCallCount := secondPuts.Load()
+	assert.Equal(t, int32(2), firstCallCount+secondCallCount)
+	assert.True(t, firstCallCount == 2 || secondCallCount == 2)
+}
+
+func TestClientStatePinnedCoordinatorDoesNotFailOverAfterUnavailable(t *testing.T) {
+	t.Parallel()
+
+	config := coordinator.DefaultConfig()
+	config.RequestTimeout = 100 * time.Millisecond
+
+	ref := &coordinatorv1.StateRef{Scope: "dag", Namespace: "daily-agent", Key: "cursor"}
+	entry := &coordinatorv1.StateEntry{Ref: ref, Value: []byte(`1`), Version: 1}
+
+	var firstPuts atomic.Int32
+	firstCoord := &mockCoordinatorService{
+		putStateFunc: func(context.Context, *coordinatorv1.PutStateRequest) (*coordinatorv1.PutStateResponse, error) {
+			if firstPuts.Add(1) == 1 {
+				return &coordinatorv1.PutStateResponse{Entry: entry}, nil
+			}
+			return nil, status.Error(codes.Unavailable, "ambiguous write")
+		},
+	}
+	firstServer, firstAddr := startMockServer(t, firstCoord)
+	defer firstServer.Stop()
+
+	var secondPuts atomic.Int32
+	secondCoord := &mockCoordinatorService{
+		putStateFunc: func(context.Context, *coordinatorv1.PutStateRequest) (*coordinatorv1.PutStateResponse, error) {
+			if secondPuts.Add(1) == 1 {
+				return &coordinatorv1.PutStateResponse{Entry: entry}, nil
+			}
+			return nil, status.Error(codes.Unavailable, "ambiguous write")
+		},
+	}
+	secondServer, secondAddr := startMockServer(t, secondCoord)
+	defer secondServer.Stop()
+
+	firstHost, firstPort := parseHostPort(firstAddr)
+	secondHost, secondPort := parseHostPort(secondAddr)
+	monitor := &mockServiceMonitor{
+		members: []exec.HostInfo{
+			{ID: "coord-b", Host: secondHost, Port: secondPort, Status: exec.ServiceStatusActive},
+			{ID: "coord-a", Host: firstHost, Port: firstPort, Status: exec.ServiceStatusActive},
+		},
+	}
+
+	stateClient, ok := coordinator.New(monitor, config).(coordinator.StateClient)
+	require.True(t, ok)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	_, err := stateClient.PutState(ctx, &coordinatorv1.PutStateRequest{Ref: ref, Value: []byte(`1`)})
+	require.NoError(t, err)
+
+	_, err = stateClient.PutState(ctx, &coordinatorv1.PutStateRequest{Ref: ref, Value: []byte(`2`)})
+	require.Error(t, err)
+
+	firstCallCount := firstPuts.Load()
+	secondCallCount := secondPuts.Load()
+	assert.True(t, firstCallCount == 2 || secondCallCount == 2)
+	assert.True(t, firstCallCount == 0 || secondCallCount == 0)
+}
+
+func TestClientStatePinnedCoordinatorRefreshesSameCoordinatorEndpoint(t *testing.T) {
+	t.Parallel()
+
+	config := coordinator.DefaultConfig()
+	config.RequestTimeout = 100 * time.Millisecond
+
+	ref := &coordinatorv1.StateRef{Scope: "dag", Namespace: "daily-agent", Key: "cursor"}
+	entry := &coordinatorv1.StateEntry{Ref: ref, Value: []byte(`1`), Version: 1}
+
+	oldCoord := &mockCoordinatorService{
+		putStateFunc: func(context.Context, *coordinatorv1.PutStateRequest) (*coordinatorv1.PutStateResponse, error) {
+			return &coordinatorv1.PutStateResponse{Entry: entry}, nil
+		},
+	}
+	oldServer, oldAddr := startMockServer(t, oldCoord)
+	oldServerStopped := false
+	defer func() {
+		if !oldServerStopped {
+			oldServer.Stop()
+		}
+	}()
+
+	var newPuts atomic.Int32
+	newCoord := &mockCoordinatorService{
+		putStateFunc: func(context.Context, *coordinatorv1.PutStateRequest) (*coordinatorv1.PutStateResponse, error) {
+			newPuts.Add(1)
+			return &coordinatorv1.PutStateResponse{Entry: entry}, nil
+		},
+	}
+	newServer, newAddr := startMockServer(t, newCoord)
+	defer newServer.Stop()
+
+	oldHost, oldPort := parseHostPort(oldAddr)
+	newHost, newPort := parseHostPort(newAddr)
+	monitor := &mockServiceMonitor{
+		members: []exec.HostInfo{
+			{ID: "coord-a", Host: oldHost, Port: oldPort, Status: exec.ServiceStatusActive},
+		},
+	}
+
+	stateClient, ok := coordinator.New(monitor, config).(coordinator.StateClient)
+	require.True(t, ok)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := stateClient.PutState(ctx, &coordinatorv1.PutStateRequest{Ref: ref, Value: []byte(`1`)})
+	require.NoError(t, err)
+
+	monitor.members = []exec.HostInfo{
+		{ID: "coord-a", Host: newHost, Port: newPort, Status: exec.ServiceStatusActive},
+	}
+	oldServer.Stop()
+	oldServerStopped = true
+
+	_, err = stateClient.PutState(ctx, &coordinatorv1.PutStateRequest{Ref: ref, Value: []byte(`2`)})
+	require.Error(t, err)
+
+	_, err = stateClient.PutState(ctx, &coordinatorv1.PutStateRequest{Ref: ref, Value: []byte(`3`)})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), newPuts.Load())
+}
+
+func TestClientStatePinnedCoordinatorRefreshesSameCoordinatorEndpointAfterDeadlineExceeded(t *testing.T) {
+	t.Parallel()
+
+	config := coordinator.DefaultConfig()
+	config.RequestTimeout = 100 * time.Millisecond
+
+	ref := &coordinatorv1.StateRef{Scope: "dag", Namespace: "daily-agent", Key: "cursor"}
+	entry := &coordinatorv1.StateEntry{Ref: ref, Value: []byte(`1`), Version: 1}
+
+	var oldPuts atomic.Int32
+	oldCoord := &mockCoordinatorService{
+		putStateFunc: func(context.Context, *coordinatorv1.PutStateRequest) (*coordinatorv1.PutStateResponse, error) {
+			if oldPuts.Add(1) == 1 {
+				return &coordinatorv1.PutStateResponse{Entry: entry}, nil
+			}
+			return nil, status.Error(codes.DeadlineExceeded, "stale endpoint")
+		},
+	}
+	oldServer, oldAddr := startMockServer(t, oldCoord)
+	defer oldServer.Stop()
+
+	var newPuts atomic.Int32
+	newCoord := &mockCoordinatorService{
+		putStateFunc: func(context.Context, *coordinatorv1.PutStateRequest) (*coordinatorv1.PutStateResponse, error) {
+			newPuts.Add(1)
+			return &coordinatorv1.PutStateResponse{Entry: entry}, nil
+		},
+	}
+	newServer, newAddr := startMockServer(t, newCoord)
+	defer newServer.Stop()
+
+	oldHost, oldPort := parseHostPort(oldAddr)
+	newHost, newPort := parseHostPort(newAddr)
+	monitor := &mockServiceMonitor{
+		members: []exec.HostInfo{
+			{ID: "coord-a", Host: oldHost, Port: oldPort, Status: exec.ServiceStatusActive},
+		},
+	}
+
+	stateClient, ok := coordinator.New(monitor, config).(coordinator.StateClient)
+	require.True(t, ok)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := stateClient.PutState(ctx, &coordinatorv1.PutStateRequest{Ref: ref, Value: []byte(`1`)})
+	require.NoError(t, err)
+
+	monitor.members = []exec.HostInfo{
+		{ID: "coord-a", Host: newHost, Port: newPort, Status: exec.ServiceStatusActive},
+	}
+
+	_, err = stateClient.PutState(ctx, &coordinatorv1.PutStateRequest{Ref: ref, Value: []byte(`2`)})
+	require.Error(t, err)
+
+	_, err = stateClient.PutState(ctx, &coordinatorv1.PutStateRequest{Ref: ref, Value: []byte(`3`)})
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), oldPuts.Load())
+	assert.Equal(t, int32(1), newPuts.Load())
+}
+
+func TestClientStatePinnedCoordinatorReselectsWhenCoordinatorIDDisappears(t *testing.T) {
+	t.Parallel()
+
+	config := coordinator.DefaultConfig()
+	config.RequestTimeout = 100 * time.Millisecond
+
+	ref := &coordinatorv1.StateRef{Scope: "dag", Namespace: "daily-agent", Key: "cursor"}
+	entry := &coordinatorv1.StateEntry{Ref: ref, Value: []byte(`1`), Version: 1}
+
+	var oldPuts atomic.Int32
+	oldCoord := &mockCoordinatorService{
+		putStateFunc: func(context.Context, *coordinatorv1.PutStateRequest) (*coordinatorv1.PutStateResponse, error) {
+			if oldPuts.Add(1) == 1 {
+				return &coordinatorv1.PutStateResponse{Entry: entry}, nil
+			}
+			return nil, status.Error(codes.Unavailable, "stale coordinator")
+		},
+	}
+	oldServer, oldAddr := startMockServer(t, oldCoord)
+	defer oldServer.Stop()
+
+	var newPuts atomic.Int32
+	newCoord := &mockCoordinatorService{
+		putStateFunc: func(context.Context, *coordinatorv1.PutStateRequest) (*coordinatorv1.PutStateResponse, error) {
+			newPuts.Add(1)
+			return &coordinatorv1.PutStateResponse{Entry: entry}, nil
+		},
+	}
+	newServer, newAddr := startMockServer(t, newCoord)
+	defer newServer.Stop()
+
+	oldHost, oldPort := parseHostPort(oldAddr)
+	newHost, newPort := parseHostPort(newAddr)
+	monitor := &mockServiceMonitor{
+		members: []exec.HostInfo{
+			{ID: "coord-a", Host: oldHost, Port: oldPort, Status: exec.ServiceStatusActive},
+		},
+	}
+
+	stateClient, ok := coordinator.New(monitor, config).(coordinator.StateClient)
+	require.True(t, ok)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := stateClient.PutState(ctx, &coordinatorv1.PutStateRequest{Ref: ref, Value: []byte(`1`)})
+	require.NoError(t, err)
+
+	monitor.members = []exec.HostInfo{
+		{ID: "coord-b", Host: newHost, Port: newPort, Status: exec.ServiceStatusActive},
+	}
+
+	_, err = stateClient.PutState(ctx, &coordinatorv1.PutStateRequest{Ref: ref, Value: []byte(`2`)})
+	require.Error(t, err)
+
+	_, err = stateClient.PutState(ctx, &coordinatorv1.PutStateRequest{Ref: ref, Value: []byte(`3`)})
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), oldPuts.Load())
+	assert.Equal(t, int32(1), newPuts.Load())
+}
+
 func TestClientHeartbeat(t *testing.T) {
 	t.Parallel()
 
@@ -669,13 +1199,13 @@ func TestClientMetrics(t *testing.T) {
 	assert.True(t, metrics.IsConnected)
 	assert.Equal(t, 0, metrics.ConsecutiveFails)
 
-	task := &coordinatorv1.Task{DagRunId: "test"}
+	task := &exec.DispatchTask{DAGRunID: "test"}
 
 	// Attempt dispatch - should fail
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	err := client.Dispatch(ctx, task)
+	err := client.Dispatch(ctx, exec.DispatchRequest{Task: task})
 	require.Error(t, err)
 
 	// Check failure metrics
@@ -708,12 +1238,12 @@ func TestClientCleanup(t *testing.T) {
 	client := coordinator.New(monitor, config)
 
 	// Make a call to establish connection
-	task := &coordinatorv1.Task{DagRunId: "test"}
+	task := &exec.DispatchTask{DAGRunID: "test"}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	err := client.Dispatch(ctx, task)
+	err := client.Dispatch(ctx, exec.DispatchRequest{Task: task})
 	require.NoError(t, err)
 
 	// Cleanup should close all connections
@@ -724,7 +1254,7 @@ func TestClientCleanup(t *testing.T) {
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel2()
 
-	err = client.Dispatch(ctx2, task)
+	err = client.Dispatch(ctx2, exec.DispatchRequest{Task: task})
 	require.NoError(t, err)
 }
 
@@ -735,8 +1265,8 @@ func TestClientDispatch_NoCoordinators(t *testing.T) {
 	monitor := &mockServiceMonitor{}
 	client := coordinator.New(monitor, config)
 
-	task := &coordinatorv1.Task{
-		DagRunId: "test-dag-run",
+	task := &exec.DispatchTask{
+		DAGRunID: "test-dag-run",
 		Target:   "test.yaml",
 	}
 
@@ -746,7 +1276,7 @@ func TestClientDispatch_NoCoordinators(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	err := client.Dispatch(ctx, task)
+	err := client.Dispatch(ctx, exec.DispatchRequest{Task: task})
 	require.Error(t, err)
 	// Could be either error depending on timing
 	assert.True(t, strings.Contains(err.Error(), "no coordinators available") ||
@@ -795,6 +1325,10 @@ type mockCoordinatorService struct {
 	getWorkersFunc   func(context.Context, *coordinatorv1.GetWorkersRequest) (*coordinatorv1.GetWorkersResponse, error)
 	heartbeatFunc    func(context.Context, *coordinatorv1.HeartbeatRequest) (*coordinatorv1.HeartbeatResponse, error)
 	reportStatusFunc func(context.Context, *coordinatorv1.ReportStatusRequest) (*coordinatorv1.ReportStatusResponse, error)
+	getStateFunc     func(context.Context, *coordinatorv1.GetStateRequest) (*coordinatorv1.GetStateResponse, error)
+	putStateFunc     func(context.Context, *coordinatorv1.PutStateRequest) (*coordinatorv1.PutStateResponse, error)
+	deleteStateFunc  func(context.Context, *coordinatorv1.DeleteStateRequest) (*coordinatorv1.DeleteStateResponse, error)
+	listStateFunc    func(context.Context, *coordinatorv1.ListStateRequest) (*coordinatorv1.ListStateResponse, error)
 }
 
 func (m *mockCoordinatorService) Dispatch(ctx context.Context, req *coordinatorv1.DispatchRequest) (*coordinatorv1.DispatchResponse, error) {
@@ -828,6 +1362,34 @@ func (m *mockCoordinatorService) Heartbeat(ctx context.Context, req *coordinator
 func (m *mockCoordinatorService) ReportStatus(ctx context.Context, req *coordinatorv1.ReportStatusRequest) (*coordinatorv1.ReportStatusResponse, error) {
 	if m.reportStatusFunc != nil {
 		return m.reportStatusFunc(ctx, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockCoordinatorService) GetState(ctx context.Context, req *coordinatorv1.GetStateRequest) (*coordinatorv1.GetStateResponse, error) {
+	if m.getStateFunc != nil {
+		return m.getStateFunc(ctx, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockCoordinatorService) PutState(ctx context.Context, req *coordinatorv1.PutStateRequest) (*coordinatorv1.PutStateResponse, error) {
+	if m.putStateFunc != nil {
+		return m.putStateFunc(ctx, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockCoordinatorService) DeleteState(ctx context.Context, req *coordinatorv1.DeleteStateRequest) (*coordinatorv1.DeleteStateResponse, error) {
+	if m.deleteStateFunc != nil {
+		return m.deleteStateFunc(ctx, req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
+func (m *mockCoordinatorService) ListState(ctx context.Context, req *coordinatorv1.ListStateRequest) (*coordinatorv1.ListStateResponse, error) {
+	if m.listStateFunc != nil {
+		return m.listStateFunc(ctx, req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not implemented")
 }

@@ -1,9 +1,5 @@
 version: 2
 updates:
-  - package-ecosystem: devcontainers
-    directory: /
-    schedule:
-      interval: quarterly
   - package-ecosystem: docker
     directory: /
     schedule:
@@ -17,11 +13,16 @@ updates:
     schedule:
       interval: monthly
     groups:
-      patch:
+      actions-patch:
+        applies-to: version-updates
         patterns:
           - "*"
         update-types:
           - patch
+      actions-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
     ignore:
       - dependency-name: "*"
         update-types:
@@ -32,29 +33,36 @@ updates:
     schedule:
       interval: monthly
     groups:
-      patch:
+      go-patch:
+        applies-to: version-updates
         patterns:
           - "*"
         update-types:
           - patch
+      go-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
     ignore:
       - dependency-name: "*"
         update-types:
           - "version-update:semver-major"
           - "version-update:semver-minor"
   - package-ecosystem: npm
-    directories:
-      - docs
-      - npm/*
-      - ui
+    directory: /ui
     schedule:
       interval: monthly
     groups:
-      patch:
+      ui-patch:
+        applies-to: version-updates
         patterns:
           - "*"
         update-types:
           - patch
+      ui-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
     ignore:
       - dependency-name: "*"
         update-types:

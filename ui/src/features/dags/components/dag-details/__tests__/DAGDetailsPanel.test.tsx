@@ -1,13 +1,14 @@
 // Copyright (C) 2026 Yota Hamada
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppBarContext } from '@/contexts/AppBarContext';
 import { PageContextProvider } from '@/contexts/PageContext';
 import { useQuery } from '@/hooks/api';
+import { useDAGRunSSE } from '@/hooks/useDAGRunSSE';
 import { useDAGSSE } from '@/hooks/useDAGSSE';
 import DAGDetailsPanel from '../DAGDetailsPanel';
 
@@ -19,6 +20,10 @@ vi.mock('@/hooks/useDAGSSE', () => ({
   useDAGSSE: vi.fn(),
 }));
 
+vi.mock('@/hooks/useDAGRunSSE', () => ({
+  useDAGRunSSE: vi.fn(),
+}));
+
 vi.mock('@/hooks/useSSECacheSync', () => ({
   sseFallbackOptions: vi.fn(() => ({})),
   useSSECacheSync: vi.fn(),
@@ -28,17 +33,30 @@ vi.mock('../DAGDetailsContent', () => ({
   default: ({
     dag,
     activeTab,
+    dagRunId,
     editorHints,
+    onRunStarted,
+    fillHeight,
   }: {
     dag: { name: string };
     activeTab: string;
-    editorHints?: { inheritedCustomStepTypes?: unknown[] };
+    dagRunId?: string;
+    editorHints?: { inheritedLegacyDefinitions?: unknown[] };
+    onRunStarted?: (dagRunId: string) => void;
+    fillHeight?: boolean;
   }) => (
     <div>
-      <div>
-        Previewing {dag.name} [{activeTab}]
+      <div data-fill-height={String(fillHeight)} data-testid="dag-details-content">
+        Previewing {dag.name} [{activeTab}] {dagRunId || 'latest'}
       </div>
-      <div>Inherited hints: {editorHints?.inheritedCustomStepTypes?.length ?? 0}</div>
+      <div>
+        Inherited hints: {editorHints?.inheritedLegacyDefinitions?.length ?? 0}
+      </div>
+      {onRunStarted ? (
+        <button type="button" onClick={() => onRunStarted('started-run')}>
+          Mark Started
+        </button>
+      ) : null}
     </div>
   ),
 }));
@@ -64,15 +82,12 @@ const useQueryMock = useQuery as unknown as {
   mockImplementation: (fn: (path: string, init?: unknown) => unknown) => void;
 };
 
-function renderPanel() {
+function renderPanel(appBarOverride?: Partial<typeof appBarValue>) {
   return render(
     <MemoryRouter>
       <PageContextProvider>
-        <AppBarContext.Provider value={appBarValue}>
-          <DAGDetailsPanel
-            fileName="example"
-            onClose={vi.fn()}
-          />
+        <AppBarContext.Provider value={{ ...appBarValue, ...appBarOverride }}>
+          <DAGDetailsPanel fileName="example" onClose={vi.fn()} />
         </AppBarContext.Provider>
       </PageContextProvider>
     </MemoryRouter>
@@ -86,6 +101,7 @@ afterEach(() => {
 describe('DAGDetailsPanel', () => {
   it('passes editor hints through to the dag list detail panel spec flow', () => {
     vi.mocked(useDAGSSE).mockReturnValue(liveState);
+    vi.mocked(useDAGRunSSE).mockReturnValue(liveState);
     useQueryMock.mockImplementation((path) => {
       if (path === '/dags/{fileName}') {
         return {
@@ -95,7 +111,7 @@ describe('DAGDetailsPanel', () => {
             latestDAGRun: undefined,
             localDags: [],
             editorHints: {
-              inheritedCustomStepTypes: [{ name: 'greet' }],
+              inheritedLegacyDefinitions: [{ name: 'greet' }],
             },
           },
           error: undefined,
@@ -112,7 +128,107 @@ describe('DAGDetailsPanel', () => {
 
     renderPanel();
 
-    expect(screen.getByText('Previewing example-dag [status]')).toBeInTheDocument();
+    expect(
+      screen.getByText('Previewing example-dag [status] latest')
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('dag-details-content')).toHaveAttribute(
+      'data-fill-height',
+      'true'
+    );
     expect(screen.getByText('Inherited hints: 1')).toBeInTheDocument();
+  });
+
+  it('uses the resolved remote node for DAG detail fetches and SSE', () => {
+    const queryCalls: Array<{ path: string; init?: unknown }> = [];
+    vi.mocked(useDAGSSE).mockReturnValue(liveState);
+    vi.mocked(useDAGRunSSE).mockReturnValue(liveState);
+    useQueryMock.mockImplementation((path, init) => {
+      queryCalls.push({ path, init });
+      if (path === '/dags/{fileName}') {
+        return {
+          data: {
+            dag: { name: 'example-dag' },
+            filePath: '/tmp/example.yaml',
+            latestDAGRun: undefined,
+            localDags: [],
+          },
+          error: undefined,
+          mutate: vi.fn(),
+        } as never;
+      }
+
+      return {
+        data: undefined,
+        error: undefined,
+        mutate: vi.fn(),
+      } as never;
+    });
+
+    renderPanel({ selectedRemoteNode: 'edge-a' });
+
+    expect(useDAGSSE).toHaveBeenCalledWith('example', true, 'edge-a');
+    expect(
+      queryCalls.find((call) => call.path === '/dags/{fileName}')?.init
+    ).toMatchObject({
+      params: {
+        query: { remoteNode: 'edge-a' },
+        path: { fileName: 'example' },
+      },
+    });
+  });
+
+  it('tracks a just-started DAG-run and reads its exact live status', async () => {
+    const dagData = {
+      dag: { name: 'example-dag' },
+      filePath: '/tmp/example.yaml',
+      latestDAGRun: undefined,
+      localDags: [],
+    };
+    const trackedRunData = {
+      dagRunDetails: {
+        name: 'example-dag',
+        dagRunId: 'started-run',
+      },
+    };
+
+    vi.mocked(useDAGSSE).mockReturnValue(liveState);
+    vi.mocked(useDAGRunSSE).mockReturnValue(liveState);
+    useQueryMock.mockImplementation((path) => {
+      if (path === '/dags/{fileName}') {
+        return {
+          data: dagData,
+          error: undefined,
+          mutate: vi.fn(),
+        } as never;
+      }
+
+      if (path === '/dag-runs/{name}/{dagRunId}') {
+        return {
+          data: trackedRunData,
+          error: undefined,
+          mutate: vi.fn(),
+        } as never;
+      }
+
+      return {
+        data: undefined,
+        error: undefined,
+        mutate: vi.fn(),
+      } as never;
+    });
+
+    renderPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mark Started' }));
+
+    expect(
+      await screen.findByText('Previewing example-dag [status] started-run')
+    ).toBeInTheDocument();
+    expect(useDAGRunSSE).toHaveBeenCalledWith(
+      'example-dag',
+      'started-run',
+      true,
+      'local'
+    );
   });
 });

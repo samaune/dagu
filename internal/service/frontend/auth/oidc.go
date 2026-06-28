@@ -33,12 +33,10 @@ const (
 	oidcProviderInitialInterval = 500 * time.Millisecond // initial backoff interval
 	oidcProviderMaxInterval     = 5 * time.Second        // maximum backoff interval
 	stateCookieExpiry           = 120                    // seconds for transient state/nonce/originalURL cookies
-	defaultTokenExpirySecs      = 60                     // fallback when ID token expiry is invalid or already passed
 )
 
 // Cookie names centralised to avoid copy-paste strings.
 const (
-	cookieOIDCToken   = "oidcToken"
 	cookieState       = "state"
 	cookieNonce       = "nonce"
 	cookieOriginalURL = "originalURL"
@@ -159,14 +157,14 @@ func initOIDCProviderCore(ctx context.Context, params oidcProviderParams) (*oidc
 	}, nil
 }
 
-func setCookie(w http.ResponseWriter, r *http.Request, name, value string, expire int) {
+func setCookie(w http.ResponseWriter, _ *http.Request, name, value string, expire int) {
 	c := &http.Cookie{
 		Name:     name,
 		Value:    value,
 		MaxAge:   expire,
 		Path:     "/",
 		SameSite: http.SameSiteLaxMode,
-		Secure:   isSecureRequest(r),
+		Secure:   true,
 		HttpOnly: true,
 	}
 	http.SetCookie(w, c)
@@ -181,13 +179,6 @@ func clearOIDCStateCookies(w http.ResponseWriter, r *http.Request) {
 	clearCookie(w, r, cookieState)
 	clearCookie(w, r, cookieNonce)
 	clearCookie(w, r, cookieOriginalURL)
-}
-
-func isSecureRequest(r *http.Request) bool {
-	if r.TLS != nil {
-		return true
-	}
-	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
 // BuiltinOIDCConfig holds configuration for OIDC under builtin auth mode.
@@ -377,15 +368,14 @@ func BuiltinOIDCCallbackHandler(cfg *BuiltinOIDCConfig) http.HandlerFunc {
 		// Clear OIDC cookies
 		clearOIDCStateCookies(w, r)
 
-		// Redirect to login page with token in URL for frontend to store in localStorage
-		// This is secure because:
-		// 1. It's a one-time redirect (not a shareable link)
-		// 2. Frontend stores the token and navigates away with replace:true (React Router)
-		// 3. Token won't appear in browser history after navigation completes
-		redirectURL := strings.TrimSuffix(cfg.LoginBasePath, "/") + "/login?token=" + url.QueryEscape(tokenResult.Token)
+		// Redirect to login page with token in the URL hash fragment.
+		// Hash fragments are never sent to the server, so the JWT does not appear
+		// in server access logs, reverse-proxy logs, or Referer headers.
+		redirectURL := strings.TrimSuffix(cfg.LoginBasePath, "/") + "/login"
 		if isNewUser {
-			redirectURL += "&welcome=true"
+			redirectURL += "?welcome=true"
 		}
+		redirectURL += "#token=" + url.QueryEscape(tokenResult.Token)
 		http.Redirect(w, r, redirectURL, http.StatusFound)
 	}
 }

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Yota Hamada
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import {
   forwardRef,
   useContext,
@@ -14,6 +17,7 @@ import { FileText, Search, X } from 'lucide-react';
 import { AppBarContext } from '@/contexts/AppBarContext';
 import { useClient } from '@/hooks/api';
 import { cn } from '@/lib/utils';
+import { workspaceSelectionQuery } from '@/lib/workspace';
 
 export interface DocRef {
   id: string;
@@ -23,6 +27,7 @@ export interface DocRef {
 interface DocEntry {
   id: string;
   title: string;
+  description?: string;
 }
 
 export interface DocPickerHandle {
@@ -47,6 +52,10 @@ export const DocPicker = forwardRef<DocPickerHandle, DocPickerProps>(
   ) {
     const client = useClient();
     const appBarContext = useContext(AppBarContext);
+    const workspaceQuery = useMemo(
+      () => workspaceSelectionQuery(appBarContext?.workspaceSelection),
+      [appBarContext?.workspaceSelection]
+    );
     const dropdownRef = useRef<HTMLDivElement>(null);
     const [docs, setDocs] = useState<DocEntry[]>([]);
     const [highlightIndex, setHighlightIndex] = useState(0);
@@ -59,7 +68,14 @@ export const DocPicker = forwardRef<DocPickerHandle, DocPickerProps>(
       async function fetchDocs() {
         try {
           const { data } = await client.GET('/docs', {
-            params: { query: { remoteNode, flat: true, perPage: 200 } },
+            params: {
+              query: {
+                remoteNode,
+                flat: true,
+                perPage: 200,
+                ...workspaceQuery,
+              },
+            },
             signal: controller.signal,
           });
           if (!data?.items) return;
@@ -67,6 +83,7 @@ export const DocPicker = forwardRef<DocPickerHandle, DocPickerProps>(
             data.items.map((item) => ({
               id: item.id,
               title: item.title,
+              description: item.description || undefined,
             }))
           );
         } catch {
@@ -76,7 +93,7 @@ export const DocPicker = forwardRef<DocPickerHandle, DocPickerProps>(
       fetchDocs();
 
       return () => controller.abort();
-    }, [client, appBarContext?.selectedRemoteNode]);
+    }, [client, appBarContext?.selectedRemoteNode, workspaceQuery]);
 
     // Click-outside handler
     useEffect(() => {
@@ -107,7 +124,8 @@ export const DocPicker = forwardRef<DocPickerHandle, DocPickerProps>(
       return available.filter(
         (d) =>
           d.id.toLowerCase().includes(q) ||
-          d.title.toLowerCase().includes(q)
+          d.title.toLowerCase().includes(q) ||
+          (d.description?.toLowerCase().includes(q) ?? false)
       );
     }, [docs, filterQuery, selectedIds, currentPageDoc]);
 
@@ -232,6 +250,11 @@ export const DocPicker = forwardRef<DocPickerHandle, DocPickerProps>(
                     <FileText className="h-3.5 w-3.5 text-blue-500 shrink-0" />
                     <div className="min-w-0">
                       <div className="font-medium truncate">{doc.title || doc.id}</div>
+                      {doc.description && (
+                        <div className="text-xs text-muted-foreground truncate">
+                          {doc.description}
+                        </div>
+                      )}
                       {doc.title && doc.title !== doc.id && (
                         <div className="text-xs text-muted-foreground truncate font-mono">
                           {doc.id}

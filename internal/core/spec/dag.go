@@ -12,16 +12,27 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dagucloud/dagu/internal/cmn/cmdutil"
-	"github.com/dagucloud/dagu/internal/cmn/eval"
+	cmnvalue "github.com/dagucloud/dagu/internal/cmn/value"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/spec/types"
 	"github.com/go-viper/mapstructure/v2"
+)
+
+const dagRunArtifactsDirEnvKey = "DAG_RUN_ARTIFACTS_DIR"
+
+var dagRunArtifactsDirReferencePattern = regexp.MustCompile(
+	`(?:\$\{` + regexp.QuoteMeta(dagRunArtifactsDirEnvKey) + `\}` +
+		`|\$` + regexp.QuoteMeta(dagRunArtifactsDirEnvKey) + `(?:\b|[^A-Za-z0-9_])` +
+		`|\$env:` + regexp.QuoteMeta(dagRunArtifactsDirEnvKey) + `(?:\b|[^A-Za-z0-9_])` +
+		`|%` + regexp.QuoteMeta(dagRunArtifactsDirEnvKey) + `%` +
+		`|env\(["']` + regexp.QuoteMeta(dagRunArtifactsDirEnvKey) + `["']\))`,
 )
 
 // dag is the intermediate representation of a DAG specification.
@@ -34,8 +45,8 @@ type dag struct {
 	// Description is the description of the DAG.
 	Description string `yaml:"description,omitempty"`
 	// Type is the execution type for steps (graph, chain, or agent).
-	// Default is "chain" which executes steps in the order they are defined.
-	// "graph" uses dependency-based parallel execution.
+	// Default is "graph" which uses dependency-based parallel execution.
+	// "chain" executes steps in the order they are defined.
 	// "agent" is reserved for future agent-based execution.
 	Type string `yaml:"type,omitempty"`
 	// Shell is the default shell to use for all steps in this DAG.
@@ -43,6 +54,8 @@ type dag struct {
 	// Can be overridden at the step level.
 	// Can be a string (e.g., "bash -e") or an array (e.g., ["bash", "-e"]).
 	Shell types.ShellValue `yaml:"shell,omitempty"`
+	// ShellArgs is the list of additional arguments passed to the root shell.
+	ShellArgs []string `yaml:"shell_args,omitempty"`
 	// WorkingDir is working directory for DAG execution
 	WorkingDir string `yaml:"working_dir,omitempty"`
 	// Dotenv is the path to the dotenv file (string or []string).
@@ -65,6 +78,8 @@ type dag struct {
 	// Can be "separate" (default) for separate .out and .err files,
 	// or "merged" for a single combined .log file.
 	LogOutput types.LogOutputValue `yaml:"log_output,omitempty"`
+	// Consts contains immutable values resolved while loading the DAG.
+	Consts any `yaml:"consts,omitempty"`
 	// Env is the environment variables setting.
 	Env types.EnvValue `yaml:"env,omitempty"`
 	// HandlerOn is the handler configuration.
@@ -75,8 +90,10 @@ type dag struct {
 	// defaultsRaw preserves the authored defaults map so explicit zero/empty
 	// DAG-local overrides can replace inherited base defaults during merge.
 	defaultsRaw map[string]any
-	// StepTypes defines custom step types that expand to builtin-backed steps.
+	// StepTypes defines deprecated legacy step_types entries that expand to builtin-backed steps.
 	StepTypes map[string]customStepTypeSpec `yaml:"step_types,omitempty"`
+	// Actions defines reusable v2 actions that expand to builtin actions or run steps.
+	Actions map[string]customStepTypeSpec `yaml:"actions,omitempty"`
 	// Steps is the list of steps to run.
 	Steps any `yaml:"steps,omitempty"` // []step or map[string]step
 	// SMTP is the SMTP configuration.
@@ -97,6 +114,8 @@ type dag struct {
 	RestartWaitSec int `yaml:"restart_wait_sec,omitempty"`
 	// HistRetentionDays is the retention days of the dag-runs history.
 	HistRetentionDays *int `yaml:"hist_retention_days,omitempty"`
+	// HistRetentionRuns is the number of dag-runs to retain in history.
+	HistRetentionRuns *int `yaml:"hist_retention_runs,omitempty"`
 	// Preconditions is the condition to run the DAG.
 	Preconditions any `yaml:"preconditions,omitempty"`
 	// MaxActiveRuns is the maximum number of concurrent dag-runs.
@@ -109,8 +128,10 @@ type dag struct {
 	// It is a wait time to kill the processes when it is requested to stop.
 	// If the time is exceeded, the process is killed.
 	MaxCleanUpTimeSec *int `yaml:"max_clean_up_time_sec,omitempty"`
-	// Tags is the tags for the DAG.
-	Tags types.TagsValue `yaml:"tags,omitempty"`
+	// Labels is the labels for the DAG.
+	Labels types.LabelsValue `yaml:"labels,omitempty"`
+	// DeprecatedTags is the deprecated tags field for backward compatibility.
+	DeprecatedTags types.LabelsValue `yaml:"tags,omitempty"`
 	// Queue is the name of the queue to assign this DAG to.
 	Queue string `yaml:"queue,omitempty"`
 	// RetryPolicy is the DAG-level retry policy.
@@ -127,6 +148,10 @@ type dag struct {
 	Container any `yaml:"container,omitempty"`
 	// RunConfig contains configuration for controlling user interactions during DAG runs.
 	RunConfig *runConfig `yaml:"run_config,omitempty"`
+	// Resources contains CPU and memory limits requested for the DAG run.
+	Resources *resourcesConfig `yaml:"resources,omitempty"`
+	// Webhook contains DAG-level webhook trigger behavior configuration.
+	Webhook *webhookConfig `yaml:"webhook,omitempty"`
 	// RegistryAuths maps registry hostnames to authentication configs.
 	// Can be either a JSON string or a map of registry to auth config.
 	RegistryAuths any `yaml:"registry_auths,omitempty"`
@@ -139,7 +164,7 @@ type dag struct {
 	// Steps can override this configuration by specifying their own llm field.
 	LLM *llmConfig `yaml:"llm,omitempty"`
 	// Redis is the default Redis configuration for all redis steps in this DAG.
-	// Steps can override this configuration by specifying their own config fields.
+	// Steps can override this configuration by specifying their own with fields.
 	Redis *redisConfig `yaml:"redis,omitempty"`
 	// Harnesses contains reusable custom harness definitions available to harness steps.
 	Harnesses map[string]any `yaml:"harnesses,omitempty"`
@@ -147,10 +172,12 @@ type dag struct {
 	// Steps can override primary config keys and replace fallback entirely.
 	Harness map[string]any `yaml:"harness,omitempty"`
 	// Kubernetes is the default Kubernetes configuration for explicit k8s steps in this DAG.
-	// Steps can override this configuration by specifying their own config fields.
+	// Steps can override this configuration by specifying their own with fields.
 	Kubernetes map[string]any `yaml:"kubernetes,omitempty"`
 	// Secrets contains references to external secrets.
 	Secrets []secretRef `yaml:"secrets,omitempty"`
+	// Tools contains DAG-level CLI tool dependencies.
+	Tools *toolsConfig `yaml:"tools,omitempty"`
 	// Defaults defines default values for step configuration fields.
 	// Steps inherit these defaults and can override them individually.
 	Defaults any `yaml:"defaults,omitempty"`
@@ -302,6 +329,19 @@ type runConfig struct {
 	DisableRunIdEdit bool `yaml:"disable_run_id_edit,omitempty"` // Disable custom run ID specification
 }
 
+type resourcesConfig struct {
+	Limits *resourceLimits `yaml:"limits,omitempty"`
+}
+
+type resourceLimits struct {
+	CPU    string `yaml:"cpu,omitempty"`
+	Memory string `yaml:"memory,omitempty"`
+}
+
+type webhookConfig struct {
+	ForwardHeaders []string `yaml:"forward_headers,omitempty"`
+}
+
 // ssh defines the SSH configuration for the DAG.
 type ssh struct {
 	// User is the SSH user.
@@ -368,7 +408,7 @@ type s3Config struct {
 }
 
 // redisConfig defines the default Redis configuration for all redis steps in the DAG.
-// Steps can override these settings by specifying their own config fields.
+// Steps can override these settings by specifying their own with fields.
 type redisConfig struct {
 	// URL is the Redis connection URL (redis://user:pass@host:port/db).
 	URL string `yaml:"url,omitempty"`
@@ -402,12 +442,37 @@ type redisConfig struct {
 type secretRef struct {
 	// Name is the environment variable name (required).
 	Name string `yaml:"name"`
-	// Provider specifies the secret backend (required).
+	// Ref is the workspace-local registry reference for a team-managed secret.
+	Ref string `yaml:"ref,omitempty"`
+	// Provider specifies the secret backend for a direct provider reference.
 	Provider string `yaml:"provider"`
-	// Key is the provider-specific identifier (required).
+	// Key is the provider-specific identifier for a direct provider reference.
 	Key string `yaml:"key"`
 	// Options contains provider-specific configuration (optional).
 	Options map[string]string `yaml:"options,omitempty"`
+}
+
+type toolsConfig struct {
+	Provider string        `yaml:"provider,omitempty"`
+	Registry *toolRegistry `yaml:"registry,omitempty"`
+	Packages []toolPackage `yaml:"packages,omitempty"`
+}
+
+type toolRegistry struct {
+	Name      string `yaml:"name,omitempty"`
+	Type      string `yaml:"type,omitempty"`
+	RepoOwner string `yaml:"repo_owner,omitempty"`
+	RepoName  string `yaml:"repo_name,omitempty"`
+	Ref       string `yaml:"ref,omitempty"`
+	Path      string `yaml:"path,omitempty"`
+}
+
+type toolPackage struct {
+	Name     string   `yaml:"name,omitempty"`
+	Package  string   `yaml:"package,omitempty"`
+	Version  string   `yaml:"version,omitempty"`
+	Commands []string `yaml:"commands,omitempty"`
+	Registry string   `yaml:"registry,omitempty"`
 }
 
 // Transformer transforms a spec field into output field(s).
@@ -450,22 +515,38 @@ type transform struct {
 	transformer Transformer[BuildContext, *dag]
 }
 
-// metadataTransformers are always run (for listing, scheduling, etc.)
-var metadataTransformers = []transform{
+type transformStage []transform
+
+// Metadata stages are always run (for listing, scheduling, etc.).
+var metadataIdentityStage = transformStage{
 	{"name", newTransformer("Name", buildName)},
 	{"group", newTransformer("Group", buildGroup)},
 	{"description", newTransformer("Description", buildDescription)},
 	{"type", newTransformer("Type", buildType)},
-	{"tags", newTransformer("Tags", buildTags)},
-	// params must run BEFORE env so that env: values can reference ${param_name}
+	{"labels", newTransformer("Labels", buildLabels)},
+}
+
+var metadataConstsStage = transformStage{
+	{"consts", newTransformer("Consts", buildConsts)},
+}
+
+// Params must run before env so that env: values can reference ${param_name}.
+var metadataParamsEnvStage = transformStage{
 	{"params", newTransformer("Params", buildParams)},
 	{"default_params", newTransformer("DefaultParams", buildDefaultParams)},
 	{"param_defs", newTransformer("ParamDefs", buildParamDefs)},
+	{"param_schema", newTransformer("ParamSchema", buildParamSchema)},
 	{"params_json", newTransformer("ParamsJSON", buildParamsJSON)},
 	{"env", newTransformer("Env", buildEnvs)},
+}
+
+var metadataScheduleStage = transformStage{
 	{"schedule", newTransformer("Schedule", buildSchedule)},
 	{"stop_schedule", newTransformer("StopSchedule", buildStopSchedule)},
 	{"restart_schedule", newTransformer("RestartSchedule", buildRestartSchedule)},
+}
+
+var metadataExecutionPlacementStage = transformStage{
 	{"worker_selector", &workerSelectorTransformer{}},
 	{"timeout", newTransformer("Timeout", buildTimeout)},
 	{"delay", newTransformer("Delay", buildDelay)},
@@ -480,15 +561,35 @@ var metadataTransformers = []transform{
 	{"overlap_policy", newTransformer("OverlapPolicy", buildOverlapPolicy)},
 }
 
-// fullTransformers are only run when building the full DAG (not metadata-only)
-var fullTransformers = []transform{
+var metadataTransformStages = []transformStage{
+	metadataIdentityStage,
+	metadataConstsStage,
+	metadataParamsEnvStage,
+	metadataScheduleStage,
+	metadataExecutionPlacementStage,
+}
+
+// Full stages are only run when building the full DAG (not metadata-only).
+var fullRunOutputStage = transformStage{
 	{"log_dir", newTransformer("LogDir", buildLogDir)},
 	{"artifacts", newTransformer("Artifacts", buildArtifacts)},
 	{"log_output", newTransformer("LogOutput", buildLogOutput)},
+}
+
+var fullInteractionStage = transformStage{
 	{"mail_on", newTransformer("MailOn", buildMailOn)},
 	{"run_config", newTransformer("RunConfig", buildRunConfig)},
+	{"resources", newTransformer("Resources", buildResources)},
+	{"webhook", newTransformer("Webhook", buildWebhookConfig)},
+}
+
+var fullRetentionStage = transformStage{
 	{"hist_retention_days", newTransformer("HistRetentionDays", buildHistRetentionDays)},
+	{"hist_retention_runs", newTransformer("HistRetentionRuns", buildHistRetentionRuns)},
 	{"max_clean_up_time_sec", newTransformer("MaxCleanUpTime", buildMaxCleanUpTime)},
+}
+
+var fullExecutionDefaultsStage = transformStage{
 	{"shell", newTransformer("Shell", buildShell)},
 	{"shell_args", newTransformer("ShellArgs", buildShellArgs)},
 	{"working_dir", newTransformer("WorkingDir", buildWorkingDir)},
@@ -502,7 +603,11 @@ var fullTransformers = []transform{
 	{"harness", newTransformer("Harness", buildHarness)},
 	{"kubernetes", newTransformer("Kubernetes", buildKubernetes)},
 	{"secrets", newTransformer("Secrets", buildSecrets)},
+	{"tools", newTransformer("Tools", buildTools)},
 	{"dotenv", newTransformer("Dotenv", buildDotenv)},
+}
+
+var fullNotificationStage = transformStage{
 	{"smtp", newTransformer("SMTP", buildSMTPConfig)},
 	{"error_mail", newTransformer("ErrorMail", buildErrMailConfig)},
 	{"info_mail", newTransformer("InfoMail", buildInfoMailConfig)},
@@ -511,27 +616,38 @@ var fullTransformers = []transform{
 	{"otel", newTransformer("OTel", buildOTel)},
 }
 
+var fullTransformStages = []transformStage{
+	fullRunOutputStage,
+	fullInteractionStage,
+	fullRetentionStage,
+	fullExecutionDefaultsStage,
+	fullNotificationStage,
+}
+
 // runTransformers executes all transformers in the pipeline
 func runTransformers(ctx BuildContext, spec *dag, result *core.DAG) core.ErrorList {
 	var errs core.ErrorList
 	out := reflect.ValueOf(result).Elem()
 
-	// Always run metadata transformers
-	for _, t := range metadataTransformers {
-		if err := t.transformer.Transform(ctx, spec, out); err != nil {
-			errs = append(errs, wrapTransformError(t.name, err))
-		}
-	}
+	errs = append(errs, runTransformerStages(ctx, spec, out, metadataTransformStages)...)
 
 	// Run full transformers only when not in metadata-only mode
 	if !ctx.opts.Has(BuildFlagOnlyMetadata) {
-		for _, t := range fullTransformers {
+		errs = append(errs, runTransformerStages(ctx, spec, out, fullTransformStages)...)
+	}
+
+	return errs
+}
+
+func runTransformerStages(ctx BuildContext, spec *dag, out reflect.Value, stages []transformStage) core.ErrorList {
+	var errs core.ErrorList
+	for _, stage := range stages {
+		for _, t := range stage {
 			if err := t.transformer.Transform(ctx, spec, out); err != nil {
 				errs = append(errs, wrapTransformError(t.name, err))
 			}
 		}
 	}
-
 	return errs
 }
 
@@ -544,118 +660,176 @@ func wrapTransformError(name string, err error) error {
 	return core.NewValidationError(name, nil, err)
 }
 
-// build transforms the dag specification into a core.DAG.
-func (d *dag) build(ctx BuildContext) (*core.DAG, error) {
-	// Initialize with only Location (set from context, not spec)
+type dagBuildState struct {
+	ctx    BuildContext
+	spec   *dag
+	result *core.DAG
+	errs   core.ErrorList
+}
+
+func newDAGBuildState(ctx BuildContext, spec *dag) *dagBuildState {
 	result := &core.DAG{
 		Location: ctx.file,
 	}
-
-	// Initialize shared envScope state for thread-safe env var handling.
-	// Start with OS environment as base layer.
-	baseScope := eval.NewEnvScope(nil, true)
-
-	// Pre-populate with build env from options (for retry with dotenv).
-	// This allows YAML to reference env vars that were loaded from .env files
-	// before the rebuild.
-	buildEnv := make(map[string]string, len(ctx.opts.BuildEnv))
-	maps.Copy(buildEnv, ctx.opts.BuildEnv)
-	if len(buildEnv) > 0 {
-		baseScope = baseScope.WithEntries(buildEnv, eval.EnvSourceDotEnv)
+	return &dagBuildState{
+		ctx:    ctx,
+		spec:   spec,
+		result: result,
 	}
-
-	ctx.envScope = &envScopeState{
-		scope:    baseScope,
-		buildEnv: buildEnv,
-	}
-	ctx.paramsState = &paramsState{}
-
-	// Run the transformer pipeline
-	errs := runTransformers(ctx, d, result)
-
-	buildResult := result
-	if ctx.baseDAG != nil {
-		merged, err := composeBuildDAGContext(ctx.baseDAG, result)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("failed to compose inherited DAG context: %w", err))
-		} else {
-			buildResult = merged
-		}
-	}
-
-	// Add deprecation warning for max_active_runs on local queues.
-	// Both max_active_runs > 1 (concurrency) and max_active_runs < 0 (queue bypass) are deprecated.
-	if result.Queue == "" && (result.MaxActiveRuns > 1 || result.MaxActiveRuns < 0) {
-		result.BuildWarnings = append(result.BuildWarnings, fmt.Sprintf(
-			"max_active_runs=%d is deprecated for local queues and will be ignored. "+
-				"Use a global queue with 'queue:' field for concurrency control.",
-			result.MaxActiveRuns,
-		))
-	}
-
-	// Collect schedule warnings (misleading step values like */33).
-	for _, sched := range result.Schedule {
-		result.BuildWarnings = append(result.BuildWarnings, sched.Warnings...)
-	}
-	for _, sched := range result.StopSchedule {
-		result.BuildWarnings = append(result.BuildWarnings, sched.Warnings...)
-	}
-	for _, sched := range result.RestartSchedule {
-		result.BuildWarnings = append(result.BuildWarnings, sched.Warnings...)
-	}
-
-	// Build handlers and steps directly (they need access to partially built result)
-	if !ctx.opts.Has(BuildFlagOnlyMetadata) {
-		if handlerOn, err := buildHandlers(ctx, d, buildResult); err != nil {
-			errs = append(errs, core.NewValidationError("handlers", nil, err))
-		} else {
-			result.HandlerOn = handlerOn
-		}
-
-		if steps, err := buildSteps(ctx, d, buildResult); err != nil {
-			errs = append(errs, core.NewValidationError("steps", nil, err))
-		} else {
-			result.Steps = steps
-		}
-	}
-
-	// Validate steps
-	if err := core.ValidateSteps(result); err != nil {
-		errs = append(errs, err)
-	}
-
-	// Validate workerSelector compatibility with approval steps
-	if len(result.WorkerSelector) > 0 && result.HasApprovalSteps() {
-		errs = append(errs, core.NewValidationError(
-			"worker_selector",
-			result.WorkerSelector,
-			fmt.Errorf("DAG with approval steps cannot be dispatched to workers"),
-		))
-	}
-
-	// Validate name
-	if result.Name != "" {
-		if err := core.ValidateDAGName(result.Name); err != nil {
-			errs = append(errs, core.NewValidationError("name", result.Name, err))
-		}
-	}
-
-	if len(ctx.envScope.buildEnv) > 0 {
-		result.PresolvedBuildEnv = maps.Clone(ctx.envScope.buildEnv)
-	}
-
-	if len(errs) > 0 {
-		if ctx.opts.Has(BuildFlagAllowBuildErrors) {
-			result.BuildErrors = errs
-		} else {
-			return nil, fmt.Errorf("failed to build DAG: %w", errs)
-		}
-	}
-
-	return result, nil
 }
 
-func composeBuildDAGContext(base, current *core.DAG) (*core.DAG, error) {
+func (s *dagBuildState) validateSpecShape() {
+	if err := validateHistoryRetentionConfig(s.spec); err != nil {
+		s.errs = append(s.errs, err)
+	}
+}
+
+func (s *dagBuildState) prepareParamEnvStage() {
+	baseScope := cmnvalue.NewEnvScope(nil, true)
+
+	buildEnv := make(map[string]string, len(s.ctx.opts.BuildEnv))
+	maps.Copy(buildEnv, s.ctx.opts.BuildEnv)
+	if len(buildEnv) > 0 {
+		baseScope = baseScope.WithEntries(buildEnv, cmnvalue.EnvSourceDotEnv)
+	}
+	var consts map[string]any
+	if s.ctx.baseDAG != nil && len(s.ctx.baseDAG.Consts) > 0 {
+		consts = maps.Clone(s.ctx.baseDAG.Consts)
+	}
+
+	s.ctx.envScope = &envScopeState{
+		scope:    baseScope,
+		buildEnv: buildEnv,
+		consts:   consts,
+	}
+	s.ctx.paramsState = &paramsState{}
+}
+
+func (s *dagBuildState) runFieldStages() {
+	s.errs = append(s.errs, runTransformers(s.ctx, s.spec, s.result)...)
+}
+
+func (s *dagBuildState) composeInheritedContext() {
+	if s.ctx.baseDAG == nil {
+		return
+	}
+
+	merged, err := composeBuildDAGContext(s.ctx.baseDAG, s.result, s.spec)
+	if err != nil {
+		s.errs = append(s.errs, fmt.Errorf("failed to compose inherited DAG context: %w", err))
+		return
+	}
+	s.result = merged
+}
+
+func (s *dagBuildState) collectWarnings() {
+	s.result.BuildWarnings = nil
+
+	// Both max_active_runs > 1 (concurrency) and max_active_runs < 0 (queue bypass) are deprecated.
+	if s.result.Queue == "" && (s.result.MaxActiveRuns > 1 || s.result.MaxActiveRuns < 0) {
+		s.result.BuildWarnings = append(s.result.BuildWarnings, fmt.Sprintf(
+			"max_active_runs=%d is deprecated for local queues and will be ignored. "+
+				"Use a global queue with 'queue:' field for concurrency control.",
+			s.result.MaxActiveRuns,
+		))
+	}
+
+	for _, sched := range s.result.Schedule {
+		s.result.BuildWarnings = append(s.result.BuildWarnings, sched.Warnings...)
+	}
+	for _, sched := range s.result.StopSchedule {
+		s.result.BuildWarnings = append(s.result.BuildWarnings, sched.Warnings...)
+	}
+	for _, sched := range s.result.RestartSchedule {
+		s.result.BuildWarnings = append(s.result.BuildWarnings, sched.Warnings...)
+	}
+}
+
+func (s *dagBuildState) buildActionGraph() {
+	if s.ctx.opts.Has(BuildFlagOnlyMetadata) {
+		return
+	}
+
+	if handlerOn, err := buildHandlers(s.ctx, s.spec, s.result); err != nil {
+		s.errs = append(s.errs, core.NewValidationError("handlers", nil, err))
+	} else {
+		composed, err := composeHandlerOn(s.result.HandlerOn, handlerOn)
+		if err != nil {
+			s.errs = append(s.errs, core.NewValidationError("handlers", nil, err))
+		} else {
+			s.result.HandlerOn = composed
+		}
+	}
+
+	if steps, err := buildSteps(s.ctx, s.spec, s.result); err != nil {
+		s.errs = append(s.errs, core.NewValidationError("steps", nil, err))
+	} else {
+		s.result.Steps = composeSteps(s.result.Steps, steps)
+	}
+}
+
+func (s *dagBuildState) validateResult() {
+	if !s.ctx.opts.Has(BuildFlagOnlyMetadata) {
+		if err := core.ValidateSteps(s.result); err != nil {
+			s.errs = append(s.errs, err)
+		}
+
+		if len(s.result.WorkerSelector) > 0 && s.result.HasApprovalSteps() {
+			s.errs = append(s.errs, core.NewValidationError(
+				"worker_selector",
+				s.result.WorkerSelector,
+				fmt.Errorf("DAG with approval steps cannot be dispatched to workers"),
+			))
+		}
+	}
+
+	if s.result.Name != "" {
+		if err := core.ValidateDAGName(s.result.Name); err != nil {
+			s.errs = append(s.errs, core.NewValidationError("name", s.result.Name, err))
+		}
+	}
+}
+
+func (s *dagBuildState) capturePresolvedBuildEnv() {
+	if s.ctx.opts.Has(BuildFlagNoEval) {
+		return
+	}
+	if len(s.ctx.envScope.buildEnv) > 0 {
+		s.result.PresolvedBuildEnv = maps.Clone(s.ctx.envScope.buildEnv)
+	}
+}
+
+func (s *dagBuildState) markEnvEvaluated() {
+	s.result.EnvEvaluated = !s.ctx.opts.Has(BuildFlagNoEval)
+}
+
+func (s *dagBuildState) finish() (*core.DAG, error) {
+	if len(s.errs) > 0 {
+		if s.ctx.opts.Has(BuildFlagAllowBuildErrors) {
+			s.result.BuildErrors = s.errs
+		} else {
+			return nil, fmt.Errorf("failed to build DAG: %w", s.errs)
+		}
+	}
+	return s.result, nil
+}
+
+// build transforms the dag specification into a core.DAG.
+func (d *dag) build(ctx BuildContext) (*core.DAG, error) {
+	state := newDAGBuildState(ctx, d)
+	state.validateSpecShape()
+	state.prepareParamEnvStage()
+	state.runFieldStages()
+	state.composeInheritedContext()
+	state.markEnvEvaluated()
+	state.collectWarnings()
+	state.buildActionGraph()
+	state.validateResult()
+	state.capturePresolvedBuildEnv()
+	return state.finish()
+}
+
+func composeBuildDAGContext(base, current *core.DAG, currentSpec *dag) (*core.DAG, error) {
 	if base == nil {
 		return current, nil
 	}
@@ -664,8 +838,18 @@ func composeBuildDAGContext(base, current *core.DAG) (*core.DAG, error) {
 	if err := merge(effective, current); err != nil {
 		return nil, err
 	}
+	applyHistoryRetentionOverride(effective, currentSpec.HistRetentionDays != nil, currentSpec.HistRetentionRuns != nil)
 
 	return effective, nil
+}
+
+func applyHistoryRetentionOverride(effective *core.DAG, authoredDays, authoredRuns bool) {
+	if authoredRuns {
+		effective.HistRetentionDays = 0
+	}
+	if authoredDays {
+		effective.HistRetentionRuns = 0
+	}
 }
 
 // Builder functions - each returns a value instead of modifying result
@@ -673,7 +857,7 @@ func composeBuildDAGContext(base, current *core.DAG) (*core.DAG, error) {
 func buildType(_ BuildContext, d *dag) (string, error) {
 	t := strings.TrimSpace(d.Type)
 	if t == "" {
-		return core.TypeChain, nil
+		return core.TypeGraph, nil
 	}
 	switch t {
 	case core.TypeGraph, core.TypeChain:
@@ -722,21 +906,26 @@ func buildRestartWait(_ BuildContext, d *dag) (time.Duration, error) {
 	return time.Second * time.Duration(d.RestartWaitSec), nil
 }
 
-func buildTags(_ BuildContext, d *dag) (core.Tags, error) {
-	if d.Tags.IsZero() {
+func buildLabels(_ BuildContext, d *dag) (core.Labels, error) {
+	labelsValue := d.Labels
+	if labelsValue.IsZero() {
+		labelsValue = d.DeprecatedTags
+	}
+	if labelsValue.IsZero() {
 		return nil, nil
 	}
-	var tags core.Tags
-	for _, entry := range d.Tags.Entries() {
-		if entry.Key() == "" {
+	var labels core.Labels
+	for _, entry := range labelsValue.Entries() {
+		key := strings.ToLower(strings.TrimSpace(entry.Key()))
+		if key == "" {
 			continue
 		}
-		tags = append(tags, core.Tag{
-			Key:   strings.ToLower(strings.TrimSpace(entry.Key())),
+		labels = append(labels, core.Label{
+			Key:   key,
 			Value: strings.ToLower(strings.TrimSpace(entry.Value())),
 		})
 	}
-	return tags, nil
+	return labels, nil
 }
 
 func buildMaxActiveRuns(_ BuildContext, d *dag) (int, error) {
@@ -815,7 +1004,29 @@ func buildLogDir(_ BuildContext, d *dag) (string, error) {
 }
 
 func buildArtifacts(_ BuildContext, d *dag) (*core.ArtifactsConfig, error) {
+	usesArtifactAction := dagUsesBuiltinArtifactAction(d)
+	usesArtifactOutput := dagUsesArtifactOutput(d)
+	autoEnable := dagReferencesRunArtifactsDir(d) || usesArtifactAction || usesArtifactOutput
+
+	if usesArtifactAction && d.Artifacts != nil && d.Artifacts.Enabled != nil && !*d.Artifacts.Enabled {
+		return nil, core.NewValidationError(
+			"artifacts.enabled",
+			*d.Artifacts.Enabled,
+			fmt.Errorf("artifact actions require artifacts.enabled to be true"),
+		)
+	}
+	if usesArtifactOutput && d.Artifacts != nil && d.Artifacts.Enabled != nil && !*d.Artifacts.Enabled {
+		return nil, core.NewValidationError(
+			"artifacts.enabled",
+			*d.Artifacts.Enabled,
+			fmt.Errorf("artifact outputs require artifacts.enabled to be true"),
+		)
+	}
+
 	if d.Artifacts == nil {
+		if autoEnable {
+			return &core.ArtifactsConfig{Enabled: true}, nil
+		}
 		return nil, nil
 	}
 
@@ -824,11 +1035,310 @@ func buildArtifacts(_ BuildContext, d *dag) (*core.ArtifactsConfig, error) {
 	}
 	if d.Artifacts.Enabled != nil {
 		cfg.Enabled = *d.Artifacts.Enabled
+	} else if autoEnable {
+		cfg.Enabled = true
 	}
 	if d.Artifacts.Enabled == nil && cfg.Dir == "" {
-		return nil, nil
+		if !cfg.Enabled {
+			return nil, nil
+		}
 	}
 	return cfg, nil
+}
+
+func dagReferencesRunArtifactsDir(d *dag) bool {
+	return valueReferencesRunArtifactsDir(reflect.ValueOf(d))
+}
+
+func dagUsesBuiltinArtifactAction(d *dag) bool {
+	return valueUsesBuiltinArtifactAction(reflect.ValueOf(d))
+}
+
+func dagUsesArtifactOutput(d *dag) bool {
+	if d == nil {
+		return false
+	}
+	return valueUsesArtifactOutput(reflect.ValueOf(d.Steps)) ||
+		valueUsesArtifactOutput(reflect.ValueOf(d.HandlerOn)) ||
+		customStepSpecsUseArtifactOutput(d.StepTypes) ||
+		customStepSpecsUseArtifactOutput(d.Actions)
+}
+
+func customStepSpecsUseArtifactOutput(specs map[string]customStepTypeSpec) bool {
+	for _, spec := range specs {
+		if valueUsesArtifactOutput(reflect.ValueOf(spec.Template)) {
+			return true
+		}
+	}
+	return false
+}
+
+func referencesArtifactsEnvVar(s string) bool {
+	return dagRunArtifactsDirReferencePattern.MatchString(s)
+}
+
+func valueReferencesRunArtifactsDir(v reflect.Value) bool {
+	if !v.IsValid() {
+		return false
+	}
+
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return false
+		}
+		v = v.Elem()
+	}
+
+	switch v.Kind() {
+	case reflect.String:
+		return referencesArtifactsEnvVar(v.String())
+	case reflect.Array, reflect.Slice:
+		for i := 0; i < v.Len(); i++ {
+			if valueReferencesRunArtifactsDir(v.Index(i)) {
+				return true
+			}
+		}
+	case reflect.Map:
+		iter := v.MapRange()
+		for iter.Next() {
+			if valueReferencesRunArtifactsDir(iter.Key()) || valueReferencesRunArtifactsDir(iter.Value()) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		for _, field := range v.Fields() {
+			if valueReferencesRunArtifactsDir(field) {
+				return true
+			}
+		}
+	case reflect.Invalid,
+		reflect.Bool,
+		reflect.Int,
+		reflect.Int8,
+		reflect.Int16,
+		reflect.Int32,
+		reflect.Int64,
+		reflect.Uint,
+		reflect.Uint8,
+		reflect.Uint16,
+		reflect.Uint32,
+		reflect.Uint64,
+		reflect.Uintptr,
+		reflect.Float32,
+		reflect.Float64,
+		reflect.Complex64,
+		reflect.Complex128,
+		reflect.Chan,
+		reflect.Func,
+		reflect.Interface,
+		reflect.Pointer,
+		reflect.UnsafePointer:
+		return false
+	default:
+		return false
+	}
+
+	return false
+}
+
+func valueUsesBuiltinArtifactAction(v reflect.Value) bool {
+	if !v.IsValid() {
+		return false
+	}
+
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return false
+		}
+		v = v.Elem()
+	}
+
+	switch v.Kind() {
+	case reflect.String:
+		return false
+	case reflect.Map:
+		iter := v.MapRange()
+		for iter.Next() {
+			key := iter.Key()
+			value := iter.Value()
+			if key.Kind() == reflect.String && key.String() == "action" {
+				if action, ok := reflectString(value); ok && strings.HasPrefix(action, "artifact.") {
+					return true
+				}
+			}
+			if valueUsesBuiltinArtifactAction(key) || valueUsesBuiltinArtifactAction(value) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := range v.Len() {
+			if valueUsesBuiltinArtifactAction(v.Index(i)) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		t := v.Type()
+		for i := range v.NumField() {
+			fieldInfo := t.Field(i)
+			if fieldInfo.PkgPath != "" {
+				continue
+			}
+			field := v.Field(i)
+			if fieldInfo.Name == "Action" {
+				if action, ok := reflectString(field); ok && strings.HasPrefix(action, "artifact.") {
+					return true
+				}
+			}
+			if valueUsesBuiltinArtifactAction(field) {
+				return true
+			}
+		}
+	case reflect.Invalid,
+		reflect.Bool,
+		reflect.Int,
+		reflect.Int8,
+		reflect.Int16,
+		reflect.Int32,
+		reflect.Int64,
+		reflect.Uint,
+		reflect.Uint8,
+		reflect.Uint16,
+		reflect.Uint32,
+		reflect.Uint64,
+		reflect.Uintptr,
+		reflect.Float32,
+		reflect.Float64,
+		reflect.Complex64,
+		reflect.Complex128,
+		reflect.Chan,
+		reflect.Func,
+		reflect.Interface,
+		reflect.Pointer,
+		reflect.UnsafePointer:
+		return false
+	default:
+		return false
+	}
+	return false
+}
+
+func valueUsesArtifactOutput(v reflect.Value) bool {
+	if !v.IsValid() {
+		return false
+	}
+
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return false
+		}
+		v = v.Elem()
+	}
+
+	switch v.Kind() {
+	case reflect.Map:
+		iter := v.MapRange()
+		for iter.Next() {
+			key := iter.Key()
+			value := iter.Value()
+			if key.Kind() == reflect.String && isArtifactOutputField(key.String()) && valueIsArtifactOutputConfig(value) {
+				return true
+			}
+			if valueUsesArtifactOutput(key) || valueUsesArtifactOutput(value) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := range v.Len() {
+			if valueUsesArtifactOutput(v.Index(i)) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		t := v.Type()
+		for i := range v.NumField() {
+			fieldInfo := t.Field(i)
+			if fieldInfo.PkgPath != "" {
+				continue
+			}
+			field := v.Field(i)
+			if isArtifactOutputField(fieldInfo.Name) && valueIsArtifactOutputConfig(field) {
+				return true
+			}
+			if valueUsesArtifactOutput(field) {
+				return true
+			}
+		}
+	case reflect.String,
+		reflect.Invalid,
+		reflect.Bool,
+		reflect.Int,
+		reflect.Int8,
+		reflect.Int16,
+		reflect.Int32,
+		reflect.Int64,
+		reflect.Uint,
+		reflect.Uint8,
+		reflect.Uint16,
+		reflect.Uint32,
+		reflect.Uint64,
+		reflect.Uintptr,
+		reflect.Float32,
+		reflect.Float64,
+		reflect.Complex64,
+		reflect.Complex128,
+		reflect.Chan,
+		reflect.Func,
+		reflect.Interface,
+		reflect.Pointer,
+		reflect.UnsafePointer:
+		return false
+	default:
+		return false
+	}
+	return false
+}
+
+func isArtifactOutputField(name string) bool {
+	return name == "stdout" || name == "stderr" || name == "Stdout" || name == "Stderr"
+}
+
+func valueIsArtifactOutputConfig(v reflect.Value) bool {
+	if !v.IsValid() {
+		return false
+	}
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return false
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Map {
+		return false
+	}
+	iter := v.MapRange()
+	for iter.Next() {
+		key := iter.Key()
+		if key.Kind() == reflect.String && key.String() == "artifact" {
+			return true
+		}
+	}
+	return false
+}
+
+func reflectString(v reflect.Value) (string, bool) {
+	if !v.IsValid() {
+		return "", false
+	}
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return "", false
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.String {
+		return "", false
+	}
+	return strings.TrimSpace(v.String()), true
 }
 
 func buildLogOutput(_ BuildContext, d *dag) (core.LogOutputMode, error) {
@@ -861,11 +1371,84 @@ func buildRunConfig(_ BuildContext, d *dag) (*core.RunConfig, error) {
 	}, nil
 }
 
+func buildResources(_ BuildContext, d *dag) (*core.Resources, error) {
+	if d.Resources == nil || d.Resources.Limits == nil {
+		return nil, nil
+	}
+	limits, err := core.NewResourceLimits(d.Resources.Limits.CPU, d.Resources.Limits.Memory)
+	if err != nil {
+		return nil, err
+	}
+	if limits == nil {
+		return nil, nil
+	}
+	return &core.Resources{Limits: limits}, nil
+}
+
+func buildWebhookConfig(_ BuildContext, d *dag) (*core.WebhookConfig, error) {
+	if d.Webhook == nil {
+		return nil, nil
+	}
+
+	headers := make([]string, 0, len(d.Webhook.ForwardHeaders))
+	for i, raw := range d.Webhook.ForwardHeaders {
+		header := core.NormalizeWebhookForwardHeader(raw)
+		if header == "" {
+			return nil, core.NewValidationError(
+				fmt.Sprintf("webhook.forward_headers[%d]", i),
+				raw,
+				fmt.Errorf("header name cannot be empty"),
+			)
+		}
+		if !core.IsValidWebhookHeaderToken(header) {
+			return nil, core.NewValidationError(
+				fmt.Sprintf("webhook.forward_headers[%d]", i),
+				raw,
+				fmt.Errorf("invalid HTTP header name"),
+			)
+		}
+		if core.IsDeniedWebhookForwardHeader(header) {
+			return nil, core.NewValidationError(
+				fmt.Sprintf("webhook.forward_headers[%d]", i),
+				raw,
+				fmt.Errorf("authorization header cannot be forwarded"),
+			)
+		}
+		headers = append(headers, header)
+	}
+
+	return &core.WebhookConfig{ForwardHeaders: headers}, nil
+}
+
 func buildHistRetentionDays(_ BuildContext, d *dag) (int, error) {
 	if d.HistRetentionDays != nil {
+		if *d.HistRetentionDays < 0 {
+			return 0, fmt.Errorf("hist_retention_days must be >= 0")
+		}
 		return *d.HistRetentionDays, nil
 	}
 	return 0, nil
+}
+
+func buildHistRetentionRuns(_ BuildContext, d *dag) (int, error) {
+	if d.HistRetentionRuns != nil {
+		if *d.HistRetentionRuns <= 0 {
+			return 0, fmt.Errorf("hist_retention_runs must be > 0")
+		}
+		return *d.HistRetentionRuns, nil
+	}
+	return 0, nil
+}
+
+func validateHistoryRetentionConfig(d *dag) error {
+	if d.HistRetentionDays == nil || d.HistRetentionRuns == nil {
+		return nil
+	}
+	return core.NewValidationError(
+		"hist_retention_runs",
+		*d.HistRetentionRuns,
+		fmt.Errorf("hist_retention_days and hist_retention_runs cannot both be specified"),
+	)
 }
 
 func buildMaxCleanUpTime(_ BuildContext, d *dag) (time.Duration, error) {
@@ -876,7 +1459,7 @@ func buildMaxCleanUpTime(_ BuildContext, d *dag) (time.Duration, error) {
 }
 
 func buildEnvs(ctx BuildContext, d *dag) ([]string, error) {
-	vars, err := loadVariablesFromEnvValue(ctx, d.Env)
+	entries, vars, err := loadEnvEntriesFromEnvValue(ctx, d.Env)
 	if err != nil {
 		return nil, err
 	}
@@ -884,13 +1467,13 @@ func buildEnvs(ctx BuildContext, d *dag) ([]string, error) {
 	// Add vars to the shared envScope state so subsequent transformers can use it.
 	// This replaces the old pattern of using os.Setenv which caused race conditions.
 	if ctx.envScope != nil && len(vars) > 0 {
-		ctx.envScope.scope = ctx.envScope.scope.WithEntries(vars, eval.EnvSourceDAGEnv)
+		ctx.envScope.scope = ctx.envScope.scope.WithEntries(vars, cmnvalue.EnvSourceDAGEnv)
 		maps.Copy(ctx.envScope.buildEnv, vars)
 	}
 
-	var envs []string
-	for k, v := range vars {
-		envs = append(envs, fmt.Sprintf("%s=%s", k, v))
+	envs := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		envs = append(envs, entry.String())
 	}
 	return envs, nil
 }
@@ -921,6 +1504,7 @@ type paramsResult struct {
 	Params        []string
 	DefaultParams string
 	ParamDefs     []core.ParamDef
+	ParamSchema   json.RawMessage
 	ParamsJSON    string // JSON representation of resolved params (original payload when provided as JSON)
 }
 
@@ -930,16 +1514,53 @@ func buildParams(ctx BuildContext, d *dag) ([]string, error) {
 		return nil, err
 	}
 	// Add resolved params to envScope so env: can reference ${param_name}
-	if ctx.envScope != nil && len(result.Params) > 0 {
-		paramVars := make(map[string]string, len(result.Params))
-		for _, p := range result.Params {
-			if k, v, ok := strings.Cut(p, "="); ok {
-				paramVars[k] = v
+	if ctx.envScope != nil {
+		ctx.envScope.paramDeclarations = paramDeclarationsFromResult(result)
+		ctx.envScope.params = paramValuesFromResult(result)
+		if len(result.Params) > 0 {
+			paramVars := make(map[string]string, len(result.Params))
+			for _, p := range result.Params {
+				if k, v, ok := strings.Cut(p, "="); ok {
+					paramVars[k] = v
+				}
 			}
+			ctx.envScope.scope = ctx.envScope.scope.WithEntries(paramVars, cmnvalue.EnvSourceParam)
 		}
-		ctx.envScope.scope = ctx.envScope.scope.WithEntries(paramVars, eval.EnvSourceParam)
 	}
 	return result.Params, nil
+}
+
+func paramDeclarationsFromResult(result *paramsResult) cmnvalue.Values {
+	if result == nil {
+		return nil
+	}
+	declarations := make(cmnvalue.Values)
+	for _, def := range result.ParamDefs {
+		if isParamReferenceName(def.Name) {
+			declarations[def.Name] = ""
+		}
+	}
+	if len(declarations) == 0 {
+		return nil
+	}
+	return declarations
+}
+
+func paramValuesFromResult(result *paramsResult) cmnvalue.Values {
+	if result == nil || len(result.Params) == 0 {
+		return nil
+	}
+	params := make(cmnvalue.Values)
+	for _, param := range result.Params {
+		name, value, ok := strings.Cut(param, "=")
+		if ok && isParamReferenceName(name) {
+			params[name] = value
+		}
+	}
+	if len(params) == 0 {
+		return nil
+	}
+	return params
 }
 
 func buildDefaultParams(ctx BuildContext, d *dag) (string, error) {
@@ -964,6 +1585,14 @@ func buildParamsJSON(ctx BuildContext, d *dag) (string, error) {
 		return "", err
 	}
 	return result.ParamsJSON, nil
+}
+
+func buildParamSchema(ctx BuildContext, d *dag) (json.RawMessage, error) {
+	result, err := parseParamsInternal(ctx, d)
+	if err != nil {
+		return nil, err
+	}
+	return cloneParamSchema(result.ParamSchema), nil
 }
 
 // detectJSONParams checks if the input string is valid JSON and returns it if so.
@@ -993,7 +1622,7 @@ func parseDAGRetryInterval(v any) (time.Duration, string, error) {
 	if v == nil {
 		return 60 * time.Second, "", nil
 	}
-	interval, intervalStr, err := parseConcreteDAGRetryInt("retry_policy.interval_sec", v)
+	interval, intervalStr, err := parseConcreteDAGRetryInt("retry_policy.interval_sec", v, false)
 	if err != nil {
 		return 0, "", err
 	}
@@ -1012,7 +1641,7 @@ func parseDAGRetryMaxInterval(v any) (time.Duration, error) {
 	if v == nil {
 		return time.Hour, nil
 	}
-	seconds, _, err := parseConcreteDAGRetryInt("retry_policy.max_interval_sec", v)
+	seconds, _, err := parseConcreteDAGRetryInt("retry_policy.max_interval_sec", v, false)
 	if err != nil {
 		return 0, err
 	}
@@ -1023,31 +1652,39 @@ func parseDAGRetryLimit(v any) (int, error) {
 	if v == nil {
 		return 0, core.NewValidationError("retry_policy.limit", nil, fmt.Errorf("limit is required when retry_policy is specified"))
 	}
-	limit, _, err := parseConcreteDAGRetryInt("retry_policy.limit", v)
+	limit, _, err := parseConcreteDAGRetryInt("retry_policy.limit", v, true)
 	if err != nil {
 		return 0, err
 	}
 	return limit, nil
 }
 
-func parseConcreteDAGRetryInt(fieldName string, val any) (int, string, error) {
+func parseConcreteDAGRetryInt(fieldName string, val any, allowZero bool) (int, string, error) {
+	invalidPositiveValue := func(value any) (int, string, error) {
+		operator := "> 0"
+		if allowZero {
+			operator = ">= 0"
+		}
+		return 0, "", core.NewValidationError(fieldName, value, fmt.Errorf("%s must be %s", retryFieldLabel(fieldName), operator))
+	}
+
 	switch v := val.(type) {
 	case int:
-		if v <= 0 {
-			return 0, "", core.NewValidationError(fieldName, v, fmt.Errorf("%s must be > 0", retryFieldLabel(fieldName)))
+		if v < 0 || (!allowZero && v == 0) {
+			return invalidPositiveValue(v)
 		}
 		return v, "", nil
 	case int64:
-		if v <= 0 {
-			return 0, "", core.NewValidationError(fieldName, v, fmt.Errorf("%s must be > 0", retryFieldLabel(fieldName)))
+		if v < 0 || (!allowZero && v == 0) {
+			return invalidPositiveValue(v)
 		}
 		if v > math.MaxInt {
 			return 0, "", core.NewValidationError(fieldName, v, fmt.Errorf("value %d exceeds maximum int", v))
 		}
 		return int(v), "", nil
 	case uint64:
-		if v == 0 {
-			return 0, "", core.NewValidationError(fieldName, v, fmt.Errorf("%s must be > 0", retryFieldLabel(fieldName)))
+		if !allowZero && v == 0 {
+			return invalidPositiveValue(v)
 		}
 		if v > math.MaxInt {
 			return 0, "", core.NewValidationError(fieldName, v, fmt.Errorf("value %d exceeds maximum int", v))
@@ -1058,8 +1695,8 @@ func parseConcreteDAGRetryInt(fieldName string, val any) (int, string, error) {
 		if err != nil {
 			return 0, "", core.NewValidationError(fieldName, v, fmt.Errorf("%s must be an integer or numeric string", retryFieldLabel(fieldName)))
 		}
-		if parsed <= 0 {
-			return 0, "", core.NewValidationError(fieldName, v, fmt.Errorf("%s must be > 0", retryFieldLabel(fieldName)))
+		if parsed < 0 || (!allowZero && parsed == 0) {
+			return invalidPositiveValue(v)
 		}
 		return parsed, v, nil
 	default:
@@ -1242,7 +1879,7 @@ func buildShellArgs(ctx BuildContext, d *dag) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return result.Args, nil
+	return append(result.Args, d.ShellArgs...), nil
 }
 
 func buildWorkingDir(ctx BuildContext, d *dag) (string, error) {
@@ -2066,11 +2703,174 @@ func buildHarness(ctx BuildContext, d *dag) (*core.HarnessConfig, error) {
 	}, nil
 }
 
-func buildSecrets(_ BuildContext, d *dag) ([]core.SecretRef, error) {
+func buildSecrets(ctx BuildContext, d *dag) ([]core.SecretRef, error) {
 	if len(d.Secrets) == 0 {
 		return nil, nil
 	}
-	return parseSecretRefs(d.Secrets)
+	return parseSecretRefs(ctx, d)
+}
+
+func buildTools(_ BuildContext, d *dag) (*core.ToolConfig, error) {
+	if d.Tools == nil {
+		return nil, nil
+	}
+
+	provider := strings.TrimSpace(d.Tools.Provider)
+	if provider == "" {
+		provider = "aqua"
+	}
+	if provider != "aqua" {
+		return nil, fmt.Errorf("unsupported tools provider %q", provider)
+	}
+	if len(d.Tools.Packages) == 0 {
+		return nil, fmt.Errorf("packages is required")
+	}
+
+	cfg := &core.ToolConfig{
+		Provider: provider,
+		Packages: make([]core.ToolPackage, 0, len(d.Tools.Packages)),
+	}
+	registry, err := buildToolRegistry(d.Tools.Registry)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Registry = registry
+
+	seenCommands := make(map[string]struct{})
+	for i, pkg := range d.Tools.Packages {
+		item, err := buildToolPackage(pkg, seenCommands)
+		if err != nil {
+			return nil, fmt.Errorf("packages[%d]: %w", i, err)
+		}
+		cfg.Packages = append(cfg.Packages, item)
+	}
+	return cfg, nil
+}
+
+func buildToolRegistry(registry *toolRegistry) (*core.ToolRegistry, error) {
+	if registry == nil {
+		return &core.ToolRegistry{
+			Name: "standard",
+			Type: "standard",
+			Ref:  core.DefaultAquaStandardRegistryRef,
+		}, nil
+	}
+
+	name := strings.TrimSpace(registry.Name)
+	typ := strings.TrimSpace(registry.Type)
+	ref := strings.TrimSpace(registry.Ref)
+	if typ == "" {
+		typ = "standard"
+	}
+	if name == "" {
+		name = "standard"
+	}
+
+	switch typ {
+	case "standard":
+		if ref == "" {
+			ref = core.DefaultAquaStandardRegistryRef
+		}
+		return &core.ToolRegistry{
+			Name: name,
+			Type: typ,
+			Ref:  ref,
+		}, nil
+	case "github_content":
+		if ref == "" {
+			return nil, fmt.Errorf("registry.ref is required")
+		}
+		repoOwner := strings.TrimSpace(registry.RepoOwner)
+		repoName := strings.TrimSpace(registry.RepoName)
+		path := strings.TrimSpace(registry.Path)
+		if repoOwner == "" {
+			return nil, fmt.Errorf("registry.repo_owner is required")
+		}
+		if repoName == "" {
+			return nil, fmt.Errorf("registry.repo_name is required")
+		}
+		if path == "" {
+			return nil, fmt.Errorf("registry.path is required")
+		}
+		return &core.ToolRegistry{
+			Name:      name,
+			Type:      typ,
+			RepoOwner: repoOwner,
+			RepoName:  repoName,
+			Ref:       ref,
+			Path:      path,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported tools registry type %q", typ)
+	}
+}
+
+func buildToolPackage(pkg toolPackage, seenCommands map[string]struct{}) (core.ToolPackage, error) {
+	name := strings.TrimSpace(pkg.Name)
+	packageName := strings.TrimSpace(pkg.Package)
+	version := strings.TrimSpace(pkg.Version)
+	registry := strings.TrimSpace(pkg.Registry)
+	if packageName == "" {
+		return core.ToolPackage{}, fmt.Errorf("package is required")
+	}
+	if version == "" {
+		return core.ToolPackage{}, fmt.Errorf("version is required")
+	}
+	if strings.EqualFold(version, "latest") {
+		return core.ToolPackage{}, fmt.Errorf("version must be pinned, got %q", version)
+	}
+	commands := make([]string, 0, len(pkg.Commands))
+	for _, command := range pkg.Commands {
+		command = strings.TrimSpace(command)
+		if command == "" {
+			return core.ToolPackage{}, fmt.Errorf("commands cannot contain an empty value")
+		}
+		if !isToolCommandName(command) {
+			return core.ToolPackage{}, fmt.Errorf("command %q must be an executable name, not a path or shell fragment", command)
+		}
+		if _, ok := seenCommands[command]; ok {
+			return core.ToolPackage{}, fmt.Errorf("duplicate command %q", command)
+		}
+		seenCommands[command] = struct{}{}
+		commands = append(commands, command)
+	}
+	if name == "" {
+		name = toolPackageDisplayName(packageName, commands)
+	}
+	return core.ToolPackage{
+		Name:     name,
+		Package:  packageName,
+		Version:  version,
+		Commands: commands,
+		Registry: registry,
+	}, nil
+}
+
+func toolPackageDisplayName(packageName string, commands []string) string {
+	if len(commands) != 0 {
+		return commands[0]
+	}
+	if i := strings.LastIndex(packageName, "/"); i != -1 {
+		return packageName[i+1:]
+	}
+	return packageName
+}
+
+func isToolCommandName(command string) bool {
+	if command == "" {
+		return false
+	}
+	for _, r := range command {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '.' || r == '_' || r == '-' || r == '+':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func extractHarnessFallback(config map[string]any) ([]map[string]any, error) {
@@ -2118,7 +2918,10 @@ func validateHarnessProviderConfig(defs core.HarnessDefinitions, cfg map[string]
 	if strings.Contains(providerName, "${") {
 		return nil
 	}
-	if core.IsBuiltinHarnessProvider(providerName) {
+	if core.IsBuiltinAgentHarnessProvider(providerName) {
+		return core.ValidateBuiltinAgentHarnessConfig(cfg)
+	}
+	if core.IsBuiltinCLIHarnessProvider(providerName) {
 		return nil
 	}
 	if defs != nil {
@@ -2177,6 +2980,45 @@ func buildDotenv(_ BuildContext, d *dag) ([]string, error) {
 		return []string{".env"}, nil
 	}
 	return d.Dotenv.Values(), nil
+}
+
+func composeSteps(inherited, current []core.Step) []core.Step {
+	if current == nil {
+		return inherited
+	}
+	return current
+}
+
+func composeHandlerOn(inherited, current core.HandlerOn) (core.HandlerOn, error) {
+	dest := &core.DAG{
+		HandlerOn: cloneHandlerOn(inherited),
+	}
+	src := &core.DAG{
+		HandlerOn: current,
+	}
+	if err := merge(dest, src); err != nil {
+		return inherited, err
+	}
+	return dest.HandlerOn, nil
+}
+
+func cloneHandlerOn(handlerOn core.HandlerOn) core.HandlerOn {
+	return core.HandlerOn{
+		Init:    cloneStepPointer(handlerOn.Init),
+		Failure: cloneStepPointer(handlerOn.Failure),
+		Success: cloneStepPointer(handlerOn.Success),
+		Abort:   cloneStepPointer(handlerOn.Abort),
+		Exit:    cloneStepPointer(handlerOn.Exit),
+		Wait:    cloneStepPointer(handlerOn.Wait),
+	}
+}
+
+func cloneStepPointer(step *core.Step) *core.Step {
+	if step == nil {
+		return nil
+	}
+	cloned := *step
+	return &cloned
 }
 
 func buildHandlers(ctx BuildContext, d *dag, result *core.DAG) (core.HandlerOn, error) {

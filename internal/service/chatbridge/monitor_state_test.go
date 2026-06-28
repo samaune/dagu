@@ -15,10 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dagucloud/dagu/internal/cmn/dirlock"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
-	"github.com/dagucloud/dagu/internal/persis/fileeventstore"
+	fileeventstore "github.com/dagucloud/dagu/internal/persis/file/eventstore"
 	"github.com/dagucloud/dagu/internal/service/eventstore"
 	"github.com/dagucloud/dagu/internal/testutil"
 	"github.com/stretchr/testify/assert"
@@ -41,6 +40,16 @@ func notificationMonitorEventuallyTimeout(base time.Duration) time.Duration {
 	return base
 }
 
+func requireNotificationMonitorShutdown(t *testing.T, name string, done <-chan struct{}) {
+	t.Helper()
+
+	select {
+	case <-done:
+	case <-time.After(notificationMonitorEventuallyTimeout(2 * time.Second)):
+		t.Fatalf("timed out waiting for %s shutdown", name)
+	}
+}
+
 func TestNotificationMonitor_BootstrapsFromCurrentHeadAndOnlyDeliversFutureEvents(t *testing.T) {
 	t.Parallel()
 
@@ -53,12 +62,13 @@ func TestNotificationMonitor_BootstrapsFromCurrentHeadAndOnlyDeliversFutureEvent
 		Name:       "briefing",
 		DAGRunID:   "run-old",
 		AttemptID:  "attempt-old",
-		Status:     core.Succeeded,
+		Status:     core.Failed,
+		Error:      "old failure",
 		FinishedAt: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339),
 	}
 	require.NoError(t, service.Emit(context.Background(), eventstore.NewDAGRunEvent(
 		eventstore.Source{Service: eventstore.SourceServiceServer, Instance: "test"},
-		eventstore.TypeDAGRunSucceeded,
+		eventstore.TypeDAGRunFailed,
 		oldStatus,
 		nil,
 	)))
@@ -96,12 +106,13 @@ func TestNotificationMonitor_BootstrapsFromCurrentHeadAndOnlyDeliversFutureEvent
 		Name:       "briefing",
 		DAGRunID:   "run-new",
 		AttemptID:  "attempt-new",
-		Status:     core.Succeeded,
+		Status:     core.Failed,
+		Error:      "new failure",
 		FinishedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	require.NoError(t, service.Emit(context.Background(), eventstore.NewDAGRunEvent(
 		eventstore.Source{Service: eventstore.SourceServiceServer, Instance: "test"},
-		eventstore.TypeDAGRunSucceeded,
+		eventstore.TypeDAGRunFailed,
 		newStatus,
 		nil,
 	)))
@@ -170,7 +181,7 @@ func TestNotificationMonitor_RestartRequeuesPersistedPending(t *testing.T) {
 		called := calls
 		mu.Unlock()
 		return called >= 1 && secondMonitor.IsDelivered("dest-1", status)
-	}, time.Second, 10*time.Millisecond)
+	}, notificationMonitorEventuallyTimeout(time.Second), 10*time.Millisecond)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -232,16 +243,8 @@ func TestNotificationMonitor_StateLockAllowsSingleWriterAndTakeover(t *testing.T
 	defer func() {
 		cancel1()
 		cancel2()
-		select {
-		case <-done1:
-		case <-time.After(time.Second):
-			t.Fatal("timed out waiting for monitor-1 shutdown")
-		}
-		select {
-		case <-done2:
-		case <-time.After(time.Second):
-			t.Fatal("timed out waiting for monitor-2 shutdown")
-		}
+		requireNotificationMonitorShutdown(t, "monitor-1", done1)
+		requireNotificationMonitorShutdown(t, "monitor-2", done2)
 	}()
 
 	require.Eventually(t, func() bool {
@@ -259,18 +262,19 @@ func TestNotificationMonitor_StateLockAllowsSingleWriterAndTakeover(t *testing.T
 		default:
 			return false
 		}
-	}, time.Second, 10*time.Millisecond)
+	}, notificationMonitorEventuallyTimeout(time.Second), 10*time.Millisecond)
 
 	firstStatus := &exec.DAGRunStatus{
 		Name:       "briefing",
 		DAGRunID:   "run-first",
 		AttemptID:  "attempt-first",
-		Status:     core.Succeeded,
+		Status:     core.Failed,
+		Error:      "first failure",
 		FinishedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	require.NoError(t, service.Emit(context.Background(), eventstore.NewDAGRunEvent(
 		eventstore.Source{Service: eventstore.SourceServiceServer, Instance: "test"},
-		eventstore.TypeDAGRunSucceeded,
+		eventstore.TypeDAGRunFailed,
 		firstStatus,
 		nil,
 	)))
@@ -297,11 +301,7 @@ func TestNotificationMonitor_StateLockAllowsSingleWriterAndTakeover(t *testing.T
 	switch firstOwner {
 	case "monitor-1":
 		cancel1()
-		select {
-		case <-done1:
-		case <-time.After(time.Second):
-			t.Fatal("timed out waiting for monitor-1 shutdown")
-		}
+		requireNotificationMonitorShutdown(t, "monitor-1", done1)
 		require.Eventually(t, func() bool {
 			monitor2.stateMu.Lock()
 			bootstrapped := monitor2.state.Bootstrapped
@@ -310,11 +310,7 @@ func TestNotificationMonitor_StateLockAllowsSingleWriterAndTakeover(t *testing.T
 		}, notificationMonitorEventuallyTimeout(2*time.Second), 10*time.Millisecond)
 	case "monitor-2":
 		cancel2()
-		select {
-		case <-done2:
-		case <-time.After(time.Second):
-			t.Fatal("timed out waiting for monitor-2 shutdown")
-		}
+		requireNotificationMonitorShutdown(t, "monitor-2", done2)
 		require.Eventually(t, func() bool {
 			monitor1.stateMu.Lock()
 			bootstrapped := monitor1.state.Bootstrapped
@@ -329,12 +325,13 @@ func TestNotificationMonitor_StateLockAllowsSingleWriterAndTakeover(t *testing.T
 		Name:       "briefing",
 		DAGRunID:   "run-second",
 		AttemptID:  "attempt-second",
-		Status:     core.Succeeded,
+		Status:     core.Failed,
+		Error:      "second failure",
 		FinishedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	require.NoError(t, service.Emit(context.Background(), eventstore.NewDAGRunEvent(
 		eventstore.Source{Service: eventstore.SourceServiceServer, Instance: "test"},
-		eventstore.TypeDAGRunSucceeded,
+		eventstore.TypeDAGRunFailed,
 		secondStatus,
 		nil,
 	)))
@@ -368,12 +365,13 @@ func TestNotificationMonitor_CorruptStateIsQuarantinedAndOnlyFutureEventsAreDeli
 		Name:       "briefing",
 		DAGRunID:   "run-old",
 		AttemptID:  "attempt-old",
-		Status:     core.Succeeded,
+		Status:     core.Failed,
+		Error:      "old failure",
 		FinishedAt: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339),
 	}
 	require.NoError(t, service.Emit(context.Background(), eventstore.NewDAGRunEvent(
 		eventstore.Source{Service: eventstore.SourceServiceServer, Instance: "test"},
-		eventstore.TypeDAGRunSucceeded,
+		eventstore.TypeDAGRunFailed,
 		oldStatus,
 		nil,
 	)))
@@ -417,12 +415,13 @@ func TestNotificationMonitor_CorruptStateIsQuarantinedAndOnlyFutureEventsAreDeli
 		Name:       "briefing",
 		DAGRunID:   "run-new",
 		AttemptID:  "attempt-new",
-		Status:     core.Succeeded,
+		Status:     core.Failed,
+		Error:      "new failure",
 		FinishedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	require.NoError(t, service.Emit(context.Background(), eventstore.NewDAGRunEvent(
 		eventstore.Source{Service: eventstore.SourceServiceServer, Instance: "test"},
-		eventstore.TypeDAGRunSucceeded,
+		eventstore.TypeDAGRunFailed,
 		newStatus,
 		nil,
 	)))
@@ -507,12 +506,13 @@ func TestNotificationMonitor_SaveFailureDoesNotLoseUnreadEvents(t *testing.T) {
 		Name:       "briefing",
 		DAGRunID:   "run-save-retry",
 		AttemptID:  "attempt-save-retry",
-		Status:     core.Succeeded,
+		Status:     core.Failed,
+		Error:      "retry failure",
 		FinishedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	require.NoError(t, service.Emit(context.Background(), eventstore.NewDAGRunEvent(
 		eventstore.Source{Service: eventstore.SourceServiceServer, Instance: "test"},
-		eventstore.TypeDAGRunSucceeded,
+		eventstore.TypeDAGRunFailed,
 		status,
 		nil,
 	)))
@@ -732,42 +732,31 @@ func TestNotificationMonitor_LockTheftSelfFencesActiveOwner(t *testing.T) {
 	}()
 	defer func() {
 		cancel()
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			t.Fatal("timed out waiting for monitor shutdown")
-		}
+		requireNotificationMonitorShutdown(t, "monitor", done)
 	}()
 
 	require.Eventually(t, func() bool {
 		return monitor.ownsNotificationLock() && monitor.notificationSessionActive()
-	}, time.Second, 10*time.Millisecond)
+	}, notificationMonitorEventuallyTimeout(time.Second), 10*time.Millisecond)
 
 	lockDir := notificationStateLockDir(stateFile)
 	lockTokenPath := filepath.Join(lockDir, ".dagu_lock", "owner")
 	require.NoError(t, os.WriteFile(lockTokenPath, []byte("replacement-owner"), 0o600))
 	require.Eventually(t, func() bool {
 		return !monitor.ownsNotificationLock() && !monitor.notificationSessionActive()
-	}, 2*time.Second, 10*time.Millisecond)
-
-	require.NoError(t, dirlock.ForceUnlock(lockDir))
-	replacement := dirlock.New(lockDir, &dirlock.LockOptions{
-		StaleThreshold: time.Hour,
-		RetryInterval:  10 * time.Millisecond,
-	})
-	require.NoError(t, replacement.TryLock())
-	defer func() { _ = replacement.Unlock() }()
+	}, notificationMonitorEventuallyTimeout(2*time.Second), 10*time.Millisecond)
 
 	status := &exec.DAGRunStatus{
 		Name:       "briefing",
 		DAGRunID:   "run-stolen-lock",
 		AttemptID:  "attempt-stolen-lock",
-		Status:     core.Succeeded,
+		Status:     core.Failed,
+		Error:      "lock failure",
 		FinishedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	require.NoError(t, service.Emit(context.Background(), eventstore.NewDAGRunEvent(
 		eventstore.Source{Service: eventstore.SourceServiceServer, Instance: "test"},
-		eventstore.TypeDAGRunSucceeded,
+		eventstore.TypeDAGRunFailed,
 		status,
 		nil,
 	)))

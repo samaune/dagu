@@ -7,6 +7,7 @@ import {
   loginViaAPI,
   loginViaUI,
   uniqueName,
+  useDefaultWorkspaceScope,
   waitForDAGAvailable,
   writeLocalDAG,
 } from './helpers/e2e';
@@ -18,10 +19,17 @@ function dagDefinitionsEntry(page: Page, dagName: string) {
     .first();
 }
 
+function localScopedURL(baseURL: string, path: string) {
+  const url = new URL(path, baseURL);
+  url.searchParams.set('remoteNode', 'local');
+  return url.toString();
+}
+
 test.describe('DAG CRUD operations', () => {
   test.beforeEach(async ({ page }) => {
     const stack = await loadStack();
     await loginViaUI(page, stack.auth.adminUsername, stack.auth.adminPassword);
+    await useDefaultWorkspaceScope(page);
   });
 
   test('creates a new DAG from the UI', async ({ page }) => {
@@ -57,7 +65,7 @@ test.describe('DAG CRUD operations', () => {
 name: ${dagName}
 steps:
   - name: echo
-    command: echo "rename test"
+    run: echo "rename test"
 `
     );
     await waitForDAGAvailable(request, token, fileName);
@@ -74,7 +82,9 @@ steps:
     await dialog.getByLabel('DAG Name').fill(newName);
     await dialog.getByRole('button', { name: 'Rename' }).click();
 
-    await expect(page).toHaveURL(new RegExp(`/dags/${newName}$`));
+    await expect(page).toHaveURL(
+      localScopedURL(stack.local.baseURL, `/dags/${encodeURIComponent(newName)}`)
+    );
   });
 
   test('deletes a DAG from the UI', async ({ page, request }) => {
@@ -92,7 +102,7 @@ steps:
 name: ${dagName}
 steps:
   - name: echo
-    command: echo "delete test"
+    run: echo "delete test"
 `
     );
     await waitForDAGAvailable(request, token, fileName);
@@ -105,7 +115,7 @@ steps:
     page.once('dialog', (d) => d.accept());
     await page.getByRole('button', { name: 'Delete', exact: true }).click();
 
-    await expect(page).toHaveURL(/\/dags$/);
+    await expect(page).toHaveURL(localScopedURL(stack.local.baseURL, '/dags'));
 
     // Verify DAG is gone via API
     const response = await request.get(
@@ -136,7 +146,7 @@ name: ${dagName}
 schedule: "0 0 * * *"
 steps:
   - name: echo
-    command: echo "suspend test"
+    run: echo "suspend test"
 `
     );
     await waitForDAGAvailable(request, token, fileName);

@@ -6,17 +6,25 @@
  *
  * @module features/dags/components/dag-editor
  */
-import { useCanWrite } from '@/contexts/AuthContext';
-import BorderedBox from '@/ui/BorderedBox';
-import { AlertTriangle, Save, Undo2 } from 'lucide-react';
+import { useCanWriteForWorkspace } from '@/contexts/AuthContext';
+import { StepDetailsDrawer } from '@/features/dags/components/step-details';
+import { toMermaidNodeId } from '@/lib/utils';
+import { workspaceNameFromLabels } from '@/lib/workspace';
+import BorderedBox from '@/components/ui/bordered-box';
+import { AlertTriangle, MousePointerClick, Save, Undo2 } from 'lucide-react';
 import React, { useEffect } from 'react';
 import { useCookies } from 'react-cookie';
 import { components } from '../../../../api/v1/schema';
-import { Button } from '../../../../components/ui/button';
-import { useErrorModal } from '../../../../components/ui/error-modal';
-import { useSimpleToast } from '../../../../components/ui/simple-toast';
-import { Tab, Tabs } from '../../../../components/ui/tabs';
-import { AppBarContext } from '../../../../contexts/AppBarContext';
+import { Button } from '@/components/ui/button';
+import { useErrorModal } from '@/components/ui/error-modal';
+import { useSimpleToast } from '@/components/ui/simple-toast';
+import { Tab, Tabs } from '@/components/ui/tabs';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { useRemoteNode } from '../../../../contexts/RemoteNodeContext';
 import { useSchema } from '../../../../contexts/SchemaContext';
 import { useUnsavedChanges } from '../../../../contexts/UnsavedChangesContext';
 import { useClient, useQuery } from '../../../../hooks/api';
@@ -26,17 +34,23 @@ import {
   sseFallbackOptions,
   useSSECacheSync,
 } from '../../../../hooks/useSSECacheSync';
-import LoadingIndicator from '../../../../ui/LoadingIndicator';
+import LoadingIndicator from '@/components/ui/loading-indicator';
 import { DAGContext } from '../../contexts/DAGContext';
 import { DAGStepTable } from '../dag-details';
+import { ValueReferenceNoticesButton } from '../value-reference-notices';
 import { FlowchartType, Graph } from '../visualization';
 import {
   buildAugmentedDAGSchema,
-  customStepTypeHintsEqual,
-  extractLocalCustomStepTypeHints,
-  mergeCustomStepTypeHints,
-  toInheritedCustomStepTypeHints,
-} from './customStepSchema';
+  customActionHintsEqual,
+  type EditorCustomActionHint,
+  type EditorLegacyDefinitionHint,
+  extractLocalCustomDefinitionHints,
+  legacyDefinitionHintsEqual,
+  mergeCustomActionHints,
+  mergeLegacyDefinitionHints,
+  toInheritedCustomActionHints,
+  toInheritedLegacyDefinitionHints,
+} from './customActionSchema';
 import DAGAttributes from './DAGAttributes';
 import DAGEditorWithDocs from './DAGEditorWithDocs';
 import ExternalChangeDialog from './ExternalChangeDialog';
@@ -58,9 +72,7 @@ type Props = {
  * including visualization, attributes, steps, and YAML definition
  */
 function DAGSpec({ fileName, localDags, editorHints }: Props) {
-  const appBarContext = React.useContext(AppBarContext);
-  const remoteNode = appBarContext.selectedRemoteNode || 'local';
-  const editable = useCanWrite();
+  const remoteNode = useRemoteNode();
   const client = useClient();
   const { schema: baseSchema } = useSchema();
   const { showError } = useErrorModal();
@@ -69,6 +81,24 @@ function DAGSpec({ fileName, localDags, editorHints }: Props) {
 
   const [scrollPosition, setScrollPosition] = React.useState(0);
   const [activeTab, setActiveTab] = React.useState('parent');
+  const [selectedSpecStepName, setSelectedSpecStepName] = React.useState<
+    string | null
+  >(null);
+  const [isSpecStepDetailsOpen, setIsSpecStepDetailsOpen] =
+    React.useState(false);
+
+  const closeSpecStepDetails = React.useCallback(() => {
+    setIsSpecStepDetailsOpen(false);
+  }, []);
+
+  const handleActiveTabChange = React.useCallback(
+    (tab: string) => {
+      setActiveTab(tab);
+      setSelectedSpecStepName(null);
+      closeSpecStepDetails();
+    },
+    [closeSpecStepDetails]
+  );
 
   // Flowchart direction preference stored in cookies
   const [cookie, setCookie] = useCookies(['flowchart']);
@@ -95,7 +125,7 @@ function DAGSpec({ fileName, localDags, editorHints }: Props) {
     [setCookie, setFlowchart]
   );
 
-  const dagSSE = useDAGSSE(fileName, !!fileName);
+  const dagSSE = useDAGSSE(fileName, !!fileName, remoteNode);
 
   // Fetch spec — SWR is the single source of truth, refreshed by live invalidations
   const {
@@ -122,12 +152,24 @@ function DAGSpec({ fileName, localDags, editorHints }: Props) {
       : {
           dag: next.dag,
           errors: next.errors ?? [],
+          valueReferenceNotices: data?.valueReferenceNotices ?? [],
           spec: next.spec,
         }
   );
 
+  const dagWorkspaceName = React.useMemo(
+    () =>
+      workspaceNameFromLabels([
+        ...(data?.dag?.labels ?? []),
+        ...(data?.dag?.tags ?? []),
+      ]),
+    [data?.dag?.labels, data?.dag?.tags]
+  );
+  const editable = useCanWriteForWorkspace(dagWorkspaceName);
+
   // Server spec — SWR cache stays current via live invalidations or polling fallback
   const serverSpec = data?.spec ?? null;
+  const valueReferenceNotices = data?.valueReferenceNotices ?? [];
 
   // Change tracking (source-agnostic)
   const {
@@ -143,42 +185,76 @@ function DAGSpec({ fileName, localDags, editorHints }: Props) {
     serverContent: serverSpec,
   });
 
-  const [lastGoodLocalStepTypes, setLastGoodLocalStepTypes] = React.useState(
-    () => extractLocalCustomStepTypeHints(serverSpec ?? '').stepTypes
+  const [lastGoodLegacyDefinitions, setLastGoodLegacyDefinitions] =
+    React.useState(
+      () =>
+        extractLocalCustomDefinitionHints(serverSpec ?? '').legacyDefinitions
+    );
+  const [lastGoodLocalActions, setLastGoodLocalActions] = React.useState(
+    () => extractLocalCustomDefinitionHints(serverSpec ?? '').actions
   );
 
-  const inheritedCustomStepTypes = React.useMemo(
-    () => toInheritedCustomStepTypeHints(editorHints),
+  const parsedInheritedLegacyDefinitions = React.useMemo(
+    () => toInheritedLegacyDefinitionHints(editorHints),
     [editorHints]
   );
+  const inheritedLegacyDefinitions = useStableLegacyDefinitionHints(
+    parsedInheritedLegacyDefinitions
+  );
+  const parsedInheritedCustomActions = React.useMemo(
+    () => toInheritedCustomActionHints(editorHints),
+    [editorHints]
+  );
+  const inheritedCustomActions = useStableCustomActionHints(
+    parsedInheritedCustomActions
+  );
 
-  const parsedLocalStepTypes = React.useMemo(
-    () => extractLocalCustomStepTypeHints(currentValue ?? serverSpec ?? ''),
+  const parsedLocalDefinitions = React.useMemo(
+    () => extractLocalCustomDefinitionHints(currentValue ?? serverSpec ?? ''),
     [currentValue, serverSpec]
   );
 
   useEffect(() => {
-    if (!parsedLocalStepTypes.ok) {
+    if (!parsedLocalDefinitions.ok) {
       return;
     }
-    setLastGoodLocalStepTypes((previous) =>
-      customStepTypeHintsEqual(previous, parsedLocalStepTypes.stepTypes)
+    setLastGoodLegacyDefinitions((previous) =>
+      legacyDefinitionHintsEqual(
+        previous,
+        parsedLocalDefinitions.legacyDefinitions
+      )
         ? previous
-        : parsedLocalStepTypes.stepTypes
+        : parsedLocalDefinitions.legacyDefinitions
     );
-  }, [parsedLocalStepTypes]);
+    setLastGoodLocalActions((previous) =>
+      customActionHintsEqual(previous, parsedLocalDefinitions.actions)
+        ? previous
+        : parsedLocalDefinitions.actions
+    );
+  }, [parsedLocalDefinitions]);
 
-  const effectiveLocalStepTypes = React.useMemo(() => {
-    if (!parsedLocalStepTypes.ok) {
-      return lastGoodLocalStepTypes;
+  const effectiveLegacyDefinitions = React.useMemo(() => {
+    if (!parsedLocalDefinitions.ok) {
+      return lastGoodLegacyDefinitions;
     }
-    return customStepTypeHintsEqual(
-      lastGoodLocalStepTypes,
-      parsedLocalStepTypes.stepTypes
+    return legacyDefinitionHintsEqual(
+      lastGoodLegacyDefinitions,
+      parsedLocalDefinitions.legacyDefinitions
     )
-      ? lastGoodLocalStepTypes
-      : parsedLocalStepTypes.stepTypes;
-  }, [lastGoodLocalStepTypes, parsedLocalStepTypes]);
+      ? lastGoodLegacyDefinitions
+      : parsedLocalDefinitions.legacyDefinitions;
+  }, [lastGoodLegacyDefinitions, parsedLocalDefinitions]);
+  const effectiveLocalActions = React.useMemo(() => {
+    if (!parsedLocalDefinitions.ok) {
+      return lastGoodLocalActions;
+    }
+    return customActionHintsEqual(
+      lastGoodLocalActions,
+      parsedLocalDefinitions.actions
+    )
+      ? lastGoodLocalActions
+      : parsedLocalDefinitions.actions;
+  }, [lastGoodLocalActions, parsedLocalDefinitions]);
 
   const editorSchema = React.useMemo(() => {
     if (!baseSchema) {
@@ -186,12 +262,19 @@ function DAGSpec({ fileName, localDags, editorHints }: Props) {
     }
     return buildAugmentedDAGSchema(
       baseSchema,
-      mergeCustomStepTypeHints(
-        inheritedCustomStepTypes,
-        effectiveLocalStepTypes
-      )
+      mergeLegacyDefinitionHints(
+        inheritedLegacyDefinitions,
+        effectiveLegacyDefinitions
+      ),
+      mergeCustomActionHints(inheritedCustomActions, effectiveLocalActions)
     );
-  }, [baseSchema, effectiveLocalStepTypes, inheritedCustomStepTypes]);
+  }, [
+    baseSchema,
+    effectiveLocalActions,
+    effectiveLegacyDefinitions,
+    inheritedCustomActions,
+    inheritedLegacyDefinitions,
+  ]);
 
   const editorModelUri = React.useMemo(
     () =>
@@ -342,68 +425,146 @@ function DAGSpec({ fileName, localDags, editorHints }: Props) {
   const renderDAGContent = (
     dag: components['schemas']['DAGDetails'],
     errors?: string[]
-  ) => (
-    <div className="space-y-6">
-      {errors?.length ? (
-        <div className="space-y-3">
-          {errors.map((e, i) => (
-            <div
-              key={i}
-              className="p-3 bg-danger-highlight rounded-md text-danger font-mono text-sm break-words flex items-start gap-2"
-            >
-              <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-              {e}
+  ) => {
+    const selectedStep = selectedSpecStepName
+      ? dag.steps?.find((step) => step.name === selectedSpecStepName)
+      : undefined;
+
+    const handleGraphNodeSelect = (nodeId: string) => {
+      const step = dag.steps?.find(
+        (item) => toMermaidNodeId(item.name) === nodeId
+      );
+      if (!step) {
+        return;
+      }
+      setSelectedSpecStepName(step.name);
+      setIsSpecStepDetailsOpen(true);
+    };
+
+    return (
+      <div className="space-y-6">
+        {errors?.length ? (
+          <div className="space-y-3">
+            {errors.map((e, i) => (
+              <div
+                key={i}
+                className="p-3 bg-danger-highlight rounded-md text-danger font-mono text-sm break-words flex items-start gap-2"
+              >
+                <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                {e}
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {errors?.length || !dag.steps || dag.steps.length === 0 ? (
+          <div className="py-8 px-4 text-center">
+            <AlertTriangle className="h-12 w-12 text-warning mx-auto mb-4" />
+            <p className="text-muted-foreground mb-2">
+              Cannot render graph due to configuration errors
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Please fix the errors above and save the configuration to view the
+              graph
+            </p>
+          </div>
+        ) : (
+          <div>
+            <BorderedBox className="py-4 px-4 flex flex-col overflow-x-auto">
+              <Graph
+                steps={dag.steps}
+                type="config"
+                flowchart={flowchart}
+                onChangeFlowchart={onChangeFlowchart}
+                onClickNode={handleGraphNodeSelect}
+                selectOnClick
+                showIcons={false}
+              />
+            </BorderedBox>
+            <div className="mt-2 flex justify-end">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div
+                    className="flex h-7 w-7 items-center justify-center rounded bg-muted text-muted-foreground cursor-help"
+                    aria-label="Graph interactions"
+                  >
+                    <MousePointerClick className="h-3.5 w-3.5" />
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Click: Inspect step details</p>
+                </TooltipContent>
+              </Tooltip>
             </div>
-          ))}
-        </div>
-      ) : null}
+          </div>
+        )}
 
-      {errors?.length || !dag.steps || dag.steps.length === 0 ? (
-        <div className="py-8 px-4 text-center">
-          <AlertTriangle className="h-12 w-12 text-warning mx-auto mb-4" />
-          <p className="text-muted-foreground mb-2">
-            Cannot render graph due to configuration errors
-          </p>
-          <p className="text-sm text-muted-foreground">
-            Please fix the errors above and save the configuration to view the
-            graph
-          </p>
-        </div>
-      ) : (
-        <div>
-          <BorderedBox className="py-4 px-4 flex flex-col overflow-x-auto">
-            <Graph
-              steps={dag.steps}
-              type="config"
-              flowchart={flowchart}
-              onChangeFlowchart={onChangeFlowchart}
-              showIcons={false}
-            />
-          </BorderedBox>
-        </div>
-      )}
+        <DAGAttributes dag={dag} />
 
-      <DAGAttributes dag={dag} />
+        {dag.steps ? (
+          <div className="overflow-hidden">
+            <DAGStepTable steps={dag.steps} />
+          </div>
+        ) : null}
 
-      {dag.steps ? (
-        <div className="overflow-hidden">
-          <DAGStepTable steps={dag.steps} />
-        </div>
-      ) : null}
+        {getHandlers(dag)?.length ? (
+          <div className="overflow-hidden">
+            <DAGStepTable steps={getHandlers(dag)} />
+          </div>
+        ) : null}
 
-      {getHandlers(dag)?.length ? (
-        <div className="overflow-hidden">
-          <DAGStepTable steps={getHandlers(dag)} />
-        </div>
-      ) : null}
-    </div>
-  );
+        <StepDetailsDrawer
+          dagName={dag.name}
+          isOpen={isSpecStepDetailsOpen}
+          step={selectedStep}
+          onClose={closeSpecStepDetails}
+        />
+      </div>
+    );
+  };
 
   return (
     <DAGContext.Consumer>
       {(props) => {
         // Update refresh callback ref directly (safe in render)
         refreshCallbackRef.current = props.refresh;
+        const editorHeaderActions =
+          valueReferenceNotices.length > 0 || editable ? (
+            <div className="flex items-center gap-2">
+              {valueReferenceNotices.length > 0 && (
+                <ValueReferenceNoticesButton
+                  notices={valueReferenceNotices}
+                  description="Value-reference notices produced while loading this spec."
+                />
+              )}
+              {editable && (
+                <>
+                  {localHasUnsavedChanges && (
+                    <Button
+                      variant="ghost"
+                      title="Discard changes"
+                      onClick={discardChanges}
+                    >
+                      <Undo2 className="h-4 w-4" />
+                      Discard
+                    </Button>
+                  )}
+                  <Button
+                    id="save-config"
+                    title="Save changes (Ctrl+S / Cmd+S)"
+                    disabled={!localHasUnsavedChanges}
+                    onClick={async () => {
+                      await handleSave();
+                      props.refresh();
+                    }}
+                  >
+                    <Save className="h-4 w-4" />
+                    Save
+                  </Button>
+                </>
+              )}
+            </div>
+          ) : undefined;
 
         return (
           data?.dag && (
@@ -425,7 +586,7 @@ function DAGSpec({ fileName, localDags, editorHints }: Props) {
                       <Tabs className="w-max min-w-full">
                         <Tab
                           isActive={activeTab === 'parent'}
-                          onClick={() => setActiveTab('parent')}
+                          onClick={() => handleActiveTabChange('parent')}
                           className="cursor-pointer whitespace-nowrap"
                         >
                           {data?.dag?.name} (Parent)
@@ -435,7 +596,9 @@ function DAGSpec({ fileName, localDags, editorHints }: Props) {
                             <Tab
                               key={localDag.name}
                               isActive={activeTab === localDag.name}
-                              onClick={() => setActiveTab(localDag.name)}
+                              onClick={() =>
+                                handleActiveTabChange(localDag.name)
+                              }
                               className="cursor-pointer whitespace-nowrap"
                             >
                               {localDag.name}
@@ -490,34 +653,7 @@ function DAGSpec({ fileName, localDags, editorHints }: Props) {
                   className="min-h-[400px]"
                   modelUri={editorModelUri}
                   schema={editorSchema}
-                  headerActions={
-                    editable ? (
-                      <>
-                        {localHasUnsavedChanges && (
-                          <Button
-                            variant="ghost"
-                            title="Discard changes"
-                            onClick={discardChanges}
-                          >
-                            <Undo2 className="h-4 w-4" />
-                            Discard
-                          </Button>
-                        )}
-                        <Button
-                          id="save-config"
-                          title="Save changes (Ctrl+S / Cmd+S)"
-                          disabled={!localHasUnsavedChanges}
-                          onClick={async () => {
-                            await handleSave();
-                            props.refresh();
-                          }}
-                        >
-                          <Save className="h-4 w-4" />
-                          Save
-                        </Button>
-                      </>
-                    ) : undefined
-                  }
+                  headerActions={editorHeaderActions}
                 />
               </div>
             </React.Fragment>
@@ -552,6 +688,26 @@ function getHandlers(
     steps.push(h?.exit);
   }
   return steps;
+}
+
+function useStableLegacyDefinitionHints(
+  hints: EditorLegacyDefinitionHint[]
+): EditorLegacyDefinitionHint[] {
+  const stableRef = React.useRef(hints);
+  if (!legacyDefinitionHintsEqual(stableRef.current, hints)) {
+    stableRef.current = hints;
+  }
+  return stableRef.current;
+}
+
+function useStableCustomActionHints(
+  hints: EditorCustomActionHint[]
+): EditorCustomActionHint[] {
+  const stableRef = React.useRef(hints);
+  if (!customActionHintsEqual(stableRef.current, hints)) {
+    stableRef.current = hints;
+  }
+  return stableRef.current;
 }
 
 export default DAGSpec;

@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/dagucloud/dagu/internal/cmn/config"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/spec"
 	_ "github.com/dagucloud/dagu/internal/runtime/builtin/harness"
@@ -47,6 +49,69 @@ func (th *DAG) AssertParam(t *testing.T, params ...string) {
 	for i, p := range params {
 		assert.Equal(t, p, th.Params[i])
 	}
+}
+
+func TestStepWithFieldAndConfigAlias(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "CanonicalWith",
+			yaml: `
+steps:
+  - name: request
+    action: http.request
+    with:
+      method: GET
+      url: https://example.com
+      timeout: 30
+`,
+		},
+		{
+			name: "LegacyConfig",
+			yaml: `
+steps:
+  - name: request
+    type: http
+    command: GET https://example.com
+    config:
+      timeout: 30
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dag, err := spec.LoadYAML(context.Background(), []byte(tt.yaml))
+			require.NoError(t, err)
+			require.Len(t, dag.Steps, 1)
+			assert.Equal(t, "http", dag.Steps[0].ExecutorConfig.Type)
+			assert.EqualValues(t, 30, dag.Steps[0].ExecutorConfig.Config["timeout"])
+		})
+	}
+}
+
+func TestStepWithFieldRejectsLegacyConfigTogether(t *testing.T) {
+	t.Parallel()
+
+	_, err := spec.LoadYAML(context.Background(), []byte(`
+steps:
+  - name: request
+    action: http.request
+    with:
+      method: GET
+      url: https://example.com
+      timeout: 30
+    config:
+      timeout: 60
+`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `action cannot be used together with config`)
 }
 
 func TestEnvParams(t *testing.T) {
@@ -157,10 +222,10 @@ func TestBuildChainType(t *testing.T) {
 		data := []byte(`
 type: chain
 steps:
-  - echo "First"
-  - echo "Second"
-  - echo "Third"
-  - echo "Fourth"
+  - run: echo "First"
+  - run: echo "Second"
+  - run: echo "Third"
+  - run: echo "Fourth"
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -181,18 +246,18 @@ steps:
 type: chain
 steps:
   - name: setup
-    command: ./setup.sh
+    run: ./setup.sh
   - name: download-a
-    command: wget fileA
+    run: wget fileA
   - name: download-b
-    command: wget fileB
+    run: wget fileB
   - name: process-both
-    command: process.py fileA fileB
+    run: process.py fileA fileB
     depends:
       - download-a
       - download-b
   - name: cleanup
-    command: rm -f fileA fileB
+    run: rm -f fileA fileB
 `)
 		_, err := spec.LoadYAML(context.Background(), data)
 		require.Error(t, err)
@@ -206,14 +271,14 @@ steps:
 type: chain
 steps:
   - name: step1
-    command: echo "First"
+    run: echo "First"
   - name: step2
-    command: echo "Second"
+    run: echo "Second"
   - name: step3
-    command: echo "Third"
+    run: echo "Third"
     depends: []
   - name: step4
-    command: echo "Fourth"
+    run: echo "Fourth"
 `)
 		_, err := spec.LoadYAML(context.Background(), data)
 		require.Error(t, err)
@@ -234,8 +299,8 @@ func TestBuildValidationError(t *testing.T) {
 			name: "InvalidEnv",
 			yaml: `
 env:
-  - VAR: "` + "`invalid command`" + `"`,
-			expectedErr: spec.ErrInvalidEnvValue,
+  - VAR`,
+			errContains: "invalid format",
 		},
 		{
 			name: "InvalidParams",
@@ -281,6 +346,12 @@ schedule: "1"`,
 
 func TestBuildEnv(t *testing.T) {
 	t.Parallel()
+	ctx := context.Background()
+	if runtime.GOOS == "windows" {
+		ctx = config.WithConfig(ctx, &config.Config{
+			Core: config.Core{DefaultShell: "cmd"},
+		})
+	}
 
 	type testCase struct {
 		name     string
@@ -296,23 +367,23 @@ env:
   - FOO: "123"
 
 steps:
-  - "true"
+  - run: "true"
 `,
 			expected: map[string]string{
 				"FOO": "123",
 			},
 		},
 		{
-			name: "ValidEnvWithSubstitution",
+			name: "ValidEnvPreservesBacktickSubstitution",
 			yaml: `
 env:
   - VAR: "` + "`echo 123`" + `"
 
 steps:
-  - "true"
+  - run: "true"
 `,
 			expected: map[string]string{
-				"VAR": "123",
+				"VAR": "`echo 123`",
 			},
 		},
 		{
@@ -325,7 +396,7 @@ env:
   - FOO: "${BEE}:${BAZ}:${BOO}:FOO"
 
 steps:
-  - "true"
+  - run: "true"
 `,
 			expected: map[string]string{
 				"FOO": "BEE:BAZ:BOO:FOO",
@@ -337,7 +408,7 @@ steps:
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			dag, err := spec.LoadYAML(context.Background(), []byte(tc.yaml))
+			dag, err := spec.LoadYAML(ctx, []byte(tc.yaml))
 			require.NoError(t, err)
 			th := DAG{t: t, DAG: dag}
 			for key, val := range tc.expected {
@@ -368,7 +439,7 @@ schedule:
   restart: "0 12 * * *"
 
 steps:
-  - "true"
+  - run: "true"
 `,
 			start:   []string{"0 1 * * *"},
 			stop:    []string{"0 2 * * *"},
@@ -382,7 +453,7 @@ schedule:
   - "0 18 * * *"
 
 steps:
-  - "true"
+  - run: "true"
 `,
 			start: []string{
 				"0 1 * * *",
@@ -404,7 +475,7 @@ schedule:
     - "0 22 * * *"
 
 steps:
-  - "true"
+  - run: "true"
 `,
 			start: []string{
 				"0 1 * * *",
@@ -453,7 +524,7 @@ func TestBuildStep(t *testing.T) {
 
 		data := []byte(`
 steps:
-  - command: echo 1
+  - run: echo 1
     name: step1
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
@@ -471,7 +542,7 @@ steps:
 
 		data := []byte(`
 steps:
-  - command: |
+  - run: |
       echo hello
       echo world
     name: script
@@ -482,7 +553,7 @@ steps:
 		require.Len(t, th.Steps, 1)
 		step := th.Steps[0]
 		assert.Equal(t, "script", step.Name)
-		assert.Equal(t, "echo hello\necho world", step.Script)
+		assert.Equal(t, "echo hello\necho world\n", step.Script)
 		assert.Empty(t, step.Command)
 		assert.Empty(t, step.CmdWithArgs)
 		assert.Empty(t, step.CmdArgsSys)
@@ -493,7 +564,7 @@ steps:
 
 		data := []byte(`
 steps:
-  - command: [echo, 1]
+  - run: [echo, 1]
     name: step1
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
@@ -510,7 +581,7 @@ steps:
 
 		data := []byte(`
 steps:
-  - command:
+  - run:
       - echo
       - 1
     name: step1
@@ -530,7 +601,7 @@ steps:
 		data := []byte(`
 steps:
   - name: build
-    command:
+    run:
       - npm install
       - npm run build
       - npm test
@@ -553,9 +624,11 @@ steps:
 
 		data := []byte(`
 steps:
-  - command: GET http://example.com
-    name: step1
-    type: http
+  - name: step1
+    action: http.request
+    with:
+      method: GET
+      url: http://example.com
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -568,10 +641,11 @@ steps:
 
 		data := []byte(`
 steps:
-  - command: http://example.com
-    name: step1
-    type: http
-    config:
+  - name: step1
+    action: http.request
+    with:
+      method: GET
+      url: http://example.com
       key: value
       map:
         foo: bar
@@ -582,7 +656,9 @@ steps:
 		assert.Len(t, th.Steps, 1)
 		assert.Equal(t, "http", th.Steps[0].ExecutorConfig.Type)
 		assert.Equal(t, map[string]any{
-			"key": "value",
+			"method": "GET",
+			"url":    "http://example.com",
+			"key":    "value",
 			"map": map[string]any{
 				"foo": "bar",
 			},
@@ -594,8 +670,10 @@ steps:
 		data := []byte(`
 steps:
   - name: execute a sub-dag
-    call: sub_dag
-    params: "param1=value1 param2=value2"
+    action: dag.run
+    with:
+      dag: sub_dag
+      params: "param1=value1 param2=value2"
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -620,7 +698,7 @@ steps:
 			name: "ContinueOnObject",
 			yaml: `
 steps:
-  - command: "echo 1"
+  - run: "echo 1"
     continue_on:
       skipped: true
       failure: true
@@ -632,7 +710,7 @@ steps:
 			name: "ContinueOnStringSkipped",
 			yaml: `
 steps:
-  - command: "echo 1"
+  - run: "echo 1"
     continue_on: skipped
 `,
 			wantSkipped: true,
@@ -642,7 +720,7 @@ steps:
 			name: "ContinueOnStringFailed",
 			yaml: `
 steps:
-  - command: "echo 1"
+  - run: "echo 1"
     continue_on: failed
 `,
 			wantSkipped: false,
@@ -652,7 +730,7 @@ steps:
 			name: "ContinueOnStringCaseInsensitive",
 			yaml: `
 steps:
-  - command: "echo 1"
+  - run: "echo 1"
     continue_on: SKIPPED
 `,
 			wantSkipped: true,
@@ -661,7 +739,7 @@ steps:
 			name: "ContinueOnObjectWithExitCode",
 			yaml: `
 steps:
-  - command: "echo 1"
+  - run: "echo 1"
     continue_on:
       exit_code: [1, 2, 3]
       mark_success: true
@@ -698,7 +776,7 @@ steps:
 			name: "ContinueOnInvalidString",
 			yaml: `
 steps:
-  - command: "echo 1"
+  - run: "echo 1"
     continue_on: invalid
 `,
 			errContains: []string{"continue_on"},
@@ -707,7 +785,7 @@ steps:
 			name: "ContinueOnInvalidFailureType",
 			yaml: `
 steps:
-  - command: "echo 1"
+  - run: "echo 1"
     continue_on:
       failure: "true"
 `,
@@ -717,7 +795,7 @@ steps:
 			name: "ContinueOnInvalidSkippedType",
 			yaml: `
 steps:
-  - command: "echo 1"
+  - run: "echo 1"
     continue_on:
       skipped: 1
 `,
@@ -727,7 +805,7 @@ steps:
 			name: "ContinueOnInvalidMarkSuccessType",
 			yaml: `
 steps:
-  - command: "echo 1"
+  - run: "echo 1"
     continue_on:
       mark_success: "yes"
 `,
@@ -758,7 +836,7 @@ steps:
 			name: "RetryPolicyBasic",
 			yaml: `
 steps:
-  - command: "echo 2"
+  - run: "echo 2"
     retry_policy:
       limit: 3
       interval_sec: 10
@@ -771,7 +849,7 @@ steps:
 			yaml: `
 steps:
   - name: "test_backoff"
-    command: "echo test"
+    run: "echo test"
     retry_policy:
       limit: 5
       interval_sec: 2
@@ -788,7 +866,7 @@ steps:
 			yaml: `
 steps:
   - name: "test_backoff_bool"
-    command: "echo test"
+    run: "echo test"
     retry_policy:
       limit: 3
       interval_sec: 1
@@ -831,7 +909,7 @@ steps:
 			yaml: `
 steps:
   - name: "test"
-    command: "echo test"
+    run: "echo test"
     retry_policy:
       limit: 3
       interval_sec: 1
@@ -844,7 +922,7 @@ steps:
 			yaml: `
 steps:
   - name: "test"
-    command: "echo test"
+    run: "echo test"
     retry_policy:
       interval_sec: 5
 `,
@@ -855,7 +933,7 @@ steps:
 			yaml: `
 steps:
   - name: "test"
-    command: "echo test"
+    run: "echo test"
     retry_policy:
       limit: 3
 `,
@@ -890,7 +968,7 @@ steps:
 			name: "RepeatPolicyBasic",
 			yaml: `
 steps:
-  - command: "echo 2"
+  - run: "echo 2"
     repeat_policy:
       repeat: true
       interval_sec: 60
@@ -904,7 +982,7 @@ steps:
 			yaml: `
 steps:
   - name: "repeat-while-condition"
-    command: "echo test"
+    run: "echo test"
     repeat_policy:
       repeat: "while"
       condition: "echo hello"
@@ -922,7 +1000,7 @@ steps:
 			yaml: `
 steps:
   - name: "repeat-until-condition"
-    command: "echo test"
+    run: "echo test"
     repeat_policy:
       repeat: "until"
       condition: "echo hello"
@@ -941,7 +1019,7 @@ steps:
 			yaml: `
 steps:
   - name: "repeat-while-exitcode"
-    command: "exit 1"
+    run: "exit 1"
     repeat_policy:
       repeat: "while"
       exit_code: [1, 2]
@@ -957,7 +1035,7 @@ steps:
 			yaml: `
 steps:
   - name: "repeat-until-exitcode"
-    command: "exit 0"
+    run: "exit 0"
     repeat_policy:
       repeat: "until"
       exit_code: [0]
@@ -973,7 +1051,7 @@ steps:
 			yaml: `
 steps:
   - name: "repeat-backward-compatibility-until"
-    command: "echo test"
+    run: "echo test"
     repeat_policy:
       condition: "echo hello"
       expected: "hello"
@@ -989,7 +1067,7 @@ steps:
 			yaml: `
 steps:
   - name: "repeat-backward-compatibility-while"
-    command: "echo test"
+    run: "echo test"
     repeat_policy:
       condition: "echo hello"
       interval_sec: 30
@@ -1004,7 +1082,7 @@ steps:
 			yaml: `
 steps:
   - name: "repeat-condition"
-    command: "echo hello"
+    run: "echo hello"
     repeat_policy:
       condition: "echo hello"
       expected: "hello"
@@ -1020,7 +1098,7 @@ steps:
 			yaml: `
 steps:
   - name: "repeat-exitcode"
-    command: "exit 42"
+    run: "exit 42"
     repeat_policy:
       exit_code: [42]
       interval_sec: 2
@@ -1034,7 +1112,7 @@ steps:
 			yaml: `
 steps:
   - name: "test_repeat_backoff"
-    command: "echo test"
+    run: "echo test"
     repeat_policy:
       repeat: while
       interval_sec: 5
@@ -1055,7 +1133,7 @@ steps:
 			yaml: `
 steps:
   - name: "test_repeat_backoff_bool"
-    command: "echo test"
+    run: "echo test"
     repeat_policy:
       repeat: until
       interval_sec: 2
@@ -1109,7 +1187,7 @@ steps:
 
 		data := []byte(`
 steps:
-  - command: echo 1
+  - run: echo 1
     name: step1
     signal_on_stop: SIGINT
 `)
@@ -1126,12 +1204,12 @@ steps:
 steps:
   - name: step1
     id: unique_step_1
-    command: echo "Step with ID"
+    run: echo "Step with ID"
   - name: step2
-    command: echo "Step without ID"
+    run: echo "Step without ID"
   - name: step3
     id: custom_id_123
-    command: echo "Another step with ID"
+    run: echo "Another step with ID"
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1156,7 +1234,7 @@ steps:
 		data := []byte(`
 steps:
   - name: "2"
-    command: "echo 2"
+    run: "echo 2"
     preconditions:
       - condition: "test -f file.txt"
         expected: "true"
@@ -1174,7 +1252,7 @@ steps:
 		data := []byte(`
 steps:
   - name: "step_with_negate"
-    command: "echo hello"
+    run: "echo hello"
     preconditions:
       - condition: "${STATUS}"
         expected: "success"
@@ -1198,7 +1276,7 @@ steps:
 			yaml: `
 steps:
   - name: "invalid-repeat"
-    command: "echo test"
+    run: "echo test"
     repeat_policy:
       repeat: "invalid"
       interval_sec: 10
@@ -1210,7 +1288,7 @@ steps:
 			yaml: `
 steps:
   - name: "while-no-condition"
-    command: "echo test"
+    run: "echo test"
     repeat_policy:
       repeat: "while"
       interval_sec: 10
@@ -1222,7 +1300,7 @@ steps:
 			yaml: `
 steps:
   - name: "until-no-condition"
-    command: "echo test"
+    run: "echo test"
     repeat_policy:
       repeat: "until"
       interval_sec: 10
@@ -1234,7 +1312,7 @@ steps:
 			yaml: `
 steps:
   - name: "invalid-type"
-    command: "echo test"
+    run: "echo test"
     repeat_policy:
       repeat: 123
       interval_sec: 10
@@ -1246,7 +1324,7 @@ steps:
 			yaml: `
 steps:
   - name: "test"
-    command: "echo test"
+    run: "echo test"
     repeat_policy:
       repeat: "while"
       interval_sec: 1
@@ -1260,7 +1338,7 @@ steps:
 			yaml: `
 steps:
   - name: "test"
-    command: "echo test"
+    run: "echo test"
     repeat_policy:
       repeat: "while"
       interval_sec: 1
@@ -1289,12 +1367,13 @@ func TestNestedArrayParallelSyntax(t *testing.T) {
 		t.Parallel()
 
 		data := []byte(`
+type: chain
 steps:
-  - echo "step 1"
+  - run: echo "step 1"
   - 
-    - echo "parallel 1"
-    - echo "parallel 2"
-  - echo "step 3"
+    - run: echo "parallel 1"
+    - run: echo "parallel 2"
+  - run: echo "step 3"
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1330,15 +1409,16 @@ steps:
 		t.Parallel()
 
 		data := []byte(`
+type: chain
 steps:
   - name: setup
-    command: echo "setup"
+    run: echo "setup"
   -
-    - echo "parallel 1"
+    - run: echo "parallel 1"
     - name: test
-      command: npm test
+      run: npm test
   - name: cleanup
-    command: echo "cleanup"
+    run: echo "cleanup"
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1364,21 +1444,21 @@ steps:
 	t.Run("ParallelStepsWithExplicitDependenciesShouldError", func(t *testing.T) {
 		t.Parallel()
 
-		// Default type is chain, so explicit depends is not allowed
 		data := []byte(`
+type: chain
 steps:
   - name: step1
-    command: echo "1"
+    run: echo "1"
   - name: step2
-    command: echo "2"
+    run: echo "2"
   -
     - name: parallel1
-      command: echo "p1"
+      run: echo "p1"
       depends: [step1]  # Not allowed in chain type
     - name: parallel2
-      command: echo "p2"
+      run: echo "p2"
   - name: final
-    command: echo "done"
+    run: echo "done"
 `)
 		_, err := spec.LoadYAML(context.Background(), data)
 		require.Error(t, err)
@@ -1393,17 +1473,17 @@ steps:
 type: graph
 steps:
   - name: step1
-    command: echo "1"
+    run: echo "1"
   - name: step2
-    command: echo "2"
+    run: echo "2"
   - name: parallel1
-    command: echo "p1"
+    run: echo "p1"
     depends: [step1]
   - name: parallel2
-    command: echo "p2"
+    run: echo "p2"
     depends: [step2]
   - name: final
-    command: echo "done"
+    run: echo "done"
     depends: [parallel1, parallel2]
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
@@ -1431,11 +1511,12 @@ steps:
 		t.Parallel()
 
 		data := []byte(`
+type: chain
 steps:
   - 
-    - echo "parallel 1"
-    - echo "parallel 2"
-    - echo "parallel 3"
+    - run: echo "parallel 1"
+    - run: echo "parallel 2"
+    - run: echo "parallel 3"
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1453,13 +1534,14 @@ steps:
 		t.Parallel()
 
 		data := []byte(`
+type: chain
 steps:
   - 
-    - echo "parallel 1"
-    - echo "parallel 2"
+    - run: echo "parallel 1"
+    - run: echo "parallel 2"
   - 
-    - echo "parallel 3"
-    - echo "parallel 4"
+    - run: echo "parallel 3"
+    - run: echo "parallel 4"
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1481,13 +1563,13 @@ steps:
 func TestShorthandCommandSyntax(t *testing.T) {
 	t.Parallel()
 
-	t.Run("SimpleShorthandCommands", func(t *testing.T) {
+	t.Run("SimpleRunCommands", func(t *testing.T) {
 		t.Parallel()
 
 		data := []byte(`
 steps:
-  - echo "hello"
-  - ls -la
+  - run: echo "hello"
+  - run: ls -la
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1508,17 +1590,17 @@ steps:
 		assert.Equal(t, "cmd_2", dag.Steps[1].Name) // Auto-generated name
 	})
 
-	t.Run("MixedShorthandAndStandardSyntax", func(t *testing.T) {
+	t.Run("MixedRunAndStandardSyntax", func(t *testing.T) {
 		t.Parallel()
 
 		data := []byte(`
 steps:
-  - echo "starting"
+  - run: echo "starting"
   - name: build
-    command: make build
+    run: make build
     env:
       DEBUG: "true"
-  - ls -la
+  - run: ls -la
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1550,9 +1632,9 @@ func TestOptionalStepNames(t *testing.T) {
 
 		data := []byte(`
 steps:
-  - echo "hello"
-  - npm test
-  - go build
+  - run: echo "hello"
+  - run: npm test
+  - run: go build
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1570,10 +1652,10 @@ steps:
 		data := []byte(`
 type: graph
 steps:
-  - setup.sh
+  - run: setup.sh
   - name: build
-    command: make all
-  - command: test.sh
+    run: make all
+  - run: test.sh
     depends: build
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
@@ -1591,10 +1673,10 @@ steps:
 
 		data := []byte(`
 steps:
-  - echo "first"
+  - run: echo "first"
   - name: cmd_2
-    command: echo "explicit"
-  - echo "third"
+    run: echo "explicit"
+  - run: echo "third"
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1613,9 +1695,9 @@ steps:
 type: graph
 steps:
   - git pull
-  - command: npm install
+  - run: npm install
     depends: cmd_1
-  - command: npm test
+  - run: npm test
     depends: cmd_2
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
@@ -1638,9 +1720,9 @@ steps:
 		data := []byte(`
 type: graph
 steps:
-  - command: echo "v1.0.0"
+  - run: echo "v1.0.0"
     output: VERSION
-  - command: echo "Building version ${VERSION}"
+  - run: echo "Building version ${VERSION}"
     depends: cmd_1
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
@@ -1657,21 +1739,25 @@ steps:
 	t.Run("TypeBasedNaming", func(t *testing.T) {
 		t.Parallel()
 
-		// Test different step types get appropriate names
+		// Test different actions get appropriate generated names
 		data := []byte(`
 steps:
-  - echo "command"
-  - script: |
+  - run: echo "command"
+  - run: |
       echo "script content"
-  - type: http
-    config:
+  - action: http.request
+    with:
+      method: GET
       url: https://example.com
-  - call: sub-dag
-  - type: docker
-    config:
+  - action: dag.run
+    with:
+      dag: sub-dag
+  - action: docker.run
+    with:
       image: alpine
-  - type: ssh
-    config:
+  - action: ssh.run
+    with:
+      command: uptime
       host: example.com
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
@@ -1687,15 +1773,15 @@ steps:
 		assert.Equal(t, "ssh_6", th.Steps[5].Name)
 	})
 
-	t.Run("BackwardCompatibility", func(t *testing.T) {
+	t.Run("RunSyntaxChainDependencies", func(t *testing.T) {
 		t.Parallel()
 
-		// Ensure existing DAGs with explicit names still work
 		data := []byte(`
+type: chain
 steps:
-  - echo "setup"
-  - echo "test"
-  - echo "deploy"
+  - run: echo "setup"
+  - run: echo "test"
+  - run: echo "deploy"
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1716,7 +1802,7 @@ steps:
 		data := []byte(`
 steps:
   - id: fetch_data
-    command: echo hi
+    run: echo hi
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1734,7 +1820,7 @@ steps:
 steps:
   - id: build
     name: compile
-    command: make build
+    run: make build
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1750,7 +1836,7 @@ steps:
 
 		data := []byte(`
 steps:
-  - command: echo hi
+  - run: echo hi
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1767,9 +1853,9 @@ steps:
 type: graph
 steps:
   - id: extract
-    command: echo extract
+    run: echo extract
   - id: transform
-    command: echo transform
+    run: echo transform
     depends: [extract]
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
@@ -1786,13 +1872,14 @@ steps:
 		t.Parallel()
 
 		data := []byte(`
+type: chain
 steps:
   - id: step_a
-    command: echo a
+    run: echo a
   - id: step_b
-    command: echo b
+    run: echo b
   - id: step_c
-    command: echo c
+    run: echo c
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1812,9 +1899,9 @@ steps:
 		data := []byte(`
 steps:
   - id: cmd_2
-    command: echo first
-  - command: echo second
-  - command: echo third
+    run: echo first
+  - run: echo second
+  - run: echo third
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1833,10 +1920,10 @@ steps:
 type: graph
 steps:
   - id: a
-    command: echo a
+    run: echo a
   - name: B
-    command: echo b
-  - command: echo c
+    run: echo b
+  - run: echo c
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1855,9 +1942,9 @@ steps:
 type: graph
 steps:
   - id: same_id
-    command: echo a
+    run: echo a
   - id: same_id
-    command: echo b
+    run: echo b
 `)
 		_, err := spec.LoadYAML(context.Background(), data)
 		require.Error(t, err)
@@ -1871,9 +1958,9 @@ steps:
 type: graph
 steps:
   - name: deploy
-    command: echo a
+    run: echo a
   - id: deploy
-    command: echo b
+    run: echo b
 `)
 		_, err := spec.LoadYAML(context.Background(), data)
 		require.Error(t, err)
@@ -1891,7 +1978,7 @@ func TestStepIDValidation(t *testing.T) {
 steps:
   - name: step1
     id: valid_id
-    command: echo test
+    run: echo test
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -1911,7 +1998,7 @@ steps:
 steps:
   - name: step1
     id: 123invalid
-    command: echo test
+    run: echo test
 `,
 			errContains: "invalid step ID format",
 		},
@@ -1921,7 +2008,7 @@ steps:
 steps:
   - name: step1
     id: my-step
-    command: echo test
+    run: echo test
 `,
 			errContains: "invalid step ID format",
 		},
@@ -1931,10 +2018,10 @@ steps:
 steps:
   - name: step1
     id: myid
-    command: echo test1
+    run: echo test1
   - name: step2
     id: myid
-    command: echo test2
+    run: echo test2
 `,
 			errContains: "duplicate step ID",
 		},
@@ -1944,9 +2031,9 @@ steps:
 steps:
   - name: step1
     id: step2
-    command: echo test1
+    run: echo test1
   - name: step2
-    command: echo test2
+    run: echo test2
 `,
 			errContains: "conflicts with another step's name",
 		},
@@ -1956,9 +2043,9 @@ steps:
 steps:
   - name: step1
     id: myid
-    command: echo test1
+    run: echo test1
   - name: myid
-    command: echo test2
+    run: echo test2
 `,
 			errContains: "conflicts with another step's name",
 		},
@@ -1968,7 +2055,7 @@ steps:
 steps:
   - name: step1
     id: env
-    command: echo test
+    run: echo test
 `,
 			errContains: "reserved word",
 		},
@@ -1995,10 +2082,10 @@ type: graph
 steps:
   - name: step1
     id: first
-    command: echo test1
+    run: echo test1
   - name: step2
     depends: first
-    command: echo test2
+    run: echo test2
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -2015,10 +2102,10 @@ type: graph
 steps:
   - name: step1
     id: first
-    command: echo test1
+    run: echo test1
   - name: step2
     depends: step1
-    command: echo test2
+    run: echo test2
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -2034,15 +2121,15 @@ type: graph
 steps:
   - name: step1
     id: first
-    command: echo test1
+    run: echo test1
   - name: step2
     id: second
-    command: echo test2
+    run: echo test2
   - name: step3
     depends:
       - first
       - second
-    command: echo test3
+    run: echo test3
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -2058,14 +2145,14 @@ type: graph
 steps:
   - name: step1
     id: first
-    command: echo test1
+    run: echo test1
   - name: step2
-    command: echo test2
+    run: echo test2
   - name: step3
     depends:
       - first
       - step2
-    command: echo test3
+    run: echo test3
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -2082,12 +2169,12 @@ type: chain
 steps:
   - name: step1
     id: s1
-    command: echo first
+    run: echo first
   - name: step2
     id: s2
-    command: echo second
+    run: echo second
   - name: step3
-    command: echo third
+    run: echo third
 `)
 	dag, err := spec.LoadYAML(context.Background(), data)
 	require.NoError(t, err)
@@ -2119,10 +2206,10 @@ type: graph
 steps:
   - name: step-one
     id: s1
-    command: echo "1"
+    run: echo "1"
   - name: step-two
     depends: s1
-    command: echo "2"
+    run: echo "2"
 `,
 			expected: map[string][]string{
 				"step-two": {"step-one"},
@@ -2135,15 +2222,15 @@ type: graph
 steps:
   - name: step-one
     id: s1
-    command: echo "1"
+    run: echo "1"
   - name: step-two
     id: s2
-    command: echo "2"
+    run: echo "2"
   - name: step-three
     depends:
       - s1
       - s2
-    command: echo "3"
+    run: echo "3"
 `,
 			expected: map[string][]string{
 				"step-three": {"step-one", "step-two"},
@@ -2156,14 +2243,14 @@ type: graph
 steps:
   - name: step-one
     id: s1
-    command: echo "1"
+    run: echo "1"
   - name: step-two
-    command: echo "2"
+    run: echo "2"
   - name: step-three
     depends:
       - s1
       - step-two
-    command: echo "3"
+    run: echo "3"
 `,
 			expected: map[string][]string{
 				"step-three": {"step-one", "step-two"},
@@ -2175,10 +2262,10 @@ steps:
 type: graph
 steps:
   - name: step-one
-    command: echo "1"
+    run: echo "1"
   - name: step-two
     depends: step-one
-    command: echo "2"
+    run: echo "2"
 `,
 			expected: map[string][]string{
 				"step-two": {"step-one"},
@@ -2191,10 +2278,10 @@ type: graph
 steps:
   - name: step_one
     id: step_one
-    command: echo "1"
+    run: echo "1"
   - name: step_two
     depends: step_one
-    command: echo "2"
+    run: echo "2"
 `,
 			expected: map[string][]string{
 				"step_two": {"step_one"},
@@ -2233,10 +2320,10 @@ func TestResolveStepDependencies_Errors(t *testing.T) {
 type: graph
 steps:
   - name: step-one
-    command: echo "1"
+    run: echo "1"
   - name: step-two
     depends: nonexistent
-    command: echo "2"
+    run: echo "2"
 `,
 			expectedErr: "", // This should be caught by dependency validation, not ID resolution
 		},
@@ -2279,7 +2366,7 @@ container:
   pull_policy: always
 steps:
   - name: step1
-    command: python script.py
+    run: python script.py
 `,
 			wantImage:      "python:3.11-slim",
 			wantPullPolicy: core.PullPolicyAlways,
@@ -2292,7 +2379,7 @@ container:
   image: alpine:latest
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
 `,
 			wantImage: "alpine:latest",
 			wantName:  "my-dag-container",
@@ -2304,7 +2391,7 @@ container:
   image: alpine:latest
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
 `,
 			wantImage: "alpine:latest",
 			wantName:  "",
@@ -2317,7 +2404,7 @@ container:
   image: alpine:latest
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
 `,
 			wantImage: "alpine:latest",
 			wantName:  "my-container",
@@ -2332,7 +2419,7 @@ container:
     BAZ: qux
 steps:
   - name: step1
-    command: echo test
+    run: echo test
 `,
 			wantImage: "alpine",
 			wantEnv:   []string{"FOO=bar", "BAZ=qux"},
@@ -2344,7 +2431,7 @@ container:
   image: alpine
 steps:
   - name: step1
-    command: echo test
+    run: echo test
 `,
 			wantImage:      "alpine",
 			wantPullPolicy: core.PullPolicyMissing,
@@ -2354,7 +2441,7 @@ steps:
 			yaml: `
 steps:
   - name: step1
-    command: echo test
+    run: echo test
 `,
 			wantNil: true,
 		},
@@ -2407,7 +2494,7 @@ container:
   pull_policy: ` + tt.pullPolicy + `
 steps:
   - name: step1
-    command: echo test
+    run: echo test
 `
 			dag, err := spec.LoadYAML(context.Background(), []byte(yaml))
 			require.NoError(t, err)
@@ -2423,7 +2510,7 @@ steps:
 container: my-running-container
 steps:
   - name: step1
-    command: echo test
+    run: echo test
 `
 		dag, err := spec.LoadYAML(context.Background(), []byte(yaml))
 		require.NoError(t, err)
@@ -2439,7 +2526,7 @@ steps:
 container: "  my-container  "
 steps:
   - name: step1
-    command: echo test
+    run: echo test
 `
 		dag, err := spec.LoadYAML(context.Background(), []byte(yaml))
 		require.NoError(t, err)
@@ -2458,7 +2545,7 @@ container:
     - MY_VAR: value
 steps:
   - name: step1
-    command: echo test
+    run: echo test
 `
 		dag, err := spec.LoadYAML(context.Background(), []byte(yaml))
 		require.NoError(t, err)
@@ -2477,7 +2564,7 @@ steps:
 steps:
   - name: step1
     container: my-step-container
-    command: echo test
+    run: echo test
 `
 		dag, err := spec.LoadYAML(context.Background(), []byte(yaml))
 		require.NoError(t, err)
@@ -2495,7 +2582,7 @@ steps:
       exec: my-step-container
       user: nobody
       working_dir: /tmp
-    command: echo test
+    run: echo test
 `
 		dag, err := spec.LoadYAML(context.Background(), []byte(yaml))
 		require.NoError(t, err)
@@ -2520,7 +2607,7 @@ container:
   pull_policy: invalid_policy
 steps:
   - name: step1
-    command: echo test
+    run: echo test
 `,
 			errContains: "failed to parse pull policy",
 		},
@@ -2533,7 +2620,7 @@ container:
     - FOO: bar
 steps:
   - name: step1
-    command: echo test
+    run: echo test
 `,
 			errContains: "either 'exec' or 'image' must be specified",
 		},
@@ -2545,7 +2632,7 @@ container:
   image: alpine:latest
 steps:
   - name: step1
-    command: echo test
+    run: echo test
 `,
 			errContains: "'exec' and 'image' are mutually exclusive",
 		},
@@ -2558,7 +2645,7 @@ container:
     - /data:/data
 steps:
   - name: step1
-    command: echo test
+    run: echo test
 `,
 			errContains: "cannot be used with 'exec'",
 		},
@@ -2571,7 +2658,7 @@ container:
     - "8080:80"
 steps:
   - name: step1
-    command: echo test
+    run: echo test
 `,
 			errContains: "cannot be used with 'exec'",
 		},
@@ -2583,7 +2670,7 @@ container:
   network: bridge
 steps:
   - name: step1
-    command: echo test
+    run: echo test
 `,
 			errContains: "cannot be used with 'exec'",
 		},
@@ -2595,7 +2682,7 @@ container:
   pull_policy: always
 steps:
   - name: step1
-    command: echo test
+    run: echo test
 `,
 			errContains: "cannot be used with 'exec'",
 		},
@@ -2605,7 +2692,7 @@ steps:
 container: "   "
 steps:
   - name: step1
-    command: echo test
+    run: echo test
 `,
 			errContains: "container name cannot be empty",
 		},
@@ -2617,7 +2704,7 @@ steps:
     container:
       exec: my-container
       image: alpine:latest
-    command: echo test
+    run: echo test
 `,
 			errContains: "'exec' and 'image' are mutually exclusive",
 		},
@@ -2655,7 +2742,7 @@ container:
   keep_container: true
 steps:
   - name: step1
-    command: node app.js
+    run: node app.js
 `
 		dag, err := spec.LoadYAML(context.Background(), []byte(yaml))
 		require.NoError(t, err)
@@ -2681,7 +2768,7 @@ container:
   image: python:3.11-slim
 steps:
   - name: step1
-    command: python script.py
+    run: python script.py
 `
 		ctx := context.Background()
 		dag, err := spec.LoadYAML(ctx, []byte(yaml))
@@ -2692,7 +2779,7 @@ steps:
 		assert.Equal(t, "container", dag.Steps[0].ExecutorConfig.Type)
 	})
 
-	t.Run("ExplicitExecutorOverridesContainer", func(t *testing.T) {
+	t.Run("LegacyExplicitExecutorOverridesContainer", func(t *testing.T) {
 		yaml := `
 container:
   image: python:3.11-slim
@@ -2714,7 +2801,7 @@ steps:
 		yaml := `
 steps:
   - name: step1
-    command: echo test
+    run: echo test
 `
 		ctx := context.Background()
 		dag, err := spec.LoadYAML(ctx, []byte(yaml))
@@ -2731,10 +2818,10 @@ container:
   image: node:18-alpine
 steps:
   - name: step1
-    command: node app.js
-    type: docker
-    config:
+    action: docker.run
+    with:
       image: python:3.11
+      command: node app.js
 `
 		ctx := context.Background()
 		dag, err := spec.LoadYAML(ctx, []byte(yaml))
@@ -2746,18 +2833,18 @@ steps:
 		assert.Equal(t, "python:3.11", dag.Steps[0].ExecutorConfig.Config["image"])
 	})
 
-	t.Run("MultipleStepsWithContainer", func(t *testing.T) {
+	t.Run("MultipleStepsWithContainerAndLegacyShellOverride", func(t *testing.T) {
 		yaml := `
 container:
   image: alpine:latest
 steps:
   - name: step1
-    command: echo "step 1"
+    run: echo "step 1"
   - name: step2
     command: echo "step 2"
     type: shell
   - name: step3
-    command: echo "step 3"
+    run: echo "step 3"
 `
 		ctx := context.Background()
 		dag, err := spec.LoadYAML(ctx, []byte(yaml))
@@ -2780,9 +2867,9 @@ ssh:
   key: ~/.ssh/id_rsa
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
   - name: step2
-    command: ls -la
+    run: ls -la
 `
 		ctx := context.Background()
 		dag, err := spec.LoadYAML(ctx, []byte(yaml))
@@ -2795,7 +2882,7 @@ steps:
 		}
 	})
 
-	t.Run("StepOverridesSSHConfig", func(t *testing.T) {
+	t.Run("StepOverridesSSHConfigWithLegacyCommandStep", func(t *testing.T) {
 		yaml := `
 ssh:
   user: defaultuser
@@ -2803,14 +2890,14 @@ ssh:
   key: ~/.ssh/default_key
 steps:
   - name: step1
-    command: echo hello
-    type: ssh
-    config:
+    action: ssh.run
+    with:
+      command: echo hello
       user: overrideuser
       ip: override.com
   - name: step2
-    command: echo world
     type: command
+    command: echo world
 `
 		ctx := context.Background()
 		dag, err := spec.LoadYAML(ctx, []byte(yaml))
@@ -2835,13 +2922,10 @@ redis:
   password: secret
 steps:
   - name: step1
-    type: redis
-    config:
-      command: PING
+    action: redis.ping
   - name: step2
-    type: redis
-    config:
-      command: GET
+    action: redis.get
+    with:
       key: mykey
 `
 		ctx := context.Background()
@@ -2871,14 +2955,12 @@ redis:
   db: 0
 steps:
   - name: step1
-    type: redis
-    config:
+    action: redis.ping
+    with:
       db: 1
-      command: PING
   - name: step2
-    type: redis
-    config:
-      command: GET
+    action: redis.get
+    with:
       key: mykey
 `
 		ctx := context.Background()
@@ -2907,8 +2989,7 @@ redis:
   port: 6379
 steps:
   - name: step1
-    config:
-      command: PING
+    action: redis.ping
 `
 		ctx := context.Background()
 		dag, err := spec.LoadYAML(ctx, []byte(yaml))
@@ -2921,7 +3002,7 @@ steps:
 		assert.Equal(t, 6379, dag.Steps[0].ExecutorConfig.Config["port"])
 	})
 
-	t.Run("ExplicitTypeOverridesDAGRedis", func(t *testing.T) {
+	t.Run("LegacyExplicitTypeOverridesDAGRedis", func(t *testing.T) {
 		yaml := `
 redis:
   host: localhost
@@ -2953,8 +3034,9 @@ harness:
       full-auto: true
 steps:
   - name: step1
-    type: harness
-    command: "Write tests"
+    action: harness.run
+    with:
+      prompt: "Write tests"
 `
 		dag, err := spec.LoadYAML(context.Background(), []byte(yaml))
 		require.NoError(t, err)
@@ -2972,6 +3054,39 @@ steps:
 		assert.Equal(t, true, fallback[0]["full-auto"])
 	})
 
+	t.Run("StepInheritsBuiltinHarnessFromDAG", func(t *testing.T) {
+		yaml := `
+harness:
+  provider: builtin
+  model: coder-default
+  tools:
+    enabled: [read, bash, patch, think]
+  fallback:
+    - provider: codex
+      full-auto: true
+steps:
+  - name: step1
+    action: harness.run
+    with:
+      prompt: "Review this repository"
+      max_iterations: 20
+`
+		dag, err := spec.LoadYAML(context.Background(), []byte(yaml))
+		require.NoError(t, err)
+		require.NotNil(t, dag.Harness)
+		require.Len(t, dag.Steps, 1)
+
+		step := dag.Steps[0]
+		assert.Equal(t, "harness", step.ExecutorConfig.Type)
+		assert.Equal(t, "builtin", step.ExecutorConfig.Config["provider"])
+		assert.Equal(t, "coder-default", step.ExecutorConfig.Config["model"])
+		assert.EqualValues(t, 20, step.ExecutorConfig.Config["max_iterations"])
+		fallback := mustHarnessFallback(t, step.ExecutorConfig.Config["fallback"])
+		require.Len(t, fallback, 1)
+		assert.Equal(t, "codex", fallback[0]["provider"])
+		assert.Equal(t, true, fallback[0]["full-auto"])
+	})
+
 	t.Run("StepOverridesPrimaryConfigAndInheritsFallback", func(t *testing.T) {
 		yaml := `
 harness:
@@ -2983,9 +3098,9 @@ harness:
       full-auto: true
 steps:
   - name: step1
-    type: harness
-    command: "Fix bugs"
-    config:
+    action: harness.run
+    with:
+      prompt: "Fix bugs"
       model: opus
       effort: high
 `
@@ -3003,6 +3118,28 @@ steps:
 		assert.Equal(t, "codex", fallback[0]["provider"])
 	})
 
+	t.Run("StepOverridesBuiltinFlagAliasesWithoutDuplicates", func(t *testing.T) {
+		yaml := `
+harness:
+  provider: codex
+  skip_git_repo_check: true
+steps:
+  - name: step1
+    action: harness.run
+    with:
+      prompt: "Fix bugs"
+      skip-git-repo-check: false
+`
+		dag, err := spec.LoadYAML(context.Background(), []byte(yaml))
+		require.NoError(t, err)
+		step := dag.Steps[0]
+
+		assert.Equal(t, "codex", step.ExecutorConfig.Config["provider"])
+		assert.Equal(t, false, step.ExecutorConfig.Config["skip-git-repo-check"])
+		_, exists := step.ExecutorConfig.Config["skip_git_repo_check"]
+		assert.False(t, exists)
+	})
+
 	t.Run("StepFallbackReplacesDAGFallback", func(t *testing.T) {
 		yaml := `
 harness:
@@ -3013,9 +3150,9 @@ harness:
       full-auto: true
 steps:
   - name: step1
-    type: harness
-    command: "Generate docs"
-    config:
+    action: harness.run
+    with:
+      prompt: "Generate docs"
       provider: copilot
       fallback:
         - provider: claude
@@ -3041,9 +3178,9 @@ harness:
       full-auto: true
 steps:
   - name: step1
-    type: harness
-    command: "No retries"
-    config:
+    action: harness.run
+    with:
+      prompt: "No retries"
       fallback: []
 `
 		dag, err := spec.LoadYAML(context.Background(), []byte(yaml))
@@ -3061,7 +3198,9 @@ harness:
   model: sonnet
 steps:
   - name: step1
-    command: "Write tests"
+    action: harness.run
+    with:
+      prompt: "Write tests"
 `
 		dag, err := spec.LoadYAML(context.Background(), []byte(yaml))
 		require.NoError(t, err)
@@ -3072,7 +3211,7 @@ steps:
 		assert.Equal(t, "sonnet", dag.Steps[0].ExecutorConfig.Config["model"])
 	})
 
-	t.Run("ExplicitTypeOverridesDAGHarness", func(t *testing.T) {
+	t.Run("LegacyExplicitTypeOverridesDAGHarness", func(t *testing.T) {
 		yaml := `
 harness:
   provider: claude
@@ -3102,7 +3241,9 @@ harness:
       model: haiku
 steps:
   - name: step1
-    command: "Analyze this codebase"
+    action: harness.run
+    with:
+      prompt: "Analyze this codebase"
 `
 		dag, err := spec.LoadYAML(context.Background(), []byte(yaml))
 		require.NoError(t, err)
@@ -3127,7 +3268,9 @@ harness:
   provider: gemini
 steps:
   - name: step1
-    command: "Review this repository"
+    action: harness.run
+    with:
+      prompt: "Review this repository"
 `
 		dag, err := spec.LoadYAML(context.Background(), []byte(yaml))
 		require.NoError(t, err)
@@ -3141,13 +3284,37 @@ steps:
 		assert.Equal(t, []string{"run"}, dag.Harnesses["gemini"].PrefixArgs)
 	})
 
+	t.Run("HarnessRunAcceptsStepContainer", func(t *testing.T) {
+		yaml := `
+steps:
+  - name: review
+    action: harness.run
+    container:
+      image: localhost/reviewer-claude:latest
+      volumes:
+        - ./src:/src:ro
+    with:
+      prompt: "Review this repository"
+      provider: claude
+`
+		dag, err := spec.LoadYAML(context.Background(), []byte(yaml))
+		require.NoError(t, err)
+		require.Len(t, dag.Steps, 1)
+
+		step := dag.Steps[0]
+		assert.Equal(t, "harness", step.ExecutorConfig.Type)
+		require.NotNil(t, step.Container)
+		assert.Equal(t, "localhost/reviewer-claude:latest", step.Container.Image)
+		assert.Equal(t, []string{"./src:/src:ro"}, step.Container.Volumes)
+	})
+
 	t.Run("UnknownCustomHarnessProviderFailsBuild", func(t *testing.T) {
 		yaml := `
 steps:
   - name: step1
-    type: harness
-    command: "Review this repository"
-    config:
+    action: harness.run
+    with:
+      prompt: "Review this repository"
       provider: gemini
 `
 		_, err := spec.LoadYAML(context.Background(), []byte(yaml))
@@ -3161,7 +3328,20 @@ harnesses:
   claude:
     binary: gemini
 steps:
-  - command: "Review this repository"
+  - run: "Review this repository"
+`
+		_, err := spec.LoadYAML(context.Background(), []byte(yaml))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `conflicts with built-in provider`)
+	})
+
+	t.Run("BuiltinAgentHarnessNameCollisionFailsBuild", func(t *testing.T) {
+		yaml := `
+harnesses:
+  builtin:
+    binary: my-agent
+steps:
+  - run: "Review this repository"
 `
 		_, err := spec.LoadYAML(context.Background(), []byte(yaml))
 		require.Error(t, err)
@@ -3176,8 +3356,8 @@ harnesses:
     prompt_mode: stdin
     prompt_flag: --prompt
 steps:
-  - command: "Review this repository"
-    config:
+  - run: "Review this repository"
+    with:
       provider: gemini
 `
 		_, err := spec.LoadYAML(context.Background(), []byte(yaml))
@@ -3211,7 +3391,7 @@ func TestStepLevelEnv(t *testing.T) {
 		yaml := `
 steps:
   - name: step1
-    command: echo $STEP_VAR
+    run: echo $STEP_VAR
     env:
       - STEP_VAR: step_value
 `
@@ -3229,7 +3409,7 @@ env:
   - DAG_ONLY: dag_only_value
 steps:
   - name: step1
-    command: echo $SHARED_VAR
+    run: echo $SHARED_VAR
     env:
       - SHARED_VAR: step_value
       - STEP_ONLY: step_only_value
@@ -3250,7 +3430,7 @@ steps:
 		yaml := `
 steps:
   - name: step1
-    command: echo test
+    run: echo test
     env:
       FOO: foo_value
       BAR: bar_value
@@ -3269,7 +3449,7 @@ env:
   - BASE_PATH: /tmp
 steps:
   - name: step1
-    command: echo $FULL_PATH
+    run: echo $FULL_PATH
     env:
       - FULL_PATH: ${BASE_PATH}/data
       - COMPUTED: "` + "`echo computed_value`" + `"
@@ -3286,15 +3466,15 @@ steps:
 		yaml := `
 steps:
   - name: step1
-    command: echo $ENV_VAR
+    run: echo $ENV_VAR
     env:
       - ENV_VAR: value1
   - name: step2
-    command: echo $ENV_VAR
+    run: echo $ENV_VAR
     env:
       - ENV_VAR: value2
   - name: step3
-    command: echo $ENV_VAR
+    run: echo $ENV_VAR
     # No env, should inherit DAG env only
 `
 		ctx := context.Background()
@@ -3310,7 +3490,7 @@ steps:
 		yaml := `
 steps:
   - name: step1
-    command: echo test
+    run: echo test
     env:
       - PATH: "/custom/bin:${PATH}"
       - JSON_CONFIG: '{"key": "value", "nested": {"foo": "bar"}}'
@@ -3333,6 +3513,7 @@ steps:
 	})
 }
 
+// TestDAGLoadEnv verifies dotenv loading preserves DAG envs and search precedence.
 func TestDAGLoadEnv(t *testing.T) {
 	t.Run("LoadEnvWithDotenvAndEnvVars", func(t *testing.T) {
 		// Create a temp directory with a .env file
@@ -3349,7 +3530,7 @@ env:
   - LOAD_ENV_ENV_VAR: from_dag
   - LOAD_ENV_ANOTHER_VAR: another_value
 steps:
-  - echo hello
+  - run: echo hello
 `, tempDir)
 
 		dag, err := spec.LoadYAMLWithOpts(context.Background(), []byte(yaml), spec.BuildOpts{Flags: spec.BuildFlagNoEval})
@@ -3379,7 +3560,7 @@ dotenv: nonexistent.env
 env:
   - TEST_VAR_LOAD_ENV: test_value
 steps:
-  - echo hello
+  - run: echo hello
 `
 		dag, err := spec.LoadYAMLWithOpts(context.Background(), []byte(yaml), spec.BuildOpts{Flags: spec.BuildFlagNoEval})
 		require.NoError(t, err)
@@ -3398,6 +3579,102 @@ steps:
 		}
 		assert.Equal(t, "test_value", envMap["TEST_VAR_LOAD_ENV"])
 	})
+
+	t.Run("LoadEnvWithMalformedDotenvFileRecordsWarning", func(t *testing.T) {
+		tempDir := t.TempDir()
+		envFile := filepath.Join(tempDir, ".env")
+		require.NoError(t, os.WriteFile(envFile, []byte("INVALID LINE\n"), 0600))
+
+		yaml := fmt.Sprintf(`
+working_dir: %s
+dotenv: .env
+steps:
+  - run: echo hello
+`, tempDir)
+
+		dag, err := spec.LoadYAMLWithOpts(context.Background(), []byte(yaml), spec.BuildOpts{Flags: spec.BuildFlagNoEval})
+		require.NoError(t, err)
+		require.NotNil(t, dag)
+
+		dag.LoadDotEnv(context.Background())
+
+		require.Len(t, dag.BuildWarnings, 1)
+		assert.Contains(t, dag.BuildWarnings[0], "failed to load .env file")
+	})
+
+	t.Run("LoadEnvFromBaseEnvResolvedWorkingDir", func(t *testing.T) {
+		root := t.TempDir()
+		workDir := filepath.Join(root, "work", "quant-signal")
+		dagDir := filepath.Join(root, "dags")
+		require.NoError(t, os.MkdirAll(workDir, 0750))
+		require.NoError(t, os.MkdirAll(dagDir, 0750))
+		require.NoError(t, os.WriteFile(filepath.Join(workDir, ".env"), []byte("PYTHON_BIN=/usr/local/bin/python\n"), 0600))
+
+		baseConfig := filepath.Join(root, "base.yaml")
+		require.NoError(t, os.WriteFile(baseConfig, fmt.Appendf(nil, `
+env:
+  - QUANT_SIGNAL_DIR: %q
+`, workDir), 0600))
+
+		dagFile := filepath.Join(dagDir, "health-check.yaml")
+		require.NoError(t, os.WriteFile(dagFile, []byte(`
+working_dir: ${QUANT_SIGNAL_DIR}
+steps:
+  - command: printenv QUANT_SIGNAL_DIR PYTHON_BIN
+`), 0600))
+
+		dag, err := spec.Load(context.Background(), dagFile, spec.WithBaseConfig(baseConfig))
+		require.NoError(t, err)
+
+		dag.LoadDotEnv(context.Background())
+
+		envMap := envSliceMap(dag.Env)
+		assert.Equal(t, workDir, envMap["QUANT_SIGNAL_DIR"])
+		assert.Equal(t, "/usr/local/bin/python", envMap["PYTHON_BIN"])
+	})
+
+	t.Run("LoadEnvPrefersResolvedWorkingDirOverDAGFileDir", func(t *testing.T) {
+		root := t.TempDir()
+		workDir := filepath.Join(root, "work", "quant-signal")
+		dagDir := filepath.Join(root, "dags")
+		require.NoError(t, os.MkdirAll(workDir, 0750))
+		require.NoError(t, os.MkdirAll(dagDir, 0750))
+		require.NoError(t, os.WriteFile(filepath.Join(workDir, ".env"), []byte("PYTHON_BIN=/usr/local/bin/python\n"), 0600))
+		require.NoError(t, os.WriteFile(filepath.Join(dagDir, ".env"), []byte("PYTHON_BIN=/wrong/from-dag-dir\n"), 0600))
+
+		baseConfig := filepath.Join(root, "base.yaml")
+		require.NoError(t, os.WriteFile(baseConfig, fmt.Appendf(nil, `
+env:
+  - QUANT_SIGNAL_DIR: %q
+`, workDir), 0600))
+
+		dagFile := filepath.Join(dagDir, "health-check.yaml")
+		require.NoError(t, os.WriteFile(dagFile, []byte(`
+working_dir: ${QUANT_SIGNAL_DIR}
+steps:
+  - command: printenv QUANT_SIGNAL_DIR PYTHON_BIN
+`), 0600))
+
+		dag, err := spec.Load(context.Background(), dagFile, spec.WithBaseConfig(baseConfig))
+		require.NoError(t, err)
+
+		dag.LoadDotEnv(context.Background())
+
+		envMap := envSliceMap(dag.Env)
+		assert.Equal(t, "/usr/local/bin/python", envMap["PYTHON_BIN"])
+	})
+}
+
+// envSliceMap converts KEY=value env entries into a map for test assertions.
+func envSliceMap(envs []string) map[string]string {
+	envMap := make(map[string]string)
+	for _, env := range envs {
+		key, value, found := strings.Cut(env, "=")
+		if found {
+			envMap[key] = value
+		}
+	}
+	return envMap
 }
 
 func TestBuildShell(t *testing.T) {
@@ -3409,7 +3686,7 @@ func TestBuildShell(t *testing.T) {
 		data := []byte(`
 shell: $MY_SHELL
 steps:
-  - "echo hello"
+  - run: echo hello
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -3425,7 +3702,7 @@ shell:
   - bash
   - $SHELL_ARG
 steps:
-  - "echo hello"
+  - run: echo hello
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -3440,7 +3717,7 @@ steps:
 		data := []byte(`
 shell: $MY_SHELL -e
 steps:
-  - "echo hello"
+  - run: echo hello
 `)
 		dag, err := spec.LoadYAMLWithOpts(context.Background(), data, spec.BuildOpts{Flags: spec.BuildFlagNoEval})
 		require.NoError(t, err)
@@ -3455,7 +3732,7 @@ shell:
   - bash
   - $SHELL_ARG
 steps:
-  - "echo hello"
+  - run: echo hello
 `)
 		dag, err := spec.LoadYAMLWithOpts(context.Background(), data, spec.BuildOpts{Flags: spec.BuildFlagNoEval})
 		require.NoError(t, err)
@@ -3481,8 +3758,9 @@ func TestBuildStepShell(t *testing.T) {
 			yaml: `
 steps:
   - name: test
-    shell: zsh
-    command: echo hello
+    run: echo hello
+    with:
+      shell: zsh
 `,
 			wantStepShell:     "zsh",
 			wantStepShellArgs: nil,
@@ -3492,8 +3770,9 @@ steps:
 			yaml: `
 steps:
   - name: test
-    shell: bash -e -u
-    command: echo hello
+    run: echo hello
+    with:
+      shell: bash -e -u
 `,
 			wantStepShell:     "bash",
 			wantStepShellArgs: []string{"-e", "-u"},
@@ -3503,12 +3782,13 @@ steps:
 			yaml: `
 steps:
   - name: test
-    shell:
-      - bash
-      - -e
-      - -o
-      - pipefail
-    command: echo hello
+    run: echo hello
+    with:
+      shell:
+        - bash
+        - -e
+        - -o
+        - pipefail
 `,
 			wantStepShell:     "bash",
 			wantStepShellArgs: []string{"-e", "-o", "pipefail"},
@@ -3519,8 +3799,9 @@ steps:
 shell: bash -e
 steps:
   - name: test
-    shell: zsh
-    command: echo hello
+    run: echo hello
+    with:
+      shell: zsh
 `,
 			wantDAGShell:      "bash",
 			wantDAGShellArgs:  []string{"-e"},
@@ -3532,7 +3813,7 @@ steps:
 			yaml: `
 steps:
   - name: test
-    command: echo hello
+    run: echo hello
 `,
 			wantStepEmpty: true,
 		},
@@ -3575,7 +3856,7 @@ env:
   - TEST: "${MY_VAR}"
 steps:
   - name: test
-    command: echo test
+    run: echo test
 `)
 		dag, err := spec.LoadYAMLWithOpts(context.Background(), data, spec.BuildOpts{Flags: spec.BuildFlagNoEval})
 		require.NoError(t, err)
@@ -3590,7 +3871,7 @@ steps:
 		data := []byte(`
 steps:
   - name: test
-    command: echo test
+    run: echo test
     depends:
       - nonexistent
 `)
@@ -3611,7 +3892,7 @@ params:
     key: value
 steps:
   - name: test
-    command: echo test
+    run: echo test
 `)
 		// Without the flag, it would error due to missing schema file
 		_, err := spec.LoadYAML(context.Background(), data)
@@ -3635,7 +3916,7 @@ name: test-dag
 log_output: separate
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -3650,7 +3931,7 @@ name: test-dag
 log_output: merged
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -3664,7 +3945,7 @@ steps:
 name: test-dag
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -3684,10 +3965,10 @@ name: test-dag
 log_output: separate
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
     log_output: merged
   - name: step2
-    command: echo world
+    run: echo world
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -3710,7 +3991,7 @@ name: test-dag
 log_output: merged
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
     log_output: separate
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
@@ -3731,7 +4012,7 @@ name: test-dag
 log_output: MERGED
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
     log_output: SEPARATE
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
@@ -3749,7 +4030,7 @@ name: test-dag
 log_output: invalid
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
 `)
 		_, err := spec.LoadYAML(context.Background(), data)
 		require.Error(t, err)
@@ -3763,7 +4044,7 @@ steps:
 name: test-dag
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
     log_output: both
 `)
 		_, err := spec.LoadYAML(context.Background(), data)
@@ -3782,7 +4063,7 @@ func TestMaxActiveRunsDeprecationWarning(t *testing.T) {
 name: test-dag
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -3797,7 +4078,7 @@ name: test-dag
 max_active_runs: 1
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -3812,7 +4093,7 @@ name: test-dag
 max_active_runs: 3
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -3829,7 +4110,7 @@ name: test-dag
 max_active_runs: -1
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)
@@ -3846,7 +4127,7 @@ queue: my-global-queue
 max_active_runs: 5
 steps:
   - name: step1
-    command: echo hello
+    run: echo hello
 `)
 		dag, err := spec.LoadYAML(context.Background(), data)
 		require.NoError(t, err)

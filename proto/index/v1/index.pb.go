@@ -92,7 +92,7 @@ type DAGIndexEntry struct {
 	FileSize      int64                  `protobuf:"varint,2,opt,name=file_size,json=fileSize,proto3" json:"file_size,omitempty"`
 	ModTime       int64                  `protobuf:"varint,3,opt,name=mod_time,json=modTime,proto3" json:"mod_time,omitempty"`
 	Name          string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
-	Tags          []string               `protobuf:"bytes,5,rep,name=tags,proto3" json:"tags,omitempty"`
+	Labels        []string               `protobuf:"bytes,5,rep,name=labels,proto3" json:"labels,omitempty"`
 	Group         string                 `protobuf:"bytes,6,opt,name=group,proto3" json:"group,omitempty"`
 	Schedule      string                 `protobuf:"bytes,7,opt,name=schedule,proto3" json:"schedule,omitempty"`
 	Suspended     bool                   `protobuf:"varint,8,opt,name=suspended,proto3" json:"suspended,omitempty"`
@@ -160,9 +160,9 @@ func (x *DAGIndexEntry) GetName() string {
 	return ""
 }
 
-func (x *DAGIndexEntry) GetTags() []string {
+func (x *DAGIndexEntry) GetLabels() []string {
 	if x != nil {
-		return x.Tags
+		return x.Labels
 	}
 	return nil
 }
@@ -274,7 +274,7 @@ type DAGRunIndexEntry struct {
 	Status               int32                  `protobuf:"varint,6,opt,name=status,proto3" json:"status,omitempty"`
 	StartedAt            int64                  `protobuf:"varint,7,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`    // Unix epoch seconds
 	FinishedAt           int64                  `protobuf:"varint,8,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"` // Unix epoch seconds
-	Tags                 []string               `protobuf:"bytes,9,rep,name=tags,proto3" json:"tags,omitempty"`
+	Labels               []string               `protobuf:"bytes,9,rep,name=labels,proto3" json:"labels,omitempty"`
 	RunDirModTime        int64                  `protobuf:"varint,10,opt,name=run_dir_mod_time,json=runDirModTime,proto3" json:"run_dir_mod_time,omitempty"`
 	WorkerId             string                 `protobuf:"bytes,11,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
 	Params               string                 `protobuf:"bytes,12,opt,name=params,proto3" json:"params,omitempty"`
@@ -293,6 +293,7 @@ type DAGRunIndexEntry struct {
 	AutoRetryMaxInterval int64                  `protobuf:"varint,25,opt,name=auto_retry_max_interval,json=autoRetryMaxInterval,proto3" json:"auto_retry_max_interval,omitempty"` // Duration in nanoseconds
 	ProcGroup            string                 `protobuf:"bytes,26,opt,name=proc_group,json=procGroup,proto3" json:"proc_group,omitempty"`
 	SuspendFlagName      string                 `protobuf:"bytes,27,opt,name=suspend_flag_name,json=suspendFlagName,proto3" json:"suspend_flag_name,omitempty"`
+	ArchiveDir           string                 `protobuf:"bytes,28,opt,name=archive_dir,json=archiveDir,proto3" json:"archive_dir,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -383,9 +384,9 @@ func (x *DAGRunIndexEntry) GetFinishedAt() int64 {
 	return 0
 }
 
-func (x *DAGRunIndexEntry) GetTags() []string {
+func (x *DAGRunIndexEntry) GetLabels() []string {
 	if x != nil {
-		return x.Tags
+		return x.Labels
 	}
 	return nil
 }
@@ -516,6 +517,13 @@ func (x *DAGRunIndexEntry) GetSuspendFlagName() string {
 	return ""
 }
 
+func (x *DAGRunIndexEntry) GetArchiveDir() string {
+	if x != nil {
+		return x.ArchiveDir
+	}
+	return ""
+}
+
 var File_proto_index_v1_index_proto protoreflect.FileDescriptor
 
 const file_proto_index_v1_index_proto_rawDesc = "" +
@@ -524,13 +532,13 @@ const file_proto_index_v1_index_proto_rawDesc = "" +
 	"\bDAGIndex\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\rR\aversion\x12\"\n" +
 	"\rbuilt_at_unix\x18\x02 \x01(\x03R\vbuiltAtUnix\x121\n" +
-	"\aentries\x18\x03 \x03(\v2\x17.index.v1.DAGIndexEntryR\aentries\"\x9d\x02\n" +
+	"\aentries\x18\x03 \x03(\v2\x17.index.v1.DAGIndexEntryR\aentries\"\xa1\x02\n" +
 	"\rDAGIndexEntry\x12\x1b\n" +
 	"\tfile_path\x18\x01 \x01(\tR\bfilePath\x12\x1b\n" +
 	"\tfile_size\x18\x02 \x01(\x03R\bfileSize\x12\x19\n" +
 	"\bmod_time\x18\x03 \x01(\x03R\amodTime\x12\x12\n" +
-	"\x04name\x18\x04 \x01(\tR\x04name\x12\x12\n" +
-	"\x04tags\x18\x05 \x03(\tR\x04tags\x12\x14\n" +
+	"\x04name\x18\x04 \x01(\tR\x04name\x12\x16\n" +
+	"\x06labels\x18\x05 \x03(\tR\x06labels\x12\x14\n" +
 	"\x05group\x18\x06 \x01(\tR\x05group\x12\x1a\n" +
 	"\bschedule\x18\a \x01(\tR\bschedule\x12\x1c\n" +
 	"\tsuspended\x18\b \x01(\bR\tsuspended\x12 \n" +
@@ -541,7 +549,7 @@ const file_proto_index_v1_index_proto_rawDesc = "" +
 	"\vDAGRunIndex\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\rR\aversion\x12\"\n" +
 	"\rbuilt_at_unix\x18\x02 \x01(\x03R\vbuiltAtUnix\x124\n" +
-	"\aentries\x18\x03 \x03(\v2\x1a.index.v1.DAGRunIndexEntryR\aentries\"\xf0\a\n" +
+	"\aentries\x18\x03 \x03(\v2\x1a.index.v1.DAGRunIndexEntryR\aentries\"\x95\b\n" +
 	"\x10DAGRunIndexEntry\x12\x1e\n" +
 	"\vdag_run_dir\x18\x01 \x01(\tR\tdagRunDir\x12\x1c\n" +
 	"\n" +
@@ -553,8 +561,8 @@ const file_proto_index_v1_index_proto_rawDesc = "" +
 	"\n" +
 	"started_at\x18\a \x01(\x03R\tstartedAt\x12\x1f\n" +
 	"\vfinished_at\x18\b \x01(\x03R\n" +
-	"finishedAt\x12\x12\n" +
-	"\x04tags\x18\t \x03(\tR\x04tags\x12'\n" +
+	"finishedAt\x12\x16\n" +
+	"\x06labels\x18\t \x03(\tR\x06labels\x12'\n" +
 	"\x10run_dir_mod_time\x18\n" +
 	" \x01(\x03R\rrunDirModTime\x12\x1b\n" +
 	"\tworker_id\x18\v \x01(\tR\bworkerId\x12\x16\n" +
@@ -576,7 +584,9 @@ const file_proto_index_v1_index_proto_rawDesc = "" +
 	"\x17auto_retry_max_interval\x18\x19 \x01(\x03R\x14autoRetryMaxInterval\x12\x1d\n" +
 	"\n" +
 	"proc_group\x18\x1a \x01(\tR\tprocGroup\x12*\n" +
-	"\x11suspend_flag_name\x18\x1b \x01(\tR\x0fsuspendFlagNameB2Z0github.com/dagucloud/dagu/proto/index/v1;indexv1b\x06proto3"
+	"\x11suspend_flag_name\x18\x1b \x01(\tR\x0fsuspendFlagName\x12\x1f\n" +
+	"\varchive_dir\x18\x1c \x01(\tR\n" +
+	"archiveDirB2Z0github.com/dagucloud/dagu/proto/index/v1;indexv1b\x06proto3"
 
 var (
 	file_proto_index_v1_index_proto_rawDescOnce sync.Once

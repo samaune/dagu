@@ -31,7 +31,7 @@ import { useCanWrite } from '@/contexts/AuthContext';
 import { useClient, useQuery } from '@/hooks/api';
 import dayjs from '@/lib/dayjs';
 import { cn } from '@/lib/utils';
-import ConfirmModal from '@/ui/ConfirmModal';
+import ConfirmModal from '@/components/ui/confirm-dialog';
 import {
   Download,
   EyeOff,
@@ -42,7 +42,15 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
-import { useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useContext,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { BatchDeleteDialog } from './BatchDeleteDialog';
 import { CleanupDialog } from './CleanupDialog';
@@ -59,8 +67,8 @@ type SyncConfigResponse = components['schemas']['SyncConfigResponse'];
 type SyncItemDiffResponse = components['schemas']['SyncItemDiffResponse'];
 type SyncItem = components['schemas']['SyncItem'];
 type StatusFilter = 'all' | 'modified' | 'untracked' | 'conflict' | 'missing';
-type TypeFilter = 'dag' | 'memory' | 'skill' | 'soul' | 'doc';
-type UISyncKind = 'dag' | 'memory' | 'skill' | 'soul' | 'doc';
+type TypeFilter = 'dag' | 'config' | 'memory' | 'skill' | 'soul' | 'doc';
+type UISyncKind = 'dag' | 'config' | 'memory' | 'skill' | 'soul' | 'doc';
 type SyncRow = { itemId: string; item: SyncItem; kind: UISyncKind };
 
 const statusFilters: StatusFilter[] = [
@@ -70,7 +78,14 @@ const statusFilters: StatusFilter[] = [
   'conflict',
   'missing',
 ];
-const typeFilters: TypeFilter[] = ['dag', 'memory', 'skill', 'soul', 'doc'];
+const typeFilters: TypeFilter[] = [
+  'dag',
+  'config',
+  'memory',
+  'skill',
+  'soul',
+  'doc',
+];
 
 function parseStatusFilter(value: string | null): StatusFilter {
   if (
@@ -86,13 +101,21 @@ function parseStatusFilter(value: string | null): StatusFilter {
 }
 
 function parseTypeFilter(value: string | null): TypeFilter {
-  if (value === 'dag' || value === 'memory' || value === 'skill' || value === 'soul' || value === 'doc') {
+  if (
+    value === 'dag' ||
+    value === 'config' ||
+    value === 'memory' ||
+    value === 'skill' ||
+    value === 'soul' ||
+    value === 'doc'
+  ) {
     return value;
   }
   return 'dag';
 }
 
 function normalizeSyncItemKind(kind: SyncItemKind): UISyncKind {
+  if (kind === SyncItemKind.config) return 'config';
   if (kind === SyncItemKind.memory) return 'memory';
   if (kind === SyncItemKind.skill) return 'skill';
   if (kind === SyncItemKind.soul) return 'soul';
@@ -164,17 +187,27 @@ export default function GitSyncPage() {
   }>({ open: false });
   const [publishForce, setPublishForce] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
-  const [diffModal, setDiffModal] = useState<{ open: boolean; itemId?: string }>(
-    { open: false }
-  );
+  const [diffModal, setDiffModal] = useState<{
+    open: boolean;
+    itemId?: string;
+  }>({ open: false });
   const [diffData, setDiffData] = useState<SyncItemDiffResponse | null>(null);
   const [revertModal, setRevertModal] = useState<{
     open: boolean;
     itemId?: string;
   }>({ open: false });
-  const [forgetModal, setForgetModal] = useState<{ open: boolean; itemId?: string }>({ open: false });
-  const [deleteModal, setDeleteModal] = useState<{ open: boolean; itemId?: string }>({ open: false });
-  const [moveModal, setMoveModal] = useState<{ open: boolean; itemId?: string }>({ open: false });
+  const [forgetModal, setForgetModal] = useState<{
+    open: boolean;
+    itemId?: string;
+  }>({ open: false });
+  const [deleteModal, setDeleteModal] = useState<{
+    open: boolean;
+    itemId?: string;
+  }>({ open: false });
+  const [moveModal, setMoveModal] = useState<{
+    open: boolean;
+    itemId?: string;
+  }>({ open: false });
   const [cleanupModal, setCleanupModal] = useState(false);
   const [deleteMissingModal, setDeleteMissingModal] = useState(false);
   const [batchDeleteModal, setBatchDeleteModal] = useState(false);
@@ -307,7 +340,7 @@ export default function GitSyncPage() {
       // Auto-add newly publishable items.
       for (const id of next) {
         if (!prevSet.has(id)) {
-          updated.add(id)
+          updated.add(id);
         }
       }
       return updated;
@@ -479,6 +512,7 @@ export default function GitSyncPage() {
   const typeCounts = useMemo(() => {
     const counts: Record<TypeFilter, number> = {
       dag: 0,
+      config: 0,
       memory: 0,
       skill: 0,
       soul: 0,
@@ -563,6 +597,7 @@ export default function GitSyncPage() {
 
   const selectedCounts = useMemo(() => {
     let dag = 0;
+    let config = 0;
     let memory = 0;
     let skill = 0;
     let soul = 0;
@@ -570,18 +605,28 @@ export default function GitSyncPage() {
     for (const dagID of selectedDags) {
       const row = rowByID.get(dagID);
       if (!row) continue;
-      if (row.kind === 'memory') memory += 1;
+      if (row.kind === 'config') config += 1;
+      else if (row.kind === 'memory') memory += 1;
       else if (row.kind === 'skill') skill += 1;
       else if (row.kind === 'soul') soul += 1;
       else if (row.kind === 'doc') doc += 1;
       else dag += 1;
     }
-    return { dag, memory, skill, soul, doc, total: dag + memory + skill + soul + doc };
+    return {
+      dag,
+      config,
+      memory,
+      skill,
+      soul,
+      doc,
+      total: dag + config + memory + skill + soul + doc,
+    };
   }, [selectedDags, rowByID]);
 
   const emptyStateMessage = useMemo(() => {
     const typeLabelMap: Record<string, string> = {
       dag: 'DAG',
+      config: 'config',
       memory: 'memory',
       skill: 'skill',
       soul: 'soul',
@@ -656,7 +701,11 @@ export default function GitSyncPage() {
             size="sm"
             className="h-8 w-8 p-0"
             onClick={() => setPublishModal({ open: true })}
-            disabled={publishableSelectedCount === 0 || !config?.pushEnabled || !canWrite}
+            disabled={
+              publishableSelectedCount === 0 ||
+              !config?.pushEnabled ||
+              !canWrite
+            }
             title={
               !canWrite
                 ? 'Write permission required'
@@ -667,18 +716,20 @@ export default function GitSyncPage() {
           >
             <Upload className="h-4 w-4" />
           </Button>
-          {deletableSelectedIds.length > 0 && config?.pushEnabled && canWrite && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 px-2 text-xs text-destructive hover:text-destructive"
-              onClick={() => setBatchDeleteModal(true)}
-              title={`Delete ${deletableSelectedIds.length} selected`}
-            >
-              <Trash2 className="h-4 w-4 mr-1" />
-              Delete ({deletableSelectedIds.length})
-            </Button>
-          )}
+          {deletableSelectedIds.length > 0 &&
+            config?.pushEnabled &&
+            canWrite && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2 text-xs text-destructive hover:text-destructive"
+                onClick={() => setBatchDeleteModal(true)}
+                title={`Delete ${deletableSelectedIds.length} selected`}
+              >
+                <Trash2 className="h-4 w-4 mr-1" />
+                Delete ({deletableSelectedIds.length})
+              </Button>
+            )}
           {missingCount > 0 && canWrite && (
             <Button
               variant="ghost"
@@ -742,7 +793,19 @@ export default function GitSyncPage() {
                   : 'text-muted-foreground hover:text-foreground'
               )}
             >
-              {({ dag: 'DAGs', memory: 'Memory', skill: 'Skills', soul: 'Souls', doc: 'Docs' } as Record<string, string>)[f]} ({typeCounts[f]})
+              {
+                (
+                  {
+                    dag: 'DAGs',
+                    config: 'Config',
+                    memory: 'Memory',
+                    skill: 'Skills',
+                    soul: 'Souls',
+                    doc: 'Docs',
+                  } as Record<string, string>
+                )[f]
+              }{' '}
+              ({typeCounts[f]})
             </button>
           ))}
         </div>
@@ -757,7 +820,16 @@ export default function GitSyncPage() {
         </div>
         {selectedCounts.total > 0 && (
           <span className="text-xs text-muted-foreground">
-            Selected: {selectedCounts.dag} DAGs{selectedCounts.memory > 0 ? `, ${selectedCounts.memory} memory` : ''}{selectedCounts.skill > 0 ? `, ${selectedCounts.skill} skills` : ''}{selectedCounts.soul > 0 ? `, ${selectedCounts.soul} souls` : ''}{selectedCounts.doc > 0 ? `, ${selectedCounts.doc} docs` : ''}
+            Selected: {selectedCounts.dag} DAGs
+            {selectedCounts.config > 0
+              ? `, ${selectedCounts.config} config`
+              : ''}
+            {selectedCounts.memory > 0
+              ? `, ${selectedCounts.memory} memory`
+              : ''}
+            {selectedCounts.skill > 0 ? `, ${selectedCounts.skill} skills` : ''}
+            {selectedCounts.soul > 0 ? `, ${selectedCounts.soul} souls` : ''}
+            {selectedCounts.doc > 0 ? `, ${selectedCounts.doc} docs` : ''}
           </span>
         )}
       </div>
@@ -777,7 +849,8 @@ export default function GitSyncPage() {
             onKeyDown={(e) => {
               if (e.key === 'ArrowRight') {
                 e.preventDefault();
-                const nextFilter = statusFilters[(index + 1) % statusFilters.length];
+                const nextFilter =
+                  statusFilters[(index + 1) % statusFilters.length];
                 if (nextFilter) setFilters({ status: nextFilter });
               } else if (e.key === 'ArrowLeft') {
                 e.preventDefault();
@@ -814,7 +887,7 @@ export default function GitSyncPage() {
                   />
                 )}
               </TableHead>
-              <TableHead>DAG</TableHead>
+              <TableHead>Item</TableHead>
               <TableHead className="w-24">Status</TableHead>
               <TableHead className="w-28">Synced</TableHead>
               <TableHead className="w-28"></TableHead>
@@ -846,7 +919,10 @@ export default function GitSyncPage() {
                   </TableCell>
                   <TableCell className="max-w-0 overflow-hidden">
                     <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="font-mono truncate" title={item.displayName}>
+                      <span
+                        className="font-mono truncate"
+                        title={item.displayName}
+                      >
                         {item.displayName}
                       </span>
                       {kind === 'memory' && (
@@ -875,7 +951,9 @@ export default function GitSyncPage() {
                     <StatusDot status={item.status} />
                   </TableCell>
                   <TableCell className="text-muted-foreground">
-                    {item.lastSyncedAt ? dayjs(item.lastSyncedAt).fromNow() : '-'}
+                    {item.lastSyncedAt
+                      ? dayjs(item.lastSyncedAt).fromNow()
+                      : '-'}
                   </TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-0.5">
@@ -937,12 +1015,19 @@ export default function GitSyncPage() {
                         )}
                       <RowActionMenu
                         itemId={itemId}
+                        kind={kind}
                         status={item.status}
                         pushEnabled={!!config?.pushEnabled}
                         canWrite={canWrite}
-                        onForget={(id) => setForgetModal({ open: true, itemId: id })}
-                        onDelete={(id) => setDeleteModal({ open: true, itemId: id })}
-                        onMove={(id) => setMoveModal({ open: true, itemId: id })}
+                        onForget={(id) =>
+                          setForgetModal({ open: true, itemId: id })
+                        }
+                        onDelete={(id) =>
+                          setDeleteModal({ open: true, itemId: id })
+                        }
+                        onMove={(id) =>
+                          setMoveModal({ open: true, itemId: id })
+                        }
                       />
                     </div>
                   </TableCell>
@@ -1050,7 +1135,9 @@ export default function GitSyncPage() {
                 <Checkbox
                   id="publish-force"
                   checked={publishForce}
-                  onCheckedChange={(checked) => setPublishForce(checked === true)}
+                  onCheckedChange={(checked) =>
+                    setPublishForce(checked === true)
+                  }
                 />
                 <Label htmlFor="publish-force" className="text-xs">
                   Force publish (override conflict)
@@ -1121,12 +1208,17 @@ export default function GitSyncPage() {
           }
         }}
         onForget={
-          diffData?.status === SyncStatus.missing && canWrite && diffModal.itemId
+          diffData?.status === SyncStatus.missing &&
+          canWrite &&
+          diffModal.itemId
             ? () => setForgetModal({ open: true, itemId: diffModal.itemId })
             : undefined
         }
         onDelete={
-          diffData?.status === SyncStatus.missing && canWrite && config?.pushEnabled && diffModal.itemId
+          diffData?.status === SyncStatus.missing &&
+          canWrite &&
+          config?.pushEnabled &&
+          diffModal.itemId
             ? () => setDeleteModal({ open: true, itemId: diffModal.itemId })
             : undefined
         }
@@ -1163,7 +1255,10 @@ export default function GitSyncPage() {
         itemId={forgetModal.itemId || ''}
         isForgetting={reconcile.isForgetting}
         onConfirm={async () => {
-          if (forgetModal.itemId && await reconcile.handleForget(forgetModal.itemId)) {
+          if (
+            forgetModal.itemId &&
+            (await reconcile.handleForget(forgetModal.itemId))
+          ) {
             setForgetModal({ open: false });
             setDiffModal({ open: false });
           }
@@ -1182,7 +1277,10 @@ export default function GitSyncPage() {
         }
         isDeleting={reconcile.isDeleting}
         onConfirm={async (force) => {
-          if (deleteModal.itemId && await reconcile.handleDelete(deleteModal.itemId, force)) {
+          if (
+            deleteModal.itemId &&
+            (await reconcile.handleDelete(deleteModal.itemId, force))
+          ) {
             setDeleteModal({ open: false });
             setDiffModal({ open: false });
           }
@@ -1206,7 +1304,15 @@ export default function GitSyncPage() {
         }
         isMoving={reconcile.isMoving}
         onConfirm={async (newItemId, message, force) => {
-          if (moveModal.itemId && await reconcile.handleMove(moveModal.itemId, newItemId, message, force)) {
+          if (
+            moveModal.itemId &&
+            (await reconcile.handleMove(
+              moveModal.itemId,
+              newItemId,
+              message,
+              force
+            ))
+          ) {
             setMoveModal({ open: false });
           }
         }}
@@ -1246,7 +1352,13 @@ export default function GitSyncPage() {
         hasModifiedOrConflict={hasModifiedOrConflictInSelection}
         isDeletingBatch={reconcile.isDeletingBatch}
         onConfirm={async (message, force) => {
-          if (await reconcile.handleDeleteBatch(deletableSelectedIds, message, force)) {
+          if (
+            await reconcile.handleDeleteBatch(
+              deletableSelectedIds,
+              message,
+              force
+            )
+          ) {
             setBatchDeleteModal(false);
             setSelectedDags(new Set());
             userTouchedSelectionRef.current = false;

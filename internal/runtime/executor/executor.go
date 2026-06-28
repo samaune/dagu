@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 
+	"github.com/dagucloud/dagu/internal/cmn/cmdutil"
 	"github.com/dagucloud/dagu/internal/cmn/logger"
 	"github.com/dagucloud/dagu/internal/cmn/logger/tag"
 	"github.com/dagucloud/dagu/internal/core"
@@ -36,33 +38,52 @@ type Executor interface {
 	Run(ctx context.Context) error
 }
 
+// Stopper is implemented by executors that can handle lifecycle stop intent
+// directly instead of receiving only a legacy OS signal.
+type Stopper interface {
+	Stop(cmdutil.TerminationIntent) error
+}
+
 // ExecutorFactory is a function type that creates an Executor based on the step configuration.
 type ExecutorFactory func(ctx context.Context, step core.Step) (Executor, error)
 
 // NewExecutor creates a new Executor based on the step's executor type.
 func NewExecutor(ctx context.Context, step core.Step) (Executor, error) {
+	executorRegistryMu.RLock()
 	factory, ok := executorRegistry[step.ExecutorConfig.Type]
+	executorRegistryMu.RUnlock()
 	if ok {
 		return factory(ctx, step)
 	}
 
-	logger.Error(ctx, "Executor type is not registered",
+	logger.Error(ctx, "Action is not registered",
 		tag.Type(step.ExecutorConfig.Type),
 		tag.Step(step.Name),
 	)
-	return nil, fmt.Errorf("executor type %q is not registered", step.ExecutorConfig.Type)
+	return nil, fmt.Errorf("action %q is not registered", step.ExecutorConfig.Type)
 }
 
 // RegisterExecutor registers a new executor type with its factory, validator, and capabilities.
 func RegisterExecutor(executorType string, factory ExecutorFactory, validator core.StepValidator, caps core.ExecutorCapabilities) {
+	executorRegistryMu.Lock()
 	executorRegistry[executorType] = factory
+	executorRegistryMu.Unlock()
 	if validator != nil {
 		core.RegisterStepValidator(executorType, validator)
 	}
 	core.RegisterExecutorCapabilities(executorType, caps)
 }
 
+// UnregisterExecutor removes a registered executor type.
+func UnregisterExecutor(executorType string) {
+	executorRegistryMu.Lock()
+	defer executorRegistryMu.Unlock()
+	delete(executorRegistry, executorType)
+}
+
 var executorRegistry = make(map[string]ExecutorFactory)
+
+var executorRegistryMu sync.RWMutex
 
 // ExitCoder is an interface for executors that can return an exit code.
 type ExitCoder interface {
@@ -109,6 +130,12 @@ type PushBackAware interface {
 	SetPushBackContext(inputs map[string]string, iteration int)
 }
 
+// PushBackPreviousStdoutAware is implemented by executors that can consume the
+// previous stdout log path for push-back re-execution.
+type PushBackPreviousStdoutAware interface {
+	SetPushBackPreviousStdout(path string)
+}
+
 // SubRunProvider is an interface for executors that spawn sub-DAG runs.
 // This is used by executors like chat (with tools) to report sub-runs
 // for UI drill-down functionality.
@@ -121,4 +148,9 @@ type SubRunProvider interface {
 // for debugging and visibility purposes.
 type ToolDefinitionProvider interface {
 	GetToolDefinitions() []exec.ToolDefinition
+}
+
+// OutputsProvider is implemented by executors that publish DAG/action outputs.
+type OutputsProvider interface {
+	GetOutputs() map[string]any
 }

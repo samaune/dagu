@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"github.com/dagucloud/dagu/internal/agent"
+	cmnvalue "github.com/dagucloud/dagu/internal/cmn/value"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
 	"github.com/dagucloud/dagu/internal/llm"
@@ -40,6 +41,11 @@ func init() {
 	)
 }
 
+// NewExecutor creates an executor for an agent workflow step.
+func NewExecutor(_ context.Context, step core.Step) (executor.Executor, error) {
+	return &Executor{step: step}, nil
+}
+
 // Executor runs the agent loop as a workflow step.
 type Executor struct {
 	step              core.Step
@@ -53,8 +59,8 @@ type Executor struct {
 	pushBackIteration int
 }
 
-func newAgentExecutor(_ context.Context, step core.Step) (executor.Executor, error) {
-	return &Executor{step: step}, nil
+func newAgentExecutor(ctx context.Context, step core.Step) (executor.Executor, error) {
+	return NewExecutor(ctx, step)
 }
 
 func (e *Executor) SetStdout(w io.Writer) { e.stdout = w }
@@ -134,7 +140,7 @@ func (e *Executor) Run(ctx context.Context) error {
 	}
 
 	// Build tools filtered by global policy (exclude navigate and ask_user; add output tool).
-	tools := buildTools(ctx, dagCtx, stepCfg, globalPolicy, stdout)
+	tools := buildTools(ctx, dagCtx, stepCfg, agentCfg, globalPolicy, stdout)
 
 	// Load memory content if enabled.
 	var memoryContent agent.MemoryContent
@@ -189,7 +195,7 @@ func (e *Executor) Run(ctx context.Context) error {
 	// Evaluate variable substitution in messages.
 	var userMessages []llm.Message
 	for _, msg := range e.step.Messages {
-		content, evalErr := runtime.EvalString(ctx, msg.Content)
+		content, evalErr := runtime.ResolveString(ctx, msg.Content, cmnvalue.WorkflowField("messages.content"))
 		if evalErr != nil {
 			return fmt.Errorf("failed to evaluate message content: %w", evalErr)
 		}
@@ -227,15 +233,16 @@ func (e *Executor) Run(ctx context.Context) error {
 	webSearch := resolveWebSearch(stepCfg, agentCfg)
 
 	loop := agent.NewLoop(agent.LoopConfig{
-		Provider:     provider,
-		Model:        modelCfg.Model,
-		Tools:        tools,
-		History:      contextToLLMHistory(e.contextMessages),
-		SystemPrompt: systemPrompt,
-		SafeMode:     safeMode,
-		Hooks:        hooks,
-		Logger:       slog.Default(),
-		WebSearch:    webSearch,
+		Provider:         provider,
+		Model:            modelCfg.Model,
+		Tools:            tools,
+		History:          contextToLLMHistory(e.contextMessages),
+		SystemPrompt:     systemPrompt,
+		SafeMode:         safeMode,
+		Hooks:            hooks,
+		Logger:           slog.Default(),
+		WebSearch:        webSearch,
+		ReturnTurnErrors: true,
 		RecordMessage: func(_ context.Context, msg agent.Message) {
 			logMessage(stderr, msg)
 			converted := convertMessage(msg, modelCfg)
@@ -284,8 +291,8 @@ func (e *Executor) Run(ctx context.Context) error {
 }
 
 // buildTools creates the tool list for the agent step.
-// Tools are filtered first by global policy, then by step-level config.
-func buildTools(ctx context.Context, dagCtx exec.Context, stepCfg *core.AgentStepConfig, globalPolicy agent.ToolPolicyConfig, stdout io.Writer) []*agent.AgentTool {
+// Tools are filtered first by global policy, then by step-level agent config.
+func buildTools(ctx context.Context, dagCtx exec.Context, stepCfg *core.AgentStepConfig, agentCfg *agent.Config, globalPolicy agent.ToolPolicyConfig, stdout io.Writer) []*agent.AgentTool {
 	dagsDir := ""
 	if dagCtx.DAG != nil {
 		dagsDir = dagCtx.DAG.Location
@@ -307,6 +314,20 @@ func buildTools(ctx context.Context, dagCtx exec.Context, stepCfg *core.AgentSte
 		}
 		if t := agent.NewListContextsTool(remoteResolver); t != nil {
 			allTools["list_contexts"] = t
+		}
+	}
+	if dagStore := agent.GetDAGStore(ctx); dagStore != nil {
+		allTools["dag_def_manage"] = agent.NewDAGDefManageTool(dagStore)
+	}
+	if dagRunStore := agent.GetDAGRunStore(ctx); dagRunStore != nil {
+		allTools["dag_run_manage"] = agent.NewDAGRunManageTool(dagRunStore)
+	}
+	if agentCfg != nil && agentCfg.WebTools != nil {
+		if t := agent.NewWebSearchTool(*agentCfg.WebTools); t != nil {
+			allTools["web_search"] = t
+		}
+		if t := agent.NewWebExtractTool(*agentCfg.WebTools); t != nil {
+			allTools["web_extract"] = t
 		}
 	}
 
@@ -423,7 +444,7 @@ func mergeStepBashPolicy(global agent.ToolPolicyConfig, stepCfg *core.AgentStepC
 }
 
 // resolveWebSearch resolves the web search config for the agent step.
-// Step-level config overrides global agent config.
+// Step-level agent config overrides global agent config.
 func resolveWebSearch(stepCfg *core.AgentStepConfig, agentCfg *agent.Config) *llm.WebSearchRequest {
 	// Step-level override takes precedence.
 	if stepCfg != nil && stepCfg.WebSearch != nil {

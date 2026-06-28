@@ -1,16 +1,22 @@
-import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
+// Copyright (C) 2026 Yota Hamada
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, Maximize2, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import type { StatusTab } from '@/features/dags/components/DAGStatus';
+import { cn } from '@/lib/utils';
 import { components } from '../../../../api/v1/schema';
-import { AppBarContext } from '../../../../contexts/AppBarContext';
 import { usePageContext } from '../../../../contexts/PageContext';
+import { useRemoteNode } from '../../../../contexts/RemoteNodeContext';
 import { shouldIgnoreKeyboardShortcuts } from '../../../../lib/keyboard-shortcuts';
-import LoadingIndicator from '../../../../ui/LoadingIndicator';
+import LoadingIndicator from '@/components/ui/loading-indicator';
 import { DAGRunContext } from '../../contexts/DAGRunContext';
 import { useBoundedDAGRunDetails } from '../../hooks/useBoundedDAGRunDetails';
 import { matchesRequestedDAGRunDetails } from '../../hooks/dagRunDetailsRequest';
+import { buildDAGRunPageURL } from '../../lib/dagRunUrls';
 import DAGRunDetailsContent from './DAGRunDetailsContent';
 
 type DAGRunDetailsModalProps = {
@@ -18,6 +24,7 @@ type DAGRunDetailsModalProps = {
   dagRunId: string;
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: StatusTab;
 };
 
 type PreviousData = {
@@ -31,14 +38,14 @@ function DAGRunDetailsModal({
   dagRunId,
   isOpen,
   onClose,
+  initialTab = 'status',
 }: DAGRunDetailsModalProps): React.ReactElement | null {
   const navigate = useNavigate();
-  const appBarContext = useContext(AppBarContext);
   const { setContext } = usePageContext();
 
   const [shouldRender, setShouldRender] = useState(isOpen);
   const [isVisible, setIsVisible] = useState(false);
-  const remoteNode = appBarContext.selectedRemoteNode || 'local';
+  const remoteNode = useRemoteNode();
   const previousDataRef = useRef<PreviousData | null>(null);
   const prevRemoteNodeRef = useRef(remoteNode);
   if (prevRemoteNodeRef.current !== remoteNode) {
@@ -101,14 +108,24 @@ function DAGRunDetailsModal({
     pollIntervalMs: isOpen ? 2000 : 0,
   });
 
-  const expectedDagRunId = canQuerySubDag ? (subDAGRunId ?? '') : (dagRunId || 'latest');
-  const freshDetails =
-    matchesRequestedDAGRunDetails(latestDetails, expectedDagRunId)
-      ? latestDetails
-      : null;
+  const expectedDagRunId = canQuerySubDag
+    ? (subDAGRunId ?? '')
+    : dagRunId || 'latest';
+  const freshDetails = matchesRequestedDAGRunDetails(
+    latestDetails,
+    expectedDagRunId,
+    canQuerySubDag ? undefined : name
+  )
+    ? latestDetails
+    : null;
   const displayData = freshDetails ?? previousDataRef.current?.dagRunDetails;
-  const displayName = freshDetails ? name : (previousDataRef.current?.name ?? name);
-  const displayDagRunId = freshDetails ? dagRunId : (previousDataRef.current?.dagRunId ?? dagRunId);
+  const displayName = freshDetails
+    ? name
+    : (previousDataRef.current?.name ?? name);
+  const displayDagRunId = freshDetails
+    ? dagRunId
+    : (previousDataRef.current?.dagRunId ?? dagRunId);
+  const fillContentHeight = initialTab === 'artifacts';
 
   useEffect(() => {
     if (freshDetails) {
@@ -145,7 +162,18 @@ function DAGRunDetailsModal({
 
   const handleFullscreenClick = useCallback(
     (e?: React.MouseEvent): void => {
-      const url = `/dag-runs/${name}/${dagRunId}`;
+      const url = canQuerySubDag
+        ? buildDAGRunPageURL({
+            rootDAGRunName: parentName,
+            rootDAGRunId: parentDAGRunId ?? '',
+            remoteNode,
+            subDAGRunId: subDAGRunId ?? '',
+          })
+        : buildDAGRunPageURL({
+            rootDAGRunName: name,
+            rootDAGRunId: dagRunId,
+            remoteNode,
+          });
 
       if (e?.metaKey || e?.ctrlKey) {
         window.open(url, '_blank');
@@ -153,7 +181,16 @@ function DAGRunDetailsModal({
         navigate(url);
       }
     },
-    [name, dagRunId, navigate]
+    [
+      canQuerySubDag,
+      dagRunId,
+      name,
+      navigate,
+      parentDAGRunId,
+      parentName,
+      remoteNode,
+      subDAGRunId,
+    ]
   );
 
   useEffect(() => {
@@ -192,7 +229,11 @@ function DAGRunDetailsModal({
       <div className="fixed inset-0 h-screen w-screen z-40" onClick={onClose} />
 
       <div
-        className={`fixed top-0 bottom-0 right-0 md:w-3/4 w-full h-screen bg-background border-l border-indigo-500/30 z-50 overflow-y-auto transition-all duration-150 ease-out ${modalVisibilityClass}`}
+        className={cn(
+          'fixed top-0 bottom-0 right-0 z-50 h-screen w-full border-l border-indigo-500/30 bg-background transition-all duration-150 ease-out md:w-3/4',
+          fillContentHeight ? 'overflow-hidden' : 'overflow-y-auto',
+          modalVisibilityClass
+        )}
       >
         <DAGRunContext.Provider
           value={{
@@ -241,7 +282,12 @@ function DAGRunDetailsModal({
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto relative">
+            <div
+              className={cn(
+                'relative min-h-0 flex-1',
+                fillContentHeight ? 'overflow-hidden' : 'overflow-y-auto'
+              )}
+            >
               {isTransitioning && (
                 <div className="absolute top-2 right-2 z-10">
                   <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -266,6 +312,8 @@ function DAGRunDetailsModal({
                   dagRun={displayData}
                   refreshFn={refreshFn}
                   dagRunId={displayDagRunId}
+                  initialTab={initialTab}
+                  fillHeight={fillContentHeight}
                 />
               )}
             </div>

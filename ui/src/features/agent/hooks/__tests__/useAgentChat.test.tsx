@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfigContext, type Config } from '@/contexts/ConfigContext';
 import { AppBarContext } from '@/contexts/AppBarContext';
 import { UserPreferencesProvider } from '@/contexts/UserPreference';
-import { AgentChatProvider, useAgentChatContext } from '../../context/AgentChatContext';
+import {
+  AgentChatProvider,
+  useAgentChatContext,
+} from '../../context/AgentChatContext';
 import { useAgentChat } from '../useAgentChat';
 
 // Combined hook so tests can call openChat() to simulate the modal being visible.
@@ -13,6 +16,10 @@ function useAgentChatWithOpen() {
   const ctx = useAgentChatContext();
   const chat = useAgentChat();
   return { ...chat, openChat: ctx.openChat };
+}
+
+function useAgentChatAlwaysActive(): ReturnType<typeof useAgentChat> {
+  return useAgentChat({ active: true });
 }
 
 const getMock = vi.fn();
@@ -99,10 +106,33 @@ function makeApiMessage(id: string, content: string, sequenceId = 1) {
   };
 }
 
+function makeApiUIActionMessage(
+  id: string,
+  path: string,
+  sequenceId = 1,
+  sessionId = 'sess-1'
+) {
+  return {
+    id,
+    sessionId,
+    type: 'ui_action',
+    sequenceId,
+    uiAction: {
+      type: 'navigate',
+      path,
+    },
+    createdAt: '2026-03-13T00:00:00Z',
+  };
+}
+
+type ApiTestMessage =
+  | ReturnType<typeof makeApiMessage>
+  | ReturnType<typeof makeApiUIActionMessage>;
+
 function makeSessionDetailResponse(options?: {
   id?: string;
   delegateTask?: string;
-  messages?: Array<ReturnType<typeof makeApiMessage>>;
+  messages?: ApiTestMessage[];
   working?: boolean;
   delegates?: Array<{
     id: string;
@@ -201,7 +231,9 @@ describe('useAgentChat fallback polling', () => {
       wrapper: TestProviders,
     });
 
-    act(() => { result.current.openChat(); });
+    act(() => {
+      result.current.openChat();
+    });
     await act(async () => {
       await result.current.selectSession('sess-1');
     });
@@ -229,6 +261,560 @@ describe('useAgentChat fallback polling', () => {
     });
 
     expect(sessionFetchCount).toBe(callsAfterReconnect);
+  });
+
+  it('polls while explicitly active without opening the floating modal', async () => {
+    let sessionFetchCount = 0;
+    getMock.mockImplementation(
+      async (
+        _path: string,
+        request?: { params?: { path?: { sessionId?: string } } }
+      ) => {
+        if (request?.params?.path?.sessionId === 'sess-1') {
+          sessionFetchCount += 1;
+          return {
+            data: makeSessionDetailResponse({
+              messages: [
+                makeApiMessage(
+                  `msg-${sessionFetchCount}`,
+                  sessionFetchCount === 1 ? 'initial' : 'embedded poll'
+                ),
+              ],
+              working: sessionFetchCount > 1,
+            }),
+          };
+        }
+        throw new Error('unexpected request');
+      }
+    );
+
+    const { result } = renderHook(() => useAgentChatAlwaysActive(), {
+      wrapper: TestProviders,
+    });
+
+    await act(async () => {
+      await result.current.selectSession('sess-1');
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(sessionFetchCount).toBe(2);
+    expect(result.current.messages[0]?.content).toBe('embedded poll');
+    expect(result.current.sessionState?.working).toBe(true);
+  });
+
+  it('does not replay historical navigate actions when opening an existing session', async () => {
+    getMock.mockImplementation(
+      async (
+        _path: string,
+        request?: { params?: { path?: { sessionId?: string } } }
+      ) => {
+        if (request?.params?.path?.sessionId === 'sess-1') {
+          return {
+            data: makeSessionDetailResponse({
+              messages: [makeApiUIActionMessage('ui-1', '/dags/existing-dag')],
+            }),
+          };
+        }
+        throw new Error('unexpected request');
+      }
+    );
+
+    const { result } = renderHook(() => useAgentChatWithOpen(), {
+      wrapper: TestProviders,
+    });
+
+    act(() => {
+      result.current.openChat();
+    });
+    await act(async () => {
+      await result.current.selectSession('sess-1');
+    });
+
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('does not replay historical navigate actions when a restored transcript loads after the session id', async () => {
+    let resolveSessionDetail:
+      | ((value: { data: ReturnType<typeof makeSessionDetailResponse> }) => void)
+      | undefined;
+    getMock.mockImplementation(
+      (
+        _path: string,
+        request?: { params?: { path?: { sessionId?: string } } }
+      ) => {
+        if (request?.params?.path?.sessionId === 'sess-1') {
+          return new Promise((resolve) => {
+            resolveSessionDetail = resolve;
+          });
+        }
+        throw new Error('unexpected request');
+      }
+    );
+
+    const { result } = renderHook(() => useAgentChatWithOpen(), {
+      wrapper: TestProviders,
+    });
+
+    act(() => {
+      result.current.openChat();
+    });
+
+    let selectPromise: Promise<void> = Promise.resolve();
+    act(() => {
+      selectPromise = result.current.selectSession('sess-1');
+    });
+
+    expect(result.current.sessionId).toBe('sess-1');
+    expect(navigateMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveSessionDetail?.({
+        data: makeSessionDetailResponse({
+          messages: [makeApiUIActionMessage('ui-1', '/dags/existing-dag')],
+        }),
+      });
+      await selectPromise;
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('navigates when a ui_action arrives via fallback polling', async () => {
+    const sessionResponses = [
+      makeSessionDetailResponse({
+        messages: [makeApiMessage('msg-1', 'initial snapshot', 1)],
+      }),
+      makeSessionDetailResponse({
+        messages: [
+          makeApiMessage('msg-1', 'initial snapshot', 1),
+          makeApiUIActionMessage(
+            'ui-2',
+            '/dags/github_webhook_codex_analysis',
+            2
+          ),
+        ],
+      }),
+    ];
+    let sessionFetchCount = 0;
+
+    getMock.mockImplementation(
+      async (
+        _path: string,
+        request?: { params?: { path?: { sessionId?: string } } }
+      ) => {
+        if (request?.params?.path?.sessionId === 'sess-1') {
+          const idx = Math.min(sessionFetchCount, sessionResponses.length - 1);
+          sessionFetchCount += 1;
+          return { data: sessionResponses[idx] };
+        }
+        throw new Error('unexpected request');
+      }
+    );
+
+    const { result } = renderHook(() => useAgentChatWithOpen(), {
+      wrapper: TestProviders,
+    });
+
+    act(() => {
+      result.current.openChat();
+    });
+    await act(async () => {
+      await result.current.selectSession('sess-1');
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(navigateMock).toHaveBeenCalledWith(
+      '/dags/github_webhook_codex_analysis'
+    );
+  });
+
+  it('navigates ui_actions from the first poll after creating a session', async () => {
+    getMock.mockImplementation(
+      async (
+        path: string,
+        request?: { params?: { path?: { sessionId?: string } } }
+      ) => {
+        if (path === '/agent/sessions') {
+          return {
+            data: {
+              sessions: [
+                {
+                  session: {
+                    id: 'sess-new',
+                    title: 'Session sess-new',
+                    createdAt: '2026-03-13T00:00:00Z',
+                    updatedAt: '2026-03-13T00:00:00Z',
+                  },
+                  working: true,
+                  hasPendingPrompt: false,
+                  model: 'gpt-test',
+                  totalCost: 0,
+                },
+              ],
+              pagination: {
+                currentPage: 1,
+                totalPages: 1,
+              },
+            },
+          };
+        }
+        if (request?.params?.path?.sessionId === 'sess-new') {
+          return {
+            data: makeSessionDetailResponse({
+              id: 'sess-new',
+              messages: [
+                makeApiUIActionMessage(
+                  'ui-new',
+                  '/dags/github_webhook_codex_analysis',
+                  1,
+                  'sess-new'
+                ),
+              ],
+              working: false,
+            }),
+          };
+        }
+        throw new Error('unexpected request');
+      }
+    );
+    postMock.mockImplementation(async (path: string) => {
+      if (path === '/agent/sessions') {
+        return { data: { sessionId: 'sess-new' } };
+      }
+      throw new Error('unexpected request');
+    });
+
+    const { result } = renderHook(() => useAgentChatAlwaysActive(), {
+      wrapper: TestProviders,
+    });
+
+    await act(async () => {
+      await result.current.sendMessage('open the DAG page');
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(navigateMock).toHaveBeenCalledWith(
+      '/dags/github_webhook_codex_analysis'
+    );
+  });
+
+  it('loads additional sessions with the cursor returned by the previous page', async () => {
+    getMock.mockImplementation(async (path: string, request?: unknown) => {
+      if (path !== '/agent/sessions') {
+        throw new Error('unexpected request');
+      }
+      const params = request as {
+        params?: { query?: { cursor?: string; perPage?: number } };
+      };
+      if (!params.params?.query?.cursor) {
+        return {
+          data: {
+            sessions: [
+              {
+                session: {
+                  id: 'sess-1',
+                  title: 'first session',
+                  createdAt: '2026-05-08T10:00:00Z',
+                  updatedAt: '2026-05-08T10:00:00Z',
+                },
+                working: false,
+                hasPendingPrompt: false,
+                model: 'gpt-test',
+                totalCost: 0,
+              },
+            ],
+            nextCursor: 'cursor-1',
+            pagination: {
+              currentPage: 1,
+              totalPages: 2,
+            },
+          },
+        };
+      }
+      if (params.params.query.cursor === 'cursor-1') {
+        return {
+          data: {
+            sessions: [
+              {
+                session: {
+                  id: 'sess-2',
+                  title: 'second session',
+                  createdAt: '2026-05-08T09:00:00Z',
+                  updatedAt: '2026-05-08T09:00:00Z',
+                },
+                working: false,
+                hasPendingPrompt: false,
+                model: 'gpt-test',
+                totalCost: 0,
+              },
+            ],
+            pagination: {
+              currentPage: 1,
+              totalPages: 1,
+            },
+          },
+        };
+      }
+      throw new Error('unexpected cursor');
+    });
+
+    const { result } = renderHook(() => useAgentChatAlwaysActive(), {
+      wrapper: TestProviders,
+    });
+
+    await act(async () => {
+      await result.current.fetchSessions();
+    });
+    await act(async () => {
+      await result.current.loadMoreSessions();
+    });
+
+    expect(getMock).toHaveBeenNthCalledWith(
+      1,
+      '/agent/sessions',
+      expect.objectContaining({
+        params: {
+          query: {
+            remoteNode: 'local',
+            paginationMode: 'cursor',
+            perPage: 30,
+          },
+        },
+      })
+    );
+    expect(getMock).toHaveBeenNthCalledWith(
+      2,
+      '/agent/sessions',
+      expect.objectContaining({
+        params: {
+          query: {
+            remoteNode: 'local',
+            paginationMode: 'cursor',
+            perPage: 30,
+            cursor: 'cursor-1',
+          },
+        },
+      })
+    );
+    expect(result.current.sessions.map((session) => session.session.id)).toEqual(
+      ['sess-1', 'sess-2']
+    );
+    expect(result.current.hasMoreSessions).toBe(false);
+  });
+
+  it('ignores concurrent load more calls while a cursor page is already loading', async () => {
+    let resolveLoadMore:
+      | ((value: {
+          data: {
+            sessions: unknown[];
+            pagination: { currentPage: number; totalPages: number };
+          };
+        }) => void)
+      | undefined;
+
+    getMock.mockImplementation(async (path: string, request?: unknown) => {
+      if (path !== '/agent/sessions') {
+        throw new Error('unexpected request');
+      }
+      const params = request as {
+        params?: { query?: { cursor?: string } };
+      };
+      if (!params.params?.query?.cursor) {
+        return {
+          data: {
+            sessions: [
+              {
+                session: {
+                  id: 'sess-1',
+                  title: 'first session',
+                  createdAt: '2026-05-08T10:00:00Z',
+                  updatedAt: '2026-05-08T10:00:00Z',
+                },
+                working: false,
+                hasPendingPrompt: false,
+                model: 'gpt-test',
+                totalCost: 0,
+              },
+            ],
+            nextCursor: 'cursor-1',
+            pagination: {
+              currentPage: 1,
+              totalPages: 2,
+            },
+          },
+        };
+      }
+      return new Promise((resolve) => {
+        resolveLoadMore = resolve;
+      });
+    });
+
+    const { result } = renderHook(() => useAgentChatAlwaysActive(), {
+      wrapper: TestProviders,
+    });
+
+    await act(async () => {
+      await result.current.fetchSessions();
+    });
+
+    let firstLoad: Promise<void> | undefined;
+    act(() => {
+      firstLoad = result.current.loadMoreSessions();
+      void result.current.loadMoreSessions();
+    });
+
+    expect(getMock).toHaveBeenCalledTimes(2);
+    expect(result.current.isLoadingMore).toBe(true);
+
+    await act(async () => {
+      resolveLoadMore?.({
+        data: {
+          sessions: [],
+          pagination: {
+            currentPage: 1,
+            totalPages: 1,
+          },
+        },
+      });
+      await firstLoad;
+    });
+
+    expect(result.current.isLoadingMore).toBe(false);
+  });
+
+  it('clears the session list running marker when the selected session snapshot is idle', async () => {
+    getMock.mockImplementation(
+      async (
+        path: string,
+        request?: { params?: { path?: { sessionId?: string } } }
+      ) => {
+        if (path === '/agent/sessions') {
+          return {
+            data: {
+              sessions: [
+                {
+                  session: {
+                    id: 'sess-1',
+                    title: 'tracked session',
+                    createdAt: '2026-05-08T10:00:00Z',
+                    updatedAt: '2026-05-08T10:00:00Z',
+                  },
+                  working: true,
+                  hasPendingPrompt: false,
+                  model: 'gpt-test',
+                  totalCost: 0,
+                },
+              ],
+              pagination: {
+                currentPage: 1,
+                totalPages: 1,
+              },
+            },
+          };
+        }
+        if (request?.params?.path?.sessionId === 'sess-1') {
+          return {
+            data: makeSessionDetailResponse({
+              id: 'sess-1',
+              working: false,
+            }),
+          };
+        }
+        throw new Error('unexpected request');
+      }
+    );
+
+    const { result } = renderHook(() => useAgentChatAlwaysActive(), {
+      wrapper: TestProviders,
+    });
+
+    await act(async () => {
+      await result.current.fetchSessions();
+    });
+    expect(result.current.sessions[0]?.working).toBe(true);
+
+    await act(async () => {
+      await result.current.selectSession('sess-1');
+    });
+
+    expect(result.current.sessions[0]?.working).toBe(false);
+  });
+
+  it('navigates when a delegate ui_action arrives via fallback polling', async () => {
+    let delegateFetchCount = 0;
+    getMock.mockImplementation(
+      async (
+        _path: string,
+        request?: { params?: { path?: { sessionId?: string } } }
+      ) => {
+        const sessionId = request?.params?.path?.sessionId;
+        if (sessionId === 'sess-1') {
+          return {
+            data: makeSessionDetailResponse({
+              messages: [makeApiMessage('msg-root', 'root session')],
+              delegates: [
+                { id: 'delegate-1', task: 'Delegate task', status: 'running' },
+              ],
+            }),
+          };
+        }
+        if (sessionId === 'delegate-1') {
+          delegateFetchCount += 1;
+          return {
+            data: makeSessionDetailResponse({
+              id: 'delegate-1',
+              delegateTask: 'Delegate task',
+              messages:
+                delegateFetchCount === 1
+                  ? [makeApiMessage('delegate-msg-1', 'delegate initial', 1)]
+                  : [
+                      makeApiMessage('delegate-msg-1', 'delegate initial', 1),
+                      makeApiUIActionMessage(
+                        'delegate-ui-1',
+                        '/dags/delegate-target',
+                        2,
+                        'delegate-1'
+                      ),
+                    ],
+              working: delegateFetchCount === 1,
+            }),
+          };
+        }
+        throw new Error('unexpected request');
+      }
+    );
+
+    const { result } = renderHook(() => useAgentChatWithOpen(), {
+      wrapper: TestProviders,
+    });
+
+    act(() => {
+      result.current.openChat();
+    });
+    await act(async () => {
+      await result.current.selectSession('sess-1');
+    });
+    await act(async () => {
+      await result.current.reopenDelegate('delegate-1', 'Delegate task');
+    });
+
+    expect(navigateMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(navigateMock).toHaveBeenCalledWith('/dags/delegate-target');
   });
 
   it('polls open delegate panes while the root agent stream is offline and stops after reconnect', async () => {
@@ -280,7 +866,9 @@ describe('useAgentChat fallback polling', () => {
       wrapper: TestProviders,
     });
 
-    act(() => { result.current.openChat(); });
+    act(() => {
+      result.current.openChat();
+    });
     await act(async () => {
       await result.current.selectSession('sess-1');
     });
@@ -336,7 +924,9 @@ describe('useAgentChat fallback polling', () => {
       wrapper: TestProviders,
     });
 
-    act(() => { result.current.openChat(); });
+    act(() => {
+      result.current.openChat();
+    });
     await act(async () => {
       await result.current.selectSession('sess-1');
     });
@@ -482,7 +1072,9 @@ describe('useAgentChat fallback polling', () => {
       wrapper: TestProviders,
     });
 
-    act(() => { result.current.openChat(); });
+    act(() => {
+      result.current.openChat();
+    });
     await act(async () => {
       await result.current.selectSession('sess-1');
     });
@@ -597,7 +1189,10 @@ describe('useAgentChat fallback polling', () => {
     expect(postMock).toHaveBeenCalledWith(
       '/agent/sessions/{sessionId}/chat',
       expect.objectContaining({
-        params: { path: { sessionId: 'sess-1' }, query: { remoteNode: 'local' } },
+        params: {
+          path: { sessionId: 'sess-1' },
+          query: { remoteNode: 'local' },
+        },
       })
     );
     expect(getMock).not.toHaveBeenCalled();

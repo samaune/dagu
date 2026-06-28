@@ -17,7 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dagucloud/dagu/internal/cmn/eval"
+	"github.com/dagucloud/dagu/internal/cmn/cmdutil"
+	cmnvalue "github.com/dagucloud/dagu/internal/cmn/value"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
 	"github.com/dagucloud/dagu/internal/runtime"
@@ -37,10 +38,14 @@ var (
 )
 
 type blockingSignalExecutor struct {
-	ready  chan struct{}
-	killed chan os.Signal
-	stdout io.Writer
-	stderr io.Writer
+	ready   chan struct{}
+	killed  chan os.Signal
+	stopped chan cmdutil.TerminationIntent
+	// Optional test hooks for controlling Kill ordering.
+	killStarted  chan struct{}
+	killContinue chan struct{}
+	stdout       io.Writer
+	stderr       io.Writer
 }
 
 func newBlockingSignalExecutor() *blockingSignalExecutor {
@@ -70,7 +75,26 @@ func (e *blockingSignalExecutor) Kill(sig os.Signal) error {
 	case e.killed <- sig:
 	default:
 	}
+	if e.killStarted != nil {
+		select {
+		case e.killStarted <- struct{}{}:
+		default:
+		}
+	}
+	if e.killContinue != nil {
+		<-e.killContinue
+	}
 	return nil
+}
+
+func (e *blockingSignalExecutor) Stop(intent cmdutil.TerminationIntent) error {
+	if e.stopped != nil {
+		select {
+		case e.stopped <- intent:
+		default:
+		}
+	}
+	return e.Kill(intent.Signal)
 }
 
 func registerNodeSignalExecutor(t *testing.T) {
@@ -84,7 +108,7 @@ func registerNodeSignalExecutor(t *testing.T) {
 				factory := nodeSignalExecutorFactory
 				nodeSignalExecutorFactoryMu.Unlock()
 				if factory == nil {
-					return nil, fmt.Errorf("node signal executor factory not configured")
+					return nil, fmt.Errorf("node signal step factory not configured")
 				}
 				return factory(), nil
 			},
@@ -105,6 +129,29 @@ func withNodeSignalExecutor(t *testing.T) (<-chan *blockingSignalExecutor, func(
 	prev := nodeSignalExecutorFactory
 	nodeSignalExecutorFactory = func() *blockingSignalExecutor {
 		exec := newBlockingSignalExecutor()
+		execCh <- exec
+		return exec
+	}
+	nodeSignalExecutorFactoryMu.Unlock()
+
+	return execCh, func() {
+		nodeSignalExecutorFactoryMu.Lock()
+		nodeSignalExecutorFactory = prev
+		nodeSignalExecutorFactoryMu.Unlock()
+	}
+}
+
+func withNodeSignalExecutorFactory(t *testing.T, factory func() *blockingSignalExecutor) (<-chan *blockingSignalExecutor, func()) {
+	t.Helper()
+
+	registerNodeSignalExecutor(t)
+
+	execCh := make(chan *blockingSignalExecutor, 1)
+
+	nodeSignalExecutorFactoryMu.Lock()
+	prev := nodeSignalExecutorFactory
+	nodeSignalExecutorFactory = func() *blockingSignalExecutor {
+		exec := factory()
 		execCh <- exec
 		return exec
 	}
@@ -157,7 +204,7 @@ func TestNode(t *testing.T) {
 		go func() {
 			exec := <-execCh
 			<-exec.ready
-			node.Signal(node.Context, syscall.SIGTERM, true) // allow override signal
+			node.Signal(node.Context, syscall.Signal(0), true) // allow override signal
 		}()
 
 		node.SetStatus(core.NodeRunning)
@@ -167,6 +214,157 @@ func TestNode(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "signal: interrupt")
 		require.Equal(t, core.NodeAborted.String(), node.State().Status.String())
+	})
+	t.Run("SignalBeforeExecutorRunPreventsStart", func(t *testing.T) {
+		execCh, restore := withNodeSignalExecutor(t)
+		defer restore()
+
+		node := setupNode(t, withNodeExecutorType(nodeSignalExecutorType))
+		node.SetStatus(core.NodeRunning)
+
+		dagRunID := uuid.Must(uuid.NewV7()).String()
+		err := runtime.NewStepExecutor().Execute(node.execContext(dagRunID), node.Node, func() {
+			node.Signal(node.Context, syscall.SIGTERM, false)
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "node execution aborted before start")
+		require.Equal(t, core.NodeAborted.String(), node.State().Status.String())
+
+		exec := <-execCh
+		select {
+		case <-exec.ready:
+			t.Fatal("executor Run should not start after a pre-run signal")
+		default:
+		}
+	})
+	t.Run("SignalMarksAbortedBeforeKillReturns", func(t *testing.T) {
+		execCh, restore := withNodeSignalExecutorFactory(t, func() *blockingSignalExecutor {
+			exec := newBlockingSignalExecutor()
+			exec.killStarted = make(chan struct{}, 1)
+			exec.killContinue = make(chan struct{})
+			return exec
+		})
+		defer restore()
+
+		node := setupNode(t, withNodeExecutorType(nodeSignalExecutorType), withNodeSignalOnStop("SIGINT"))
+		node.SetStatus(core.NodeRunning)
+
+		dagRunID := uuid.Must(uuid.NewV7()).String()
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- node.Node.Execute(node.execContext(dagRunID))
+		}()
+
+		exec := <-execCh
+		<-exec.ready
+
+		go node.Signal(node.Context, syscall.Signal(0), true) // allow override signal
+
+		select {
+		case <-exec.killStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for Kill to start")
+		}
+		require.Equal(t, core.NodeAborted.String(), node.State().Status.String())
+
+		close(exec.killContinue)
+
+		var err error
+		select {
+		case err = <-errCh:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for Execute to return")
+		}
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "signal: interrupt")
+	})
+	t.Run("SignalUsesStopIntent", func(t *testing.T) {
+		execCh, restore := withNodeSignalExecutorFactory(t, func() *blockingSignalExecutor {
+			exec := newBlockingSignalExecutor()
+			exec.stopped = make(chan cmdutil.TerminationIntent, 1)
+			return exec
+		})
+		defer restore()
+
+		node := setupNode(t, withNodeExecutorType(nodeSignalExecutorType))
+		seen := make(chan *blockingSignalExecutor, 1)
+		go func() {
+			exec := <-execCh
+			seen <- exec
+			<-exec.ready
+			node.Signal(node.Context, syscall.SIGTERM, false)
+		}()
+
+		node.SetStatus(core.NodeRunning)
+
+		dagRunID := uuid.Must(uuid.NewV7()).String()
+		err := node.Node.Execute(node.execContext(dagRunID))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "signal: terminated")
+
+		exec := <-seen
+		select {
+		case intent := <-exec.stopped:
+			require.Equal(t, cmdutil.TerminationModeGraceful, intent.Mode)
+			require.Equal(t, os.Signal(syscall.SIGTERM), intent.Signal)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for stop intent")
+		}
+	})
+	t.Run("ForceSignalIgnoresSignalOnStopOverride", func(t *testing.T) {
+		execCh, restore := withNodeSignalExecutorFactory(t, func() *blockingSignalExecutor {
+			exec := newBlockingSignalExecutor()
+			exec.stopped = make(chan cmdutil.TerminationIntent, 1)
+			return exec
+		})
+		defer restore()
+
+		node := setupNode(t, withNodeExecutorType(nodeSignalExecutorType), withNodeSignalOnStop("SIGINT"))
+		seen := make(chan *blockingSignalExecutor, 1)
+		go func() {
+			exec := <-execCh
+			seen <- exec
+			<-exec.ready
+			node.Signal(node.Context, syscall.SIGKILL, true)
+		}()
+
+		node.SetStatus(core.NodeRunning)
+
+		dagRunID := uuid.Must(uuid.NewV7()).String()
+		err := node.Node.Execute(node.execContext(dagRunID))
+		require.Error(t, err)
+		require.Equal(t, core.NodeAborted.String(), node.State().Status.String())
+
+		exec := <-seen
+		select {
+		case intent := <-exec.stopped:
+			require.Equal(t, cmdutil.TerminationModeForce, intent.Mode)
+			require.Equal(t, os.Kill, intent.Signal)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for stop intent")
+		}
+	})
+	t.Run("CancelUpdatesOnlyRunningOrWaiting", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name   string
+			status core.NodeStatus
+			want   core.NodeStatus
+		}{
+			{name: "Running", status: core.NodeRunning, want: core.NodeAborted},
+			{name: "Waiting", status: core.NodeWaiting, want: core.NodeAborted},
+			{name: "Succeeded", status: core.NodeSucceeded, want: core.NodeSucceeded},
+			{name: "NotStarted", status: core.NodeNotStarted, want: core.NodeNotStarted},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				node := runtime.NewNode(core.Step{Name: tt.name}, runtime.NodeState{Status: tt.status})
+				node.Cancel()
+				require.Equal(t, tt.want, node.State().Status)
+			})
+		}
 	})
 	t.Run("LogOutput", func(t *testing.T) {
 		t.Parallel()
@@ -254,7 +452,7 @@ func TestNode(t *testing.T) {
 	t.Run("OutputNewlineCharacter", func(t *testing.T) {
 		t.Parallel()
 
-		node := setupNode(t, withNodeCommand(test.Output("hello\nworld")), withNodeOutput("OUTPUT"))
+		node := setupNode(t, withNodeCommand(test.OutputEscaped(`hello\nworld\n`)), withNodeOutput("OUTPUT"))
 		node.Execute(t)
 		node.AssertOutput(t, "OUTPUT", "hello\nworld")
 	})
@@ -496,7 +694,7 @@ func TestNodeBuildSubDAGRuns(t *testing.T) {
 			},
 			setupEnv: func(ctx context.Context) context.Context {
 				env := runtime.GetEnv(ctx)
-				env.Scope = env.Scope.WithEntry("LIST_VAR", `["item1", "item2", "item3"]`, eval.EnvSourceStepEnv)
+				env.Scope = env.Scope.WithEntry("LIST_VAR", `["item1", "item2", "item3"]`, cmnvalue.EnvSourceStepEnv)
 				return runtime.WithEnv(ctx, env)
 			},
 			expectCount: 3,
@@ -511,7 +709,7 @@ func TestNodeBuildSubDAGRuns(t *testing.T) {
 			},
 			setupEnv: func(ctx context.Context) context.Context {
 				env := runtime.GetEnv(ctx)
-				env.Scope = env.Scope.WithEntry("SPACE_VAR", "one two three", eval.EnvSourceStepEnv)
+				env.Scope = env.Scope.WithEntry("SPACE_VAR", "one two three", cmnvalue.EnvSourceStepEnv)
 				return runtime.WithEnv(ctx, env)
 			},
 			expectCount: 3,
@@ -552,7 +750,7 @@ func TestNodeBuildSubDAGRuns(t *testing.T) {
 			},
 			setupEnv: func(ctx context.Context) context.Context {
 				env := runtime.GetEnv(ctx)
-				env.Scope = env.Scope.WithEntry("EMPTY_VAR", "", eval.EnvSourceStepEnv)
+				env.Scope = env.Scope.WithEntry("EMPTY_VAR", "", cmnvalue.EnvSourceStepEnv)
 				return runtime.WithEnv(ctx, env)
 			},
 			expectError:   true,
@@ -586,7 +784,7 @@ func TestNodeBuildSubDAGRuns(t *testing.T) {
 			},
 			setupEnv: func(ctx context.Context) context.Context {
 				env := runtime.GetEnv(ctx)
-				env.Scope = env.Scope.WithEntry("SPACE_VAR", "one two three", eval.EnvSourceStepEnv)
+				env.Scope = env.Scope.WithEntry("SPACE_VAR", "one two three", cmnvalue.EnvSourceStepEnv)
 				return runtime.WithEnv(ctx, env)
 			},
 			expectCount: 3,
@@ -622,6 +820,86 @@ func TestNodeBuildSubDAGRuns(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStepExecutorResolvesMultiCommandExecutableToken(t *testing.T) {
+	executorType := "test-command-token-resolution"
+	created := make(chan core.Step, 1)
+	runtimeexec.RegisterExecutor(executorType, func(_ context.Context, step core.Step) (runtimeexec.Executor, error) {
+		created <- step
+		return &sideChannelExecutor{}, nil
+	}, nil, core.ExecutorCapabilities{
+		Command:          true,
+		MultipleCommands: true,
+		CommandContext: func(_ context.Context, _ core.Step) cmnvalue.CommandContext {
+			return cmnvalue.CommandContext{Target: cmnvalue.CommandTargetLocal}
+		},
+	})
+	t.Cleanup(func() { runtimeexec.UnregisterExecutor(executorType) })
+
+	step := core.Step{
+		Name: "tokenized-command",
+		ExecutorConfig: core.ExecutorConfig{
+			Type: executorType,
+		},
+		Commands: []core.CommandEntry{
+			{
+				Command: "$COMMAND_NAME",
+				Args:    []string{"$COMMAND_ARG"},
+			},
+		},
+	}
+	ctx := runtime.NewContext(context.Background(), &core.DAG{Name: "test-dag"}, "run-1", "dag.log")
+	env := runtime.NewEnv(ctx, step)
+	env.Scope = env.Scope.
+		WithEntry("COMMAND_NAME", "printf", cmnvalue.EnvSourceStepEnv).
+		WithEntry("COMMAND_ARG", "hello", cmnvalue.EnvSourceStepEnv)
+	ctx = runtime.WithEnv(ctx, env)
+
+	node := runtime.NewNode(step, runtime.NodeState{})
+	require.NoError(t, runtime.NewStepExecutor().Execute(ctx, node))
+
+	got := <-created
+	require.Len(t, got.Commands, 1)
+	assert.Equal(t, "printf", got.Commands[0].Command)
+	assert.Equal(t, []string{"hello"}, got.Commands[0].Args)
+}
+
+func TestNodePrepareResolvesRetryRepeatStringsFromRuntimeEnv(t *testing.T) {
+	step := core.Step{
+		Name: "dynamic-policy",
+		RetryPolicy: core.RetryPolicy{
+			LimitStr:       "$RETRY_LIMIT",
+			IntervalSecStr: "$RETRY_INTERVAL",
+		},
+		RepeatPolicy: core.RepeatPolicy{
+			LimitStr:       "$REPEAT_LIMIT",
+			IntervalStr:    "$REPEAT_INTERVAL",
+			MaxIntervalStr: "$REPEAT_MAX_INTERVAL",
+		},
+	}
+	ctx := runtime.NewContext(context.Background(), &core.DAG{Name: "test-dag"}, "run-1", "dag.log")
+	env := runtime.NewEnv(ctx, step)
+	env.Scope = env.Scope.
+		WithEntry("RETRY_LIMIT", "3", cmnvalue.EnvSourceStepEnv).
+		WithEntry("RETRY_INTERVAL", "4", cmnvalue.EnvSourceStepEnv).
+		WithEntry("REPEAT_LIMIT", "5", cmnvalue.EnvSourceStepEnv).
+		WithEntry("REPEAT_INTERVAL", "6", cmnvalue.EnvSourceStepEnv).
+		WithEntry("REPEAT_MAX_INTERVAL", "7", cmnvalue.EnvSourceStepEnv)
+	ctx = runtime.WithEnv(ctx, env)
+
+	node := runtime.NewNode(step, runtime.NodeState{})
+	require.NoError(t, node.Prepare(ctx, t.TempDir(), "run-1"))
+	t.Cleanup(func() {
+		require.NoError(t, node.Teardown())
+	})
+
+	got := node.Step()
+	assert.Equal(t, 3, got.RetryPolicy.Limit)
+	assert.Equal(t, 4*time.Second, got.RetryPolicy.Interval)
+	assert.Equal(t, 5, got.RepeatPolicy.Limit)
+	assert.Equal(t, 6*time.Second, got.RepeatPolicy.Interval)
+	assert.Equal(t, 7*time.Second, got.RepeatPolicy.MaxInterval)
 }
 
 func TestNodeItemToParam(t *testing.T) {

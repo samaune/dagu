@@ -34,7 +34,7 @@ func toExecStatus(detail *api.DAGRunDetails) (*exec.DAGRunStatus, error) {
 		Log:          detail.Log,
 		Params:       derefString(detail.Params),
 		WorkerID:     derefString(detail.WorkerId),
-		Tags:         derefStringSlice(detail.Tags),
+		Labels:       labelsFromAPI(detail.Labels, detail.Tags),
 		Nodes:        make([]*exec.Node, 0, len(detail.Nodes)),
 	}
 	status.Root = exec.NewDAGRunRef(detail.RootDAGRunName, detail.RootDAGRunId)
@@ -99,6 +99,7 @@ func mapAPIStep(step api.Step) core.Step {
 		Output:      derefString(step.Output),
 		Depends:     derefStringSlice(step.Depends),
 		MailOnError: derefBool(step.MailOnError),
+		Outputs:     mapAPIStepOutputs(step.Outputs),
 	}
 	if step.Id != nil {
 		mapped.ID = *step.Id
@@ -130,8 +131,26 @@ func mapAPIStep(step api.Step) core.Step {
 	return mapped
 }
 
+func mapAPIStepOutputs(outputs *[]api.StepOutputDeclaration) []core.StepOutputDeclaration {
+	if outputs == nil || len(*outputs) == 0 {
+		return nil
+	}
+	mapped := make([]core.StepOutputDeclaration, 0, len(*outputs))
+	for _, output := range *outputs {
+		outputType := core.StepDeclaredOutputTypeString
+		if output.Type != nil {
+			outputType = string(*output.Type)
+		}
+		mapped = append(mapped, core.StepOutputDeclaration{
+			Name: output.Name,
+			Type: outputType,
+		})
+	}
+	return mapped
+}
+
 func validateRemoteStartLikeFlags(ctx *Context) error {
-	disallowed := []string{"parent", "root", "worker-id", "attempt-id", "schedule-time"}
+	disallowed := []string{"parent", "root", "worker-id", "attempt-id", "schedule-time", "profile"}
 	for _, flag := range disallowed {
 		if ctx.Command.Flags().Changed(flag) {
 			return fmt.Errorf("--%s is only supported in the local context", flag)
@@ -205,7 +224,7 @@ func remoteRunStart(ctx *Context, args []string) error {
 			return fmt.Errorf("invalid run-id: %w", err)
 		}
 	}
-	tags, err := remoteTagsFromFlag(ctx)
+	labels, err := remoteLabelsFromFlag(ctx)
 	if err != nil {
 		return err
 	}
@@ -213,7 +232,7 @@ func remoteRunStart(ctx *Context, args []string) error {
 		DagName:  stringPtrOrNil(nameOverride),
 		DagRunId: stringPtrOrNil(runID),
 		Params:   stringPtrOrNil(params),
-		Tags:     tags,
+		Labels:   labels,
 	})
 	if err != nil {
 		return err
@@ -245,7 +264,7 @@ func remoteRunEnqueue(ctx *Context, args []string) error {
 		}
 	}
 	queueOverride, _ := ctx.StringParam("queue")
-	tags, err := remoteTagsFromFlag(ctx)
+	labels, err := remoteLabelsFromFlag(ctx)
 	if err != nil {
 		return err
 	}
@@ -254,7 +273,7 @@ func remoteRunEnqueue(ctx *Context, args []string) error {
 		DagRunId: stringPtrOrNil(runID),
 		Params:   stringPtrOrNil(params),
 		Queue:    stringPtrOrNil(queueOverride),
-		Tags:     tags,
+		Labels:   labels,
 	})
 	if err != nil {
 		return err
@@ -306,8 +325,7 @@ func remoteRunHistory(ctx *Context, args []string) error {
 		return err
 	}
 	if len(runs) == 0 {
-		fmt.Println("No DAG runs found matching the specified filters.")
-		return nil
+		return renderEmptyHistory(format)
 	}
 	if len(runs) > limit {
 		runs = runs[:limit]
@@ -323,7 +341,7 @@ func remoteRunHistory(ctx *Context, args []string) error {
 			QueuedAt:     derefString(run.QueuedAt),
 			ScheduleTime: derefString(run.ScheduleTime),
 			Params:       derefString(run.Params),
-			Tags:         derefStringSlice(run.Tags),
+			Labels:       labelsFromAPI(run.Labels, run.Tags),
 			WorkerID:     derefString(run.WorkerId),
 		}
 		if format == "json" {
@@ -424,21 +442,21 @@ func remoteRunDequeue(ctx *Context, args []string) error {
 	return ctx.Remote.dequeueDAGRun(ctx, item.Name, item.DagRunId)
 }
 
-func remoteTagsFromFlag(ctx *Context) (*api.Tags, error) {
-	tagsStr, err := ctx.StringParam("tags")
+func remoteLabelsFromFlag(ctx *Context) (*api.Labels, error) {
+	labelsStr, err := labelsParam(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if tagsStr == "" {
+	if labelsStr == "" {
 		return nil, nil
 	}
-	tags := core.NewTags(parseTags(tagsStr))
-	if err := core.ValidateTags(tags); err != nil {
-		return nil, fmt.Errorf("invalid tags: %w", err)
+	labels := core.NewLabels(parseLabels(labelsStr))
+	if err := core.ValidateLabels(labels); err != nil {
+		return nil, fmt.Errorf("invalid labels: %w", err)
 	}
-	tagStrings := tags.Strings()
-	converted := make(api.Tags, len(tagStrings))
-	copy(converted, tagStrings)
+	labelStrings := labels.Strings()
+	converted := make(api.Labels, len(labelStrings))
+	copy(converted, labelStrings)
 	return &converted, nil
 }
 
@@ -483,16 +501,19 @@ func buildRemoteHistoryQuery(ctx *Context, args []string) (remoteHistoryQuery, i
 	}
 	statusValue, _ := ctx.StringParam("status")
 	if statusValue != "" {
-		s, err := remoteStatusValue(statusValue)
+		statuses, err := remoteStatusValues(statusValue)
 		if err != nil {
 			return query, 0, err
 		}
-		query.Status = &s
+		query.Statuses = statuses
 	}
 	runID, _ := ctx.StringParam("run-id")
 	query.RunID = runID
-	tagsStr, _ := ctx.StringParam("tags")
-	query.Tags = parseTags(tagsStr)
+	labelsStr, err := labelsParam(ctx)
+	if err != nil {
+		return query, 0, err
+	}
+	query.Labels = parseLabels(labelsStr)
 	limitStr, _ := ctx.StringParam("limit")
 	if limitStr != "" {
 		parsed, err := strconv.Atoi(limitStr)
@@ -508,24 +529,35 @@ func buildRemoteHistoryQuery(ctx *Context, args []string) (remoteHistoryQuery, i
 }
 
 func remoteStatusValue(s string) (int, error) {
-	switch s {
-	case "running":
-		return int(core.Running), nil
-	case "succeeded":
-		return int(core.Succeeded), nil
-	case "failed":
-		return int(core.Failed), nil
-	case "aborted":
-		return int(core.Aborted), nil
-	case "queued":
-		return int(core.Queued), nil
-	case "waiting":
-		return int(core.Waiting), nil
-	case "none":
+	if strings.EqualFold(strings.TrimSpace(s), "none") {
 		return 0, fmt.Errorf("status %q is not supported in remote history", s)
-	default:
-		return 0, fmt.Errorf("invalid status %q", s)
 	}
+
+	status, err := parseStatus(s)
+	if err != nil {
+		return 0, err
+	}
+	return int(status), nil
+}
+
+func remoteStatusValues(s string) ([]int, error) {
+	parts := strings.Split(s, ",")
+	statuses := make([]int, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		status, err := remoteStatusValue(trimmed)
+		if err != nil {
+			return nil, err
+		}
+		statuses = append(statuses, status)
+	}
+	if len(statuses) == 0 {
+		return nil, fmt.Errorf("invalid status %q", s)
+	}
+	return statuses, nil
 }
 
 func waitForRemoteStop(ctx *Context, name, dagRunID string) error {
@@ -611,10 +643,17 @@ func enrichRemoteHistoryStatus(status *exec.DAGRunStatus, detail *api.DAGRunDeta
 	if err != nil {
 		return err
 	}
-	status.Tags = remoteStatus.Tags
+	status.Labels = remoteStatus.Labels
 	status.WorkerID = remoteStatus.WorkerID
 	if errs := remoteStatus.Errors(); len(errs) > 0 {
 		status.Error = errs[0].Error()
 	}
 	return nil
+}
+
+func labelsFromAPI(labels, deprecatedTags *[]string) []string {
+	if labels != nil {
+		return derefStringSlice(labels)
+	}
+	return derefStringSlice(deprecatedTags)
 }

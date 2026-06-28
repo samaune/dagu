@@ -16,21 +16,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dagucloud/dagu/internal/cmn/eval"
+	"github.com/dagucloud/dagu/internal/cmn/buildenv"
 	"github.com/dagucloud/dagu/internal/cmn/fileutil"
-	"github.com/dagucloud/dagu/internal/cmn/logger"
-	"github.com/dagucloud/dagu/internal/cmn/logger/tag"
+	cmnvalue "github.com/dagucloud/dagu/internal/cmn/value"
 	"github.com/joho/godotenv"
 	"github.com/robfig/cron/v3"
 )
 
-// Execution type constants
+// Supported DAG execution types.
 const (
-	// TypeGraph is the execution type using dependency-based parallel execution
+	// TypeGraph runs dependency-aware steps in parallel where possible.
 	TypeGraph = "graph"
-	// TypeChain executes steps sequentially in the order they are defined
+	// TypeChain runs steps strictly in declaration order.
 	TypeChain = "chain"
-	// TypeAgent is reserved for future agent-based execution
+	// TypeAgent is reserved for agent-oriented execution flows.
 	TypeAgent = "agent"
 )
 
@@ -51,14 +50,13 @@ const (
 // EffectiveLogOutput returns the effective log output mode for a step.
 // Priority: step-level > DAG-level > default (LogOutputSeparate).
 func EffectiveLogOutput(dag *DAG, step *Step) LogOutputMode {
-	switch {
-	case step != nil && step.LogOutput != "":
+	if step != nil && step.LogOutput != "" {
 		return step.LogOutput
-	case dag != nil && dag.LogOutput != "":
-		return dag.LogOutput
-	default:
-		return LogOutputSeparate
 	}
+	if dag != nil && dag.LogOutput != "" {
+		return dag.LogOutput
+	}
+	return LogOutputSeparate
 }
 
 // DAG contains all information about a DAG.
@@ -98,8 +96,8 @@ type DAG struct {
 	ShellArgs []string `json:"shellArgs,omitempty"`
 	// Dotenv is the path to the dotenv file. This is optional.
 	Dotenv []string `json:"dotenv,omitempty"`
-	// Tags contains the list of tags for the DAG. This is optional.
-	Tags Tags `json:"tags,omitempty"`
+	// Labels contains the list of labels for the DAG. This is optional.
+	Labels Labels `json:"labels,omitempty"`
 	// Description is the description of the DAG. This is optional.
 	Description string `json:"description,omitempty"`
 	// Schedule configuration for starting, stopping, and restarting the DAG.
@@ -121,6 +119,10 @@ type DAG struct {
 	// Note: This field is evaluated at build time and may contain secrets.
 	// It is excluded from JSON serialization to prevent secret leakage.
 	Env []string `json:"-"`
+	// Consts contains immutable values resolved while loading the DAG.
+	Consts map[string]any `json:"consts,omitempty"`
+	// EnvEvaluated reports whether Env is safe to reuse as resolved build env.
+	EnvEvaluated bool `json:"-"`
 	// PresolvedBuildEnv stores resolved DAG/base-config env entries needed to
 	// rebuild the DAG from persisted YAML during retry/restart paths.
 	// It is serialized with dag.json because direct retry/restart cannot rely on
@@ -139,6 +141,9 @@ type DAG struct {
 	// ParamDefs contains ordered parameter metadata derived from DAG params.
 	// It is exposed to the API for typed UI rendering and validation hints.
 	ParamDefs []ParamDef `json:"paramDefs,omitempty"`
+	// ParamSchema contains the resolved JSON Schema for schema-backed DAG params
+	// when that schema is safe for direct UI form rendering.
+	ParamSchema json.RawMessage `json:"paramSchema,omitempty"`
 	// Params contains the list of parameters to be passed to the DAG.
 	// Note: This field is evaluated at build time and may contain secrets.
 	// It is excluded from JSON serialization to prevent secret leakage.
@@ -182,12 +187,14 @@ type DAG struct {
 	MaxCleanUpTime time.Duration `json:"maxCleanUpTime,omitempty"`
 	// HistRetentionDays is the number of days to keep the history of dag-runs.
 	HistRetentionDays int `json:"histRetentionDays,omitempty"`
+	// HistRetentionRuns is the number of dag-runs to keep in history.
+	HistRetentionRuns int `json:"histRetentionRuns,omitempty"`
 	// Queue is the name of the queue to assign this DAG to.
 	Queue string `json:"queue,omitempty"`
 	// RetryPolicy controls automatic DAG-level retry behavior for failed runs.
 	RetryPolicy *DAGRetryPolicy `json:"retryPolicy,omitempty"`
 	// WorkerSelector defines labels required for worker selection in distributed execution.
-	// If specified, the DAG will only run on workers with matching tag.
+	// If specified, the DAG will only run on workers with matching labels.
 	WorkerSelector map[string]string `json:"workerSelector,omitempty"`
 	// ForceLocal forces the DAG to run locally even when the server default is distributed.
 	// Set by worker_selector: local in the DAG spec.
@@ -213,6 +220,10 @@ type DAG struct {
 	Container *Container `json:"container,omitempty"`
 	// RunConfig contains configuration for controlling user interactions during DAG runs.
 	RunConfig *RunConfig `json:"runConfig,omitempty"`
+	// Resources contains CPU and memory limits requested for this DAG run.
+	Resources *Resources `json:"resources,omitempty"`
+	// Webhook contains DAG-level webhook trigger behavior configuration.
+	Webhook *WebhookConfig `json:"webhook,omitempty"`
 	// RegistryAuths maps registry hostnames to authentication configs.
 	// Optional: If not specified, falls back to DOCKER_AUTH_CONFIG or docker config.
 	// Credentials are evaluated at runtime. Excluded from JSON: may contain passwords.
@@ -243,6 +254,8 @@ type DAG struct {
 	Kubernetes KubernetesConfig `json:"-"`
 	// Secrets contains references to external secrets to be resolved at runtime.
 	Secrets []SecretRef `json:"secrets,omitempty"`
+	// Tools declares external CLI tools that must be installed before the DAG runs.
+	Tools *ToolConfig `json:"tools,omitempty"`
 	// dotenvOnce ensures LoadDotEnv is called only once, even with concurrent calls.
 	// This provides thread-safe idempotency for dotenv loading.
 	dotenvOnce sync.Once
@@ -271,6 +284,13 @@ type ParamDef struct {
 	Pattern     *string  `json:"pattern,omitempty"`
 }
 
+// WebhookConfig contains DAG-level webhook trigger behavior.
+type WebhookConfig struct {
+	// ForwardHeaders is the allowlist of request headers to expose to
+	// webhook-triggered DAG runs via the WEBHOOK_HEADERS runtime variable.
+	ForwardHeaders []string `json:"forwardHeaders,omitempty"`
+}
+
 // ArtifactsConfig controls DAG run artifact storage.
 type ArtifactsConfig struct {
 	Enabled bool   `json:"enabled"`
@@ -296,19 +316,51 @@ type DAGRetryPolicy struct {
 type SecretRef struct {
 	// Name is the environment variable name to set (required).
 	Name string `json:"name"`
-	// Provider specifies the secret backend (e.g., "env", "file", "vault", "kubernetes") (required).
-	Provider string `json:"provider"`
-	// Key is the provider-specific identifier for the secret (required).
-	Key string `json:"key"`
+	// Ref is the workspace-local registry reference for a team-managed secret.
+	Ref string `json:"ref,omitempty"`
+	// Provider specifies the secret backend (e.g., "env", "file", "vault", "kubernetes").
+	Provider string `json:"provider,omitempty"`
+	// Key is the provider-specific identifier for a direct provider reference.
+	Key string `json:"key,omitempty"`
 	// Options contains provider-specific configuration (optional).
 	Options map[string]string `json:"options,omitempty"`
 }
 
-// HasTag checks if the DAG has the given tag.
-// Supports both simple tags ("production") and key-value filters ("env=prod").
+// UnmarshalJSON deserializes DAGs written by both the canonical labels field
+// and the deprecated tags field used by older persisted dag.json files.
+func (d *DAG) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	type alias DAG
+	aux := struct {
+		*alias
+		DeprecatedTags Labels `json:"tags,omitempty"`
+	}{
+		alias: (*alias)(d),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if _, hasLabels := raw["labels"]; !hasLabels && len(aux.DeprecatedTags) > 0 {
+		d.Labels = aux.DeprecatedTags
+	}
+	return nil
+}
+
+// HasLabel checks if the DAG has a label matching the given filter.
+// Supports both simple labels ("production") and key-value filters ("env=prod").
+func (d *DAG) HasLabel(label string) bool {
+	filter := ParseLabelFilter(label)
+	return filter.MatchesLabels(d.Labels)
+}
+
+// HasTag checks if the DAG has a tag matching the given filter.
+// Deprecated: use HasLabel.
 func (d *DAG) HasTag(tag string) bool {
-	filter := ParseTagFilter(tag)
-	return filter.MatchesTags(d.Tags)
+	return d.HasLabel(tag)
 }
 
 // Clone creates a shallow copy of the DAG.
@@ -323,9 +375,20 @@ func (d *DAG) Clone() *DAG {
 	if d.PresolvedBuildEnv != nil {
 		clone.PresolvedBuildEnv = maps.Clone(d.PresolvedBuildEnv)
 	}
+	if d.Consts != nil {
+		clone.Consts = maps.Clone(d.Consts)
+	}
 	if d.Artifacts != nil {
 		artifactsCopy := *d.Artifacts
 		clone.Artifacts = &artifactsCopy
+	}
+	if d.Resources != nil {
+		clone.Resources = d.Resources.Clone()
+	}
+	if d.Webhook != nil {
+		webhookCopy := *d.Webhook
+		webhookCopy.ForwardHeaders = append([]string(nil), d.Webhook.ForwardHeaders...)
+		clone.Webhook = &webhookCopy
 	}
 	if d.Harness != nil {
 		clone.Harness = cloneHarnessConfig(d.Harness)
@@ -355,7 +418,7 @@ func (d *DAG) HasApprovalSteps() bool {
 // The address is used to communicate with the agent process.
 func (d *DAG) SockAddr(dagRunID string) string {
 	if d.Location != "" {
-		return SockAddr(d.Location, "")
+		return SockAddr(d.Location, dagRunID)
 	}
 	return SockAddr(d.Name, dagRunID)
 }
@@ -466,8 +529,16 @@ func (d *DAG) loadDotEnvFiles(ctx context.Context) {
 		return
 	}
 
-	relativeTos := []string{d.WorkingDir}
-	if fileDir := filepath.Dir(d.Location); d.Location != "" && fileDir != d.WorkingDir {
+	scope := d.dotenvEnvScope()
+	evalCtx := ctx
+	if evalCtx == nil {
+		evalCtx = context.Background()
+	}
+	evalCtx = cmnvalue.WithEnvScope(evalCtx, scope)
+
+	workingDir := d.expandDotEnvPath(d.WorkingDir, scope)
+	relativeTos := []string{workingDir}
+	if fileDir := filepath.Dir(d.Location); d.Location != "" && fileDir != workingDir {
 		relativeTos = append(relativeTos, fileDir)
 	}
 
@@ -475,8 +546,43 @@ func (d *DAG) loadDotEnvFiles(ctx context.Context) {
 	candidates := deduplicateStrings(append([]string{".env"}, d.Dotenv...))
 
 	for _, filePath := range candidates {
-		d.loadSingleDotEnvFile(ctx, resolver, filePath)
+		d.loadSingleDotEnvFile(evalCtx, resolver, filePath)
 	}
+}
+
+// dotenvEnvScope builds the variable scope used to resolve dotenv search paths.
+func (d *DAG) dotenvEnvScope() *cmnvalue.EnvScope {
+	scope := cmnvalue.NewEnvScope(nil, true)
+	if params := buildenv.ToMap(d.Params); len(params) > 0 {
+		scope = scope.WithEntries(params, cmnvalue.EnvSourceParam)
+	}
+	if len(d.PresolvedBuildEnv) > 0 {
+		scope = scope.WithEntries(d.PresolvedBuildEnv, cmnvalue.EnvSourcePresolved)
+	}
+	if envs := buildenv.ToMap(d.Env); len(envs) > 0 {
+		scope = scope.WithEntries(envs, cmnvalue.EnvSourceDAGEnv)
+	}
+	return scope
+}
+
+func (d *DAG) expandConsts(value, field string) (string, error) {
+	resolver := cmnvalue.NewResolver(
+		cmnvalue.StaticScope{Consts: cmnvalue.Values(d.Consts)},
+		cmnvalue.RuntimeScope{Consts: cmnvalue.Values(d.Consts)},
+	)
+	return resolver.String(context.Background(), value, cmnvalue.StaticValidationField(field))
+}
+
+// expandDotEnvPath expands a dotenv-related path without mutating the DAG definition.
+func (d *DAG) expandDotEnvPath(path string, scope *cmnvalue.EnvScope) string {
+	expanded, err := d.expandConsts(path, "dotenv")
+	if err != nil {
+		expanded = path
+	}
+	if scope == nil {
+		return os.ExpandEnv(expanded)
+	}
+	return scope.Expand(expanded)
 }
 
 // loadSingleDotEnvFile loads a single dotenv file and appends its variables to d.Env.
@@ -485,27 +591,30 @@ func (d *DAG) loadSingleDotEnvFile(ctx context.Context, resolver *fileutil.FileR
 		return
 	}
 
-	evaluatedPath, err := eval.String(ctx, filePath, eval.WithOSExpansion())
+	valueResolver := cmnvalue.NewResolver(
+		cmnvalue.StaticScope{Consts: cmnvalue.Values(d.Consts), Params: d.ParamDeclarations()},
+		cmnvalue.RuntimeScope{Consts: cmnvalue.Values(d.Consts), Params: d.ParamValues(), Env: cmnvalue.GetEnvScope(ctx)},
+	)
+	evaluatedPath, err := valueResolver.String(ctx, filePath, cmnvalue.DotenvPathField("dotenv"))
 	if err != nil {
-		logger.Warn(ctx, "Failed to evaluate filepath", tag.File(filePath), tag.Error(err))
+		d.BuildErrors = append(d.BuildErrors, fmt.Errorf("failed to evaluate dotenv path %q: %w", filePath, err))
 		return
 	}
 
-	resolvedPath, err := resolver.ResolveFilePath(evaluatedPath)
+	resolvedPath, err := resolver.ResolveFilePathLiteral(evaluatedPath)
 	if err != nil || !fileutil.FileExists(resolvedPath) {
 		return
 	}
 
 	vars, err := godotenv.Read(resolvedPath)
 	if err != nil {
-		logger.Warn(ctx, "Failed to load .env file", tag.File(resolvedPath), tag.Error(err))
+		d.BuildWarnings = append(d.BuildWarnings, fmt.Sprintf("failed to load .env file %q: %v", resolvedPath, err))
 		return
 	}
 
 	for k, v := range vars {
 		d.Env = append(d.Env, fmt.Sprintf("%s=%s", k, v))
 	}
-	logger.Info(ctx, "Loaded dotenv file", tag.File(resolvedPath))
 }
 
 // initializeDefaults sets the default values for the DAG.
@@ -518,12 +627,12 @@ func (d *DAG) initializeDefaults() {
 	)
 
 	if d.Type == "" {
-		d.Type = TypeChain
+		d.Type = TypeGraph
 	}
 	if d.LogOutput == "" {
 		d.LogOutput = LogOutputSeparate
 	}
-	if d.HistRetentionDays == 0 {
+	if d.HistRetentionDays == 0 && d.HistRetentionRuns == 0 {
 		d.HistRetentionDays = defaultHistRetentionDays
 	}
 	if d.MaxCleanUpTime == 0 {
@@ -557,6 +666,64 @@ func (d *DAG) ParamsMap() map[string]string {
 		}
 	}
 	return params
+}
+
+// ParamDeclarations returns named parameters that can be referenced through ${params.name}.
+func (d *DAG) ParamDeclarations() cmnvalue.Values {
+	if d == nil || len(d.ParamDefs) == 0 {
+		return nil
+	}
+	params := make(cmnvalue.Values, len(d.ParamDefs))
+	for _, def := range d.ParamDefs {
+		name := strings.TrimSpace(def.Name)
+		if !isNamedValueParam(name) {
+			continue
+		}
+		params[name] = nil
+	}
+	if len(params) == 0 {
+		return nil
+	}
+	return params
+}
+
+// ParamValues returns named runtime parameter values for ${params.name}.
+func (d *DAG) ParamValues() cmnvalue.Values {
+	if d == nil {
+		return nil
+	}
+	paramsMap := d.ParamsMap()
+	if len(paramsMap) == 0 {
+		return nil
+	}
+	params := make(cmnvalue.Values, len(paramsMap))
+	for name, value := range paramsMap {
+		if !isNamedValueParam(name) {
+			continue
+		}
+		params[name] = value
+	}
+	if len(params) == 0 {
+		return nil
+	}
+	return params
+}
+
+func isNamedValueParam(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case i == 0 && ((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z')):
+			continue
+		case i > 0 && ((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_'):
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // ProcGroup returns the name of the process group for this DAG.

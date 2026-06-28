@@ -16,6 +16,7 @@ import (
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
 	"github.com/dagucloud/dagu/internal/test"
+	"github.com/dagucloud/dagu/internal/test/intgharness"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -70,11 +71,14 @@ func TestInlineSubDAG(t *testing.T) {
 		testDAG := th.DAG(t, `
 steps:
   - name: run-local-child
-    call: local-child
-    params: "NAME=World"
+    action: dag.run
+    with:
+      dag: local-child
+      params: "NAME=World"
     output: SUB_RESULT
 
-  - echo "Child said ${SUB_RESULT.outputs.GREETING}"
+  - run: echo "Child said ${SUB_RESULT.outputs.GREETING}"
+    depends: run-local-child
 
 ---
 
@@ -82,10 +86,11 @@ name: local-child
 params:
   - NAME
 steps:
-  - command: echo "Hello, ${NAME}!"
+  - run: echo "Hello, ${NAME}!"
     output: GREETING
 
-  - echo "Greeting was ${GREETING}"
+  - run: echo "Greeting was ${GREETING}"
+    depends: cmd_1
 `)
 
 		agent := testDAG.Agent()
@@ -111,8 +116,10 @@ steps:
 		dag := th.DAG(t, `
 steps:
   - name: call_child
-    call: child
-    params: "MSG=hello"
+    action: dag.run
+    with:
+      dag: child
+      params: "MSG=hello"
 
 ---
 
@@ -120,7 +127,7 @@ name: child
 params: "MSG=default"
 steps:
   - name: echo_msg
-    command: echo "${MSG}_from_child"
+    run: echo "${MSG}_from_child"
     output: RESULT
 `)
 
@@ -135,8 +142,10 @@ steps:
 		dag := th.DAG(t, `
 steps:
   - name: call_middle
-    call: middle
-    params: "MSG=hello"
+    action: dag.run
+    with:
+      dag: middle
+      params: "MSG=hello"
 
 ---
 
@@ -144,8 +153,10 @@ name: middle
 params: "MSG=default"
 steps:
   - name: call_leaf
-    call: leaf
-    params: "MSG=${MSG}_middle"
+    action: dag.run
+    with:
+      dag: leaf
+      params: "MSG=${MSG}_middle"
 
 ---
 
@@ -153,7 +164,7 @@ name: leaf
 params: "MSG=default"
 steps:
   - name: echo_msg
-    command: echo "${MSG}_from_leaf"
+    run: echo "${MSG}_from_leaf"
     output: RESULT
 `)
 
@@ -172,8 +183,10 @@ steps:
 		testDAG := th.DAG(t, `
 steps:
   - name: run-middle-dag
-    call: middle-dag
-    params: "ROOT_PARAM=FromRoot"
+    action: dag.run
+    with:
+      dag: middle-dag
+      params: "ROOT_PARAM=FromRoot"
 
 ---
 
@@ -181,12 +194,14 @@ name: middle-dag
 params:
   - ROOT_PARAM
 steps:
-  - command: echo "Received ${ROOT_PARAM}"
+  - run: echo "Received ${ROOT_PARAM}"
     output: MIDDLE_OUTPUT
 
   - name: run-leaf-dag
-    call: leaf-dag
-    params: "MIDDLE_PARAM=${MIDDLE_OUTPUT} LEAF_PARAM=FromMiddle"
+    action: dag.run
+    with:
+      dag: leaf-dag
+      params: "MIDDLE_PARAM=${MIDDLE_OUTPUT} LEAF_PARAM=FromMiddle"
 
 ---
 
@@ -195,7 +210,7 @@ params:
   - MIDDLE_PARAM
   - LEAF_PARAM
 steps:
-  - command: |
+  - run: |
       echo "Middle: ${MIDDLE_PARAM}, Leaf: ${LEAF_PARAM}"
 `)
 
@@ -216,10 +231,12 @@ steps:
 	t.Run("ParallelExecution", func(t *testing.T) {
 		th := test.Setup(t)
 
-		testDAG := th.DAG(t, `
+		testDAG := th.DAG(t, fmt.Sprintf(`
 steps:
   - name: parallel-tasks
-    call: worker-dag
+    action: dag.run
+    with:
+      dag: worker-dag
     parallel:
       items:
         - TASK_ID=1 TASK_NAME=alpha
@@ -234,10 +251,11 @@ params:
   - TASK_ID
   - TASK_NAME
 steps:
-  - echo "Starting task ${TASK_ID} - ${TASK_NAME}"
-  - echo "Processing ${TASK_NAME} with ID ${TASK_ID}"
-  - echo "Completed ${TASK_NAME}"
-`)
+  - name: report-task
+    run: |
+%s
+    output: TASK_RESULT
+`, indentCommandBlock(intgharness.PortableCommands().EnvOutputWithSeparator(": ", "TASK_ID", "TASK_NAME"), 6)))
 
 		agent := testDAG.Agent()
 		require.NoError(t, agent.Run(agent.Context))
@@ -250,6 +268,7 @@ steps:
 		require.Len(t, dagRunStatus.Nodes, 1)
 		require.Equal(t, "parallel-tasks", dagRunStatus.Nodes[0].Step.Name)
 		require.Equal(t, core.NodeSucceeded, dagRunStatus.Nodes[0].Status)
+		require.Len(t, dagRunStatus.Nodes[0].SubRuns, 3)
 	})
 
 	t.Run("ConditionalExecution", func(t *testing.T) {
@@ -260,17 +279,23 @@ env:
   - ENVIRONMENT: production
 steps:
   - name: check-env
-    command: echo "${ENVIRONMENT}"
+    run: echo "${ENVIRONMENT}"
     output: ENV_TYPE
 
   - name: run-prod-dag
-    call: production-dag
+    action: dag.run
+    with:
+      dag: production-dag
+    depends: check-env
     preconditions:
       - condition: "${ENV_TYPE}"
         expected: "production"
 
   - name: run-dev-dag
-    call: development-dag
+    action: dag.run
+    with:
+      dag: development-dag
+    depends: check-env
     preconditions:
       - condition: "${ENV_TYPE}"
         expected: "development"
@@ -279,15 +304,17 @@ steps:
 
 name: production-dag
 steps:
-  - echo "Deploying to production"
-  - echo "Verifying production deployment"
+  - run: echo "Deploying to production"
+  - run: echo "Verifying production deployment"
+    depends: cmd_1
 
 ---
 
 name: development-dag
 steps:
-  - echo "Building for development"
-  - echo "Running development tests"
+  - run: echo "Building for development"
+  - run: echo "Running development tests"
+    depends: cmd_1
 `)
 
 		agent := testDAG.Agent()
@@ -313,18 +340,23 @@ steps:
 		testDAG := th.DAG(t, `
 steps:
   - name: generate-data
-    call: generator-dag
+    action: dag.run
+    with:
+      dag: generator-dag
     output: GEN_OUTPUT
 
   - name: process-data
-    call: processor-dag
-    params: "INPUT_DATA=${GEN_OUTPUT.outputs.DATA}"
+    action: dag.run
+    with:
+      dag: processor-dag
+      params: "INPUT_DATA=${GEN_OUTPUT.outputs.DATA}"
+    depends: generate-data
 
 ---
 
 name: generator-dag
 steps:
-  - command: echo "test-value-42"
+  - run: echo "test-value-42"
     output: DATA
 
 ---
@@ -333,11 +365,12 @@ name: processor-dag
 params:
   - INPUT_DATA
 steps:
-  - command: echo "Processing ${INPUT_DATA}"
+  - run: echo "Processing ${INPUT_DATA}"
     output: RESULT
 
-  - command: |
+  - run: |
       echo "Validated: ${RESULT}"
+    depends: cmd_1
 `)
 
 		agent := testDAG.Agent()
@@ -361,13 +394,15 @@ steps:
 		testDAG := th.DAG(t, `
 steps:
   - name: run-missing-dag
-    call: non-existent-dag
+    action: dag.run
+    with:
+      dag: non-existent-dag
 
 ---
 
 name: some-other-dag
 steps:
-  - echo "test"
+  - run: echo "test"
 `)
 
 		agent := testDAG.Agent()
@@ -392,23 +427,27 @@ steps:
 type: graph
 steps:
   - name: setup
-    command: echo "Setting up"
+    run: echo "Setting up"
     output: SETUP_STATUS
 
   - name: task1
-    call: task-dag
-    params: "TASK_NAME=Task1 SETUP=${SETUP_STATUS}"
+    action: dag.run
+    with:
+      dag: task-dag
+      params: "TASK_NAME=Task1 SETUP=${SETUP_STATUS}"
     output: TASK1_RESULT
     depends: [setup]
 
   - name: task2
-    call: task-dag
-    params: "TASK_NAME=Task2 SETUP=${SETUP_STATUS}"
+    action: dag.run
+    with:
+      dag: task-dag
+      params: "TASK_NAME=Task2 SETUP=${SETUP_STATUS}"
     output: TASK2_RESULT
     depends: [setup]
 
   - name: combine
-    command: |
+    run: |
       echo "Combining ${TASK1_RESULT.outputs.RESULT} and ${TASK2_RESULT.outputs.RESULT}"
     depends:
       - task1
@@ -421,7 +460,7 @@ params:
   - TASK_NAME
   - SETUP
 steps:
-  - command: echo "${TASK_NAME} processing with ${SETUP}"
+  - run: echo "${TASK_NAME} processing with ${SETUP}"
     output: RESULT
 `)
 
@@ -456,7 +495,9 @@ steps:
 		testDAG := th.DAG(t, `
 steps:
   - name: parallel-tasks
-    call: worker-dag
+    action: dag.run
+    with:
+      dag: worker-dag
     parallel:
       items:
         - TASK_ID=1 TASK_NAME=alpha
@@ -467,11 +508,11 @@ params:
   - TASK_ID
   - TASK_NAME
 steps:
-  - command: exit 1
+  - run: exit 1
     continue_on:
       failure: true
 
-  - exit 0
+  - run: exit 0
 `)
 
 		agent := testDAG.Agent()
@@ -486,7 +527,9 @@ steps:
 		testDAG := th.DAG(t, `
 steps:
   - name: parallel-tasks
-    call: worker-dag
+    action: dag.run
+    with:
+      dag: worker-dag
 ---
 
 name: worker-dag
@@ -494,11 +537,11 @@ params:
   - TASK_ID
   - TASK_NAME
 steps:
-  - command: exit 1
+  - run: exit 1
     continue_on:
       failure: true
 
-  - exit 0
+  - run: exit 0
 `)
 
 		agent := testDAG.Agent()
@@ -515,14 +558,16 @@ func TestExternalSubDAG(t *testing.T) {
 		th.CreateDAGFile(t, "parent_basic.yaml", `
 steps:
   - name: call_sub
-    call: sub_basic
+    action: dag.run
+    with:
+      dag: sub_basic
     output: SUB_OUTPUT
 `)
 
 		th.CreateDAGFile(t, "sub_basic.yaml", `
 steps:
   - name: basic_step
-    command: echo "hello_from_sub"
+    run: echo "hello_from_sub"
     output: STEP_OUTPUT
 `)
 
@@ -567,23 +612,27 @@ steps:
 		th.CreateDAGFile(t, "parent.yaml", `
 steps:
   - name: parent
-    call: sub_1
-    params: "PARAM=FOO"
+    action: dag.run
+    with:
+      dag: sub_1
+      params: "PARAM=FOO"
 `)
 
 		th.CreateDAGFile(t, "sub_1.yaml", `
 params: "PARAM=BAR"
 steps:
   - name: sub_2
-    call: sub_2
-    params: "PARAM=$PARAM"
+    action: dag.run
+    with:
+      dag: sub_2
+      params: "PARAM=$PARAM"
 `)
 
 		th.CreateDAGFile(t, "sub_2.yaml", `
 params: "PARAM=BAZ"
 steps:
   - name: sub_2
-    command: echo "Hello, $PARAM"
+    run: echo "Hello, $PARAM"
 `)
 
 		dagRunID := uuid.Must(uuid.NewV7()).String()
@@ -662,6 +711,95 @@ steps:
 		require.Equal(t, dagRunID, sub2Status.Root.ID)
 	})
 
+	t.Run("ParentRetryDoesNotRerunSucceededSubDAGSteps", func(t *testing.T) {
+		th := test.SetupCommand(t)
+
+		runDir := t.TempDir()
+		successCounter := filepath.Join(runDir, "already-succeeded-count")
+		failOnceMarker := filepath.Join(runDir, "fail-once-marker")
+
+		incrementSuccessCounter := test.ForOS(
+			fmt.Sprintf(`
+count=0
+if [ -f %s ]; then
+  count=$(cat %s)
+fi
+count=$((count + 1))
+printf '%%s' "$count" > %s
+`, test.PosixQuote(test.ShellPath(successCounter)), test.PosixQuote(test.ShellPath(successCounter)), test.PosixQuote(test.ShellPath(successCounter))),
+			fmt.Sprintf(`
+$count = 0
+if (Test-Path %s) {
+  $raw = (Get-Content -Raw -Path %s).Trim()
+  if ($raw) { $count = [int]$raw }
+}
+$count = $count + 1
+Set-Content -Path %s -Value $count -NoNewline
+`, test.PowerShellQuote(successCounter), test.PowerShellQuote(successCounter), test.PowerShellQuote(successCounter)),
+		)
+		failOnce := test.ForOS(
+			fmt.Sprintf(`
+if [ ! -f %s ]; then
+  touch %s
+  exit 1
+fi
+echo ok
+`, test.PosixQuote(test.ShellPath(failOnceMarker)), test.PosixQuote(test.ShellPath(failOnceMarker))),
+			fmt.Sprintf(`
+if (-not (Test-Path %s)) {
+  New-Item -ItemType File %s | Out-Null
+  exit 1
+}
+"ok"
+`, test.PowerShellQuote(failOnceMarker), test.PowerShellQuote(failOnceMarker)),
+		)
+
+		th.CreateDAGFile(t, "parent_retry_child_state.yaml", `
+steps:
+  - name: call-child
+    action: dag.run
+    with:
+      dag: child_retry_state
+`)
+
+		th.CreateDAGFile(t, "child_retry_state.yaml", fmt.Sprintf(`
+steps:
+  - name: already-succeeded
+    run: |
+%s
+
+  - name: fail-once
+    run: |
+%s
+    depends: already-succeeded
+`, indentCommandBlock(incrementSuccessCounter, 6), indentCommandBlock(failOnce, 6)))
+
+		dagRunID := uuid.Must(uuid.NewV7()).String()
+		err := th.RunCommandWithError(t, cmd.Start(), test.CmdTest{
+			Args: []string{"start", "--run-id", dagRunID, "parent_retry_child_state"},
+		})
+		require.Error(t, err)
+
+		counter, err := os.ReadFile(successCounter)
+		require.NoError(t, err)
+		require.Equal(t, "1", strings.TrimSpace(string(counter)))
+
+		th.RunCommand(t, cmd.Retry(), test.CmdTest{
+			Args: []string{"retry", "--run-id", dagRunID, "parent_retry_child_state"},
+		})
+
+		counter, err = os.ReadFile(successCounter)
+		require.NoError(t, err)
+		require.Equal(t, "1", strings.TrimSpace(string(counter)), "parent retry should not rerun child steps that already succeeded")
+
+		ref := exec.NewDAGRunRef("parent_retry_child_state", dagRunID)
+		parentAttempt, err := th.DAGRunStore.FindAttempt(context.Background(), ref)
+		require.NoError(t, err)
+		parentStatus, err := parentAttempt.ReadStatus(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, core.Succeeded, parentStatus.Status)
+	})
+
 	t.Run("RetryPolicyWithOutputCapture", func(t *testing.T) {
 		th := test.SetupCommand(t)
 
@@ -672,14 +810,16 @@ steps:
 		th.CreateDAGFile(t, "parent_retry.yaml", `
 steps:
   - name: call_sub
-    call: sub_retry
+    action: dag.run
+    with:
+      dag: sub_retry
     output: SUB_OUTPUT
 `)
 
 		th.CreateDAGFile(t, "sub_retry.yaml", fmt.Sprintf(`
 steps:
   - name: retry_step
-    command: |
+    run: |
 %s
     output: STEP_OUTPUT
     retry_policy:
@@ -733,7 +873,7 @@ func TestRetryPolicy(t *testing.T) {
 		th.CreateDAGFile(t, "basic_retry.yaml", fmt.Sprintf(`
 steps:
   - name: retry_step
-    command: |
+    run: |
 %s
     output: STEP_OUTPUT
     retry_policy:
@@ -771,7 +911,7 @@ steps:
 		th.CreateDAGFile(t, "no_retry.yaml", `
 steps:
   - name: success_step
-    command: echo "output_first_attempt_success"
+    run: echo "output_first_attempt_success"
     output: STEP_OUTPUT
 `)
 

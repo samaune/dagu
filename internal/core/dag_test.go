@@ -150,9 +150,11 @@ func TestSockAddr(t *testing.T) {
 	t.Run("DAGMethodsUseSockAddr", func(t *testing.T) {
 		t.Parallel()
 
-		// With Location set: uses Location
+		// With Location set: uses Location and dag-run ID so concurrent runs of
+		// the same DAG file do not collide on one socket.
 		dag1 := &core.DAG{Name: "mydag", Location: "path/to/dag.yml"}
-		require.Equal(t, core.SockAddr("path/to/dag.yml", ""), dag1.SockAddr("run123"))
+		require.Equal(t, core.SockAddr("path/to/dag.yml", "run123"), dag1.SockAddr("run123"))
+		require.NotEqual(t, dag1.SockAddr("run123"), dag1.SockAddr("run456"))
 
 		// Without Location: uses Name and dagRunID
 		dag2 := &core.DAG{Name: "mydag"}
@@ -175,11 +177,25 @@ func TestMarshalJSON(t *testing.T) {
 	t.Run("MarshalJSON", func(t *testing.T) {
 		dag := th.DAG(t, `steps:
   - name: "1"
-    command: "true"
+    run: "true"
 `)
 		_, err := json.Marshal(dag.DAG)
 		require.NoError(t, err)
 	})
+}
+
+func TestDAGUnmarshalJSONDeprecatedTags(t *testing.T) {
+	t.Parallel()
+
+	var dag core.DAG
+	err := json.Unmarshal([]byte(`{"name":"legacy","tags":["env=prod","team=platform"]}`), &dag)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"env=prod", "team=platform"}, dag.Labels.Strings())
+
+	var explicitLabels core.DAG
+	err = json.Unmarshal([]byte(`{"name":"canonical","labels":[],"tags":["env=legacy"]}`), &explicitLabels)
+	require.NoError(t, err)
+	assert.Empty(t, explicitLabels.Labels.Strings())
 }
 
 func TestScheduleJSON(t *testing.T) {
@@ -478,84 +494,84 @@ func TestDAG_Validate_MultipleErrors(t *testing.T) {
 	}
 }
 
-func TestDAG_HasTag(t *testing.T) {
+func TestDAG_HasLabel(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name     string
-		tags     []string
+		labels   []string
 		search   string
 		expected bool
 	}{
 		{
-			name:     "empty tags, search for any returns false",
-			tags:     []string{},
+			name:     "empty labels, search for any returns false",
+			labels:   []string{},
 			search:   "test",
 			expected: false,
 		},
 		{
-			name:     "has tag, search for it returns true",
-			tags:     []string{"production", "critical"},
+			name:     "has label, search for it returns true",
+			labels:   []string{"production", "critical"},
 			search:   "production",
 			expected: true,
 		},
 		{
-			name:     "has tag, search for different returns false",
-			tags:     []string{"production", "critical"},
+			name:     "has label, search for different returns false",
+			labels:   []string{"production", "critical"},
 			search:   "staging",
 			expected: false,
 		},
 		{
-			name:     "multiple tags, search for last one returns true",
-			tags:     []string{"a", "b", "c", "d"},
+			name:     "multiple labels, search for last one returns true",
+			labels:   []string{"a", "b", "c", "d"},
 			search:   "d",
 			expected: true,
 		},
 		{
-			name:     "case insensitive - uppercase search matches lowercase tag",
-			tags:     []string{"production"},
+			name:     "case insensitive - uppercase search matches lowercase label",
+			labels:   []string{"production"},
 			search:   "PRODUCTION",
 			expected: true,
 		},
 		{
-			name:     "case insensitive - lowercase search matches uppercase tag",
-			tags:     []string{"Production"},
+			name:     "case insensitive - lowercase search matches uppercase label",
+			labels:   []string{"Production"},
 			search:   "production",
 			expected: true,
 		},
 		{
-			name:     "nil tags returns false",
-			tags:     nil,
+			name:     "nil labels returns false",
+			labels:   nil,
 			search:   "test",
 			expected: false,
 		},
 		{
-			name:     "key-value tag with exact match",
-			tags:     []string{"env=prod"},
+			name:     "key-value label with exact match",
+			labels:   []string{"env=prod"},
 			search:   "env=prod",
 			expected: true,
 		},
 		{
-			name:     "key-value tag with key-only search",
-			tags:     []string{"env=prod"},
+			name:     "key-value label with key-only search",
+			labels:   []string{"env=prod"},
 			search:   "env",
 			expected: true,
 		},
 		{
-			name:     "key-value tag with wrong value",
-			tags:     []string{"env=prod"},
+			name:     "key-value label with wrong value",
+			labels:   []string{"env=prod"},
 			search:   "env=staging",
 			expected: false,
 		},
 		{
 			name:     "negation filter - key not present",
-			tags:     []string{"env=prod"},
+			labels:   []string{"env=prod"},
 			search:   "!deprecated",
 			expected: true,
 		},
 		{
 			name:     "negation filter - key present",
-			tags:     []string{"env=prod", "deprecated"},
+			labels:   []string{"env=prod", "deprecated"},
 			search:   "!deprecated",
 			expected: false,
 		},
@@ -564,8 +580,8 @@ func TestDAG_HasTag(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			dag := &core.DAG{Tags: core.NewTags(tt.tags)}
-			result := dag.HasTag(tt.search)
+			dag := &core.DAG{Labels: core.NewLabels(tt.labels)}
+			result := dag.HasLabel(tt.search)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -754,8 +770,9 @@ func TestDAG_InitializeDefaults(t *testing.T) {
 		dag := &core.DAG{}
 		core.InitializeDefaults(dag)
 
-		assert.Equal(t, core.TypeChain, dag.Type)
+		assert.Equal(t, core.TypeGraph, dag.Type)
 		assert.Equal(t, 30, dag.HistRetentionDays)
+		assert.Equal(t, 0, dag.HistRetentionRuns)
 		assert.Equal(t, 5*time.Second, dag.MaxCleanUpTime)
 		assert.Equal(t, 1, dag.MaxActiveRuns)
 		assert.Equal(t, 1024*1024, dag.MaxOutputSize)
@@ -775,6 +792,15 @@ func TestDAG_InitializeDefaults(t *testing.T) {
 		core.InitializeDefaults(dag)
 
 		assert.Equal(t, 90, dag.HistRetentionDays)
+	})
+
+	t.Run("pre-existing HistRetentionRuns prevents HistRetentionDays default", func(t *testing.T) {
+		t.Parallel()
+		dag := &core.DAG{HistRetentionRuns: 3}
+		core.InitializeDefaults(dag)
+
+		assert.Equal(t, 0, dag.HistRetentionDays)
+		assert.Equal(t, 3, dag.HistRetentionRuns)
 	})
 
 	t.Run("pre-existing MaxActiveRuns not overwritten", func(t *testing.T) {

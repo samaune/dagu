@@ -96,14 +96,24 @@ var (
 		usage:     "Override the DAG-level queue definition",
 	}
 
+	labelsFlag = commandLineFlag{
+		name:  "labels",
+		usage: "Additional labels (comma-separated key=value or key-only, e.g., workspace=foo,env=prod)",
+	}
+
 	tagsFlag = commandLineFlag{
 		name:  "tags",
-		usage: "Additional tags (comma-separated key=value or key-only, e.g., workspace=foo,env=prod)",
+		usage: "Deprecated alias for --labels",
 	}
 
 	defaultWorkingDirFlag = commandLineFlag{
 		name:  "default-working-dir",
 		usage: "Default working directory for DAGs without explicit workingDir",
+	}
+
+	profileFlag = commandLineFlag{
+		name:  "profile",
+		usage: "Runtime profile to inject into the DAG run",
 	}
 )
 
@@ -362,7 +372,7 @@ var (
 
 	historyStatusFlag = commandLineFlag{
 		name:  "status",
-		usage: "Filter by execution status (running, succeeded, failed, aborted, queued, waiting, rejected, not_started, partially_succeeded)",
+		usage: "Filter by execution status; accepts a single value or comma-separated values (running, succeeded, failed, aborted, queued, waiting, rejected, not_started, partially_succeeded)",
 	}
 
 	historyRunIDFlag = commandLineFlag{
@@ -370,9 +380,14 @@ var (
 		usage: "Filter by run ID (supports partial match)",
 	}
 
+	historyLabelsFlag = commandLineFlag{
+		name:  "labels",
+		usage: "Filter by DAG labels, comma-separated with AND logic (e.g., 'prod,critical')",
+	}
+
 	historyTagsFlag = commandLineFlag{
 		name:  "tags",
-		usage: "Filter by DAG tags, comma-separated with AND logic (e.g., 'prod,critical')",
+		usage: "Deprecated alias for --labels",
 	}
 
 	historyFormatFlag = commandLineFlag{

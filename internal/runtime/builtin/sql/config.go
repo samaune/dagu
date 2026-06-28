@@ -73,7 +73,7 @@ type ImportConfig struct {
 	// Conflict handling
 	OnConflict     string   `mapstructure:"on_conflict"`     // error (default), ignore, replace
 	ConflictTarget string   `mapstructure:"conflict_target"` // Column(s) for conflict detection (required for PostgreSQL UPSERT with "replace")
-	UpdateColumns  []string `mapstructure:"update_columns"`  // Columns to update on conflict (if empty, updates all non-key columns)
+	UpdateColumns  []string `mapstructure:"update_columns"`  // Columns to update on conflict (driver support varies)
 
 	// Row limits
 	SkipRows int `mapstructure:"skip_rows"` // Skip first N data rows

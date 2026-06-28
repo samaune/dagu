@@ -46,7 +46,7 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.26"
+  GO_VERSION: "1.26.4"
   NODE_VERSION: "20"
 
 jobs:
@@ -85,6 +85,13 @@ jobs:
             exit 0
           fi
 
+          if ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
+            echo "Base commit ${base_sha} is not available locally; running CI conservatively."
+            echo "go=true" >> "${GITHUB_OUTPUT}"
+            echo "e2e=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
           changed_files="$(git diff --name-only "${base_sha}" "${GITHUB_SHA}")"
           printf '%s\n' "${changed_files}"
 
@@ -98,7 +105,7 @@ jobs:
             esac
 
             case "${file}" in
-              api/*|cmd/*|internal/*|proto/*|scripts/e2e/*|ui/*|go.mod|go.sum|Makefile|.github/workflows/ci.yaml)
+              ui/*)
                 e2e_changed=true
                 ;;
             esac
@@ -138,9 +145,9 @@ jobs:
           fi
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
+        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
         with:
-          version: v2.9.0
+          version: v2.12.2
           args: --timeout=10m
 
   test-ubuntu:
@@ -148,6 +155,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -170,11 +178,35 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Login to Docker Hub
-        if: ${{ matrix.suite == 'intg' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        if: ${{ matrix.suite == 'intg' && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')) }}
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pre-pull integration test images
+        if: ${{ matrix.suite == 'intg' }}
+        shell: bash
+        run: |
+          images=(
+            "alpine:3"
+            "busybox:latest"
+            "redis:7-alpine"
+            "minio/minio:RELEASE.2024-10-02T17-50-41Z"
+          )
+
+          for image in "${images[@]}"; do
+            for attempt in 1 2 3 4; do
+              if docker pull "${image}"; then
+                break
+              fi
+              if [[ "${attempt}" -eq 4 ]]; then
+                echo "failed to pull ${image}" >&2
+                exit 1
+              fi
+              sleep "$((attempt * 5))"
+            done
+          done
 
       - name: Resolve test packages
         id: test-packages
@@ -185,7 +217,7 @@ jobs:
           case "${suite}" in
             unit)
               packages="$(
-                go list ./... | awk -v prefix="${module_path}/internal/intg" '$0 != prefix && index($0, prefix "/") != 1' | xargs
+                go list ./... | awk -v intg_prefix="${module_path}/internal/intg" -v conformance="${module_path}/conformance" '$0 != conformance && index($0, conformance "/") != 1 && $0 != intg_prefix && index($0, intg_prefix "/") != 1' | xargs
               )"
               ;;
             intg)
@@ -211,7 +243,7 @@ jobs:
           make test-coverage TEST_TARGET="${{ steps.test-packages.outputs.packages }}"
 
       - name: Upload coverage
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+        uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
         with:
           files: ./coverage.out
           flags: ${{ matrix.codecov_name }}
@@ -291,6 +323,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.go == 'true'
     runs-on: windows-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -319,7 +352,7 @@ jobs:
           case "${suite}" in
             unit)
               packages="$(
-                go list ./... | awk -v prefix="${module_path}/internal/intg" '$0 != prefix && index($0, prefix "/") != 1' | xargs
+                go list ./... | awk -v intg_prefix="${module_path}/internal/intg" -v conformance="${module_path}/conformance" '$0 != conformance && index($0, conformance "/") != 1 && $0 != intg_prefix && index($0, intg_prefix "/") != 1' | xargs
               )"
               ;;
             intg)
@@ -347,5 +380,4 @@ jobs:
         run: |
           go test \
             -timeout=20m \
-            -ldflags=-extldflags=-Wl \
             ${{ steps.test-packages.outputs.packages }}

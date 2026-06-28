@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Yota Hamada
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /**
  * ExecutionLog component displays the execution log for a DAG run.
  *
@@ -6,18 +9,18 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Download } from 'lucide-react';
 import { components, Status } from '../../../../api/v1/schema';
-import { Button } from '../../../../components/ui/button';
-import { Input } from '../../../../components/ui/input';
-import { ReloadButton } from '../../../../components/ui/reload-button';
-import { Switch } from '../../../../components/ui/switch';
-import { AppBarContext } from '../../../../contexts/AppBarContext';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { ReloadButton } from '@/components/ui/reload-button';
+import { Switch } from '@/components/ui/switch';
 import { TOKEN_KEY } from '../../../../contexts/AuthContext';
 import { useConfig } from '../../../../contexts/ConfigContext';
+import { useRemoteNode } from '../../../../contexts/RemoteNodeContext';
 import { useUserPreferences } from '../../../../contexts/UserPreference';
 import { useQuery } from '../../../../hooks/api';
 import { whenEnabled } from '../../../../hooks/queryUtils';
 import { useDAGRunLogsSSE } from '../../../../hooks/useDAGRunLogsSSE';
-import LoadingIndicator from '../../../../ui/LoadingIndicator';
+import LoadingIndicator from '@/components/ui/loading-indicator';
 
 // Extended Log type with pagination fields
 interface LogWithPagination {
@@ -58,7 +61,7 @@ const ANSI_CODES_REGEX = [
  * Fetches log data from the API and refreshes every 30 seconds
  */
 function ExecutionLog({ name, dagRunId, dagRun }: Props) {
-  const appBarContext = React.useContext(AppBarContext);
+  const remoteNode = useRemoteNode();
   const config = useConfig();
   const { preferences, updatePreference } = useUserPreferences();
   const [viewMode, setViewMode] = useState<'tail' | 'head' | 'page'>('tail');
@@ -94,16 +97,23 @@ function ExecutionLog({ name, dagRunId, dagRun }: Props) {
 
   // SSE is used for tail mode with live updates (not supported for sub-DAG runs)
   const useSSE = viewMode === 'tail' && isLiveMode && !isSubDAGRun;
-  const sseResult = useDAGRunLogsSSE(name, dagRunId, useSSE, pageSize);
+  const sseResult = useDAGRunLogsSSE(
+    name,
+    dagRunId,
+    useSSE,
+    pageSize,
+    remoteNode
+  );
 
   // Fall back to REST polling when SSE is unavailable or disconnected
-  const usePolling = !useSSE || sseResult.shouldUseFallback || !sseResult.isConnected;
+  const usePolling =
+    !useSSE || sseResult.shouldUseFallback || !sseResult.isConnected;
 
   // Build query params based on view mode
-  const remoteNode = appBarContext.selectedRemoteNode || 'local';
   const tail = viewMode === 'tail' ? pageSize : undefined;
   const head = viewMode === 'head' ? pageSize : undefined;
-  const offset = viewMode === 'page' ? (currentPage - 1) * pageSize + 1 : undefined;
+  const offset =
+    viewMode === 'page' ? (currentPage - 1) * pageSize + 1 : undefined;
   const limit = viewMode === 'page' ? pageSize : undefined;
 
   // SWR options: only poll when SSE is unavailable
@@ -161,7 +171,9 @@ function ExecutionLog({ name, dagRunId, dagRun }: Props) {
   );
 
   // Use the appropriate query based on whether this is a sub-DAG-run
-  const { data, isLoading, error, mutate } = isSubDAGRun ? subDAGQuery : dagRunQuery;
+  const { data, isLoading, error, mutate } = isSubDAGRun
+    ? subDAGQuery
+    : dagRunQuery;
 
   // Transform SSE data to match LogWithPagination interface
   const sseLogData: LogWithPagination | null =
@@ -231,7 +243,11 @@ function ExecutionLog({ name, dagRunId, dagRun }: Props) {
   }
 
   function handleJumpToLine(): void {
-    if (jumpToLine === '' || jumpToLine <= 0 || jumpToLine > (cachedData?.totalLines || 0)) {
+    if (
+      jumpToLine === '' ||
+      jumpToLine <= 0 ||
+      jumpToLine > (cachedData?.totalLines || 0)
+    ) {
       return;
     }
 
@@ -246,7 +262,10 @@ function ExecutionLog({ name, dagRunId, dagRun }: Props) {
       const lineElements = document.querySelectorAll('[data-line-number]');
       for (const element of lineElements) {
         const htmlElement = element as HTMLElement;
-        const lineNumber = parseInt(htmlElement.getAttribute('data-line-number') || '0', 10);
+        const lineNumber = parseInt(
+          htmlElement.getAttribute('data-line-number') || '0',
+          10
+        );
         if (lineNumber === lineNum) {
           htmlElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
           htmlElement.classList.add('bg-primary/20');
@@ -325,10 +344,12 @@ function ExecutionLog({ name, dagRunId, dagRun }: Props) {
 
   // Split content into lines, removing trailing empty line from trailing newline
   const rawLines = content ? content.split('\n') : ['<No log output>'];
-  const lines = rawLines[rawLines.length - 1] === '' ? rawLines.slice(0, -1) : rawLines;
+  const lines =
+    rawLines[rawLines.length - 1] === '' ? rawLines.slice(0, -1) : rawLines;
 
   // API may count trailing newline as extra line; use lines.length if within 1
-  const effectiveTotalLines = (totalLines - lines.length <= 1) ? lines.length : totalLines;
+  const effectiveTotalLines =
+    totalLines - lines.length <= 1 ? lines.length : totalLines;
 
   const totalPages = calculateTotalPages(effectiveTotalLines, pageSize);
 
@@ -396,7 +417,9 @@ function ExecutionLog({ name, dagRunId, dagRun }: Props) {
               <span className="text-xs text-muted-foreground">Wrap</span>
               <Switch
                 checked={preferences.logWrap}
-                onCheckedChange={(checked) => updatePreference('logWrap', checked)}
+                onCheckedChange={(checked) =>
+                  updatePreference('logWrap', checked)
+                }
               />
             </div>
 
@@ -522,7 +545,9 @@ function ExecutionLog({ name, dagRunId, dagRun }: Props) {
             </div>
           </div>
         )}
-        <pre className={`h-full font-mono text-sm text-foreground log-content ${preferences.logWrap ? '' : 'min-w-max'}`}>
+        <pre
+          className={`h-full font-mono text-sm text-foreground log-content ${preferences.logWrap ? '' : 'min-w-max'}`}
+        >
           {lines.map((line, index) => (
             <div key={index} className="flex pr-2 py-0.5">
               <span
@@ -531,7 +556,9 @@ function ExecutionLog({ name, dagRunId, dagRun }: Props) {
               >
                 {getLineNumber(index)}
               </span>
-              <span className={`flex-grow select-text cursor-text ${preferences.logWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}>
+              <span
+                className={`flex-grow select-text cursor-text ${preferences.logWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}
+              >
                 {line || ' '}
               </span>
             </div>

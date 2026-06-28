@@ -5,19 +5,105 @@ package distr_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/dagucloud/dagu/internal/core"
+	"github.com/dagucloud/dagu/internal/core/exec"
 	"github.com/stretchr/testify/require"
 )
+
+func TestActionOutputsFromDistributedWorker(t *testing.T) {
+	t.Run("childWorker", func(t *testing.T) {
+		actionDir := writeActionOutputBundle(t, `
+name: notify-action-child
+worker_selector:
+  type: test-worker
+steps:
+  - id: publish
+    action: outputs.write
+    with:
+      values:
+        messageId: msg-123
+        worker: remote-worker
+`)
+
+		f := newTestFixture(t, `
+type: graph
+steps:
+  - id: call_action
+    action: `+strconv.Quote("source:"+actionDir+"@local")+`
+
+  - id: audit
+    depends: [call_action]
+    action: log.write
+    with:
+      message: "message=${call_action.outputs.messageId} worker=${call_action.outputs.worker}"
+`, withLabels(map[string]string{"type": "test-worker"}), withLogPersistence())
+
+		f.dagWrapper.Agent().RunSuccess(t)
+		status, err := f.latestStatus()
+		require.NoError(t, err)
+		require.Equal(t, core.Succeeded, status.Status)
+
+		callAction := requireNodeByID(t, status, "call_action")
+		require.NotNil(t, callAction.OutputsValue)
+		require.JSONEq(t, `{"messageId":"msg-123","worker":"remote-worker"}`, *callAction.OutputsValue)
+
+		audit := requireNodeByID(t, status, "audit")
+		auditLog, err := os.ReadFile(audit.Stdout)
+		require.NoError(t, err)
+		require.Contains(t, string(auditLog), "message=msg-123 worker=remote-worker")
+	})
+
+}
+
+func writeActionOutputBundle(t *testing.T, actionYAML string) string {
+	t.Helper()
+	actionDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(actionDir, "dagu-action.yaml"), []byte(`
+apiVersion: v1alpha1
+name: notify-action
+dag: workflow.yaml
+outputs:
+  type: object
+  additionalProperties: false
+  required: [messageId, worker]
+  properties:
+    messageId:
+      type: string
+    worker:
+      type: string
+`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(actionDir, "workflow.yaml"), []byte(actionYAML), 0o600))
+	return actionDir
+}
+
+func requireNodeByID(t *testing.T, status exec.DAGRunStatus, id string) *exec.Node {
+	t.Helper()
+	for _, node := range status.Nodes {
+		if node == nil {
+			continue
+		}
+		if node.Step.ID == id || node.Step.Name == id {
+			return node
+		}
+	}
+	require.Failf(t, "missing node", "node %q not found", id)
+	return nil
+}
 
 func TestSubDAG_LocalCallsDistributed(t *testing.T) {
 	t.Run("localParentCallsDistributedChild", func(t *testing.T) {
 		f := newTestFixture(t, `
 steps:
   - name: run-local-on-worker
-    call: local-sub
+    action: dag.run
+    with:
+      dag: local-sub
     output: RESULT
 
 ---
@@ -26,7 +112,7 @@ worker_selector:
   type: test-worker
 steps:
   - name: worker-task
-    command: echo "Hello from worker"
+    run: echo "Hello from worker"
     output: MESSAGE
 `, withLabels(map[string]string{"type": "test-worker"}))
 
@@ -36,12 +122,56 @@ steps:
 	})
 }
 
+func TestSubDAG_CallStepWorkerSelector(t *testing.T) {
+	t.Run("immediateParentDispatchesChildUsingCallStepSelector", func(t *testing.T) {
+		f := newTestFixture(t, `
+steps:
+  - name: run-child-on-selected-worker
+    action: dag.run
+    with:
+      dag: selected-child
+    worker_selector:
+      host: serverA
+
+---
+name: selected-child
+steps:
+  - name: child-task
+    run: echo "child executed on selected worker"
+`, withLabels(map[string]string{"host": "serverA"}))
+		defer f.cleanup()
+
+		agent := f.dagWrapper.Agent()
+		agent.RunSuccess(t)
+
+		parentStatus := agent.Status(f.coord.Context)
+		require.Len(t, parentStatus.Nodes, 1)
+		require.Len(t, parentStatus.Nodes[0].SubRuns, 1)
+
+		subRunID := parentStatus.Nodes[0].SubRuns[0].DAGRunID
+		subAttempt, err := f.coord.DAGRunStore.FindSubAttempt(
+			f.coord.Context,
+			exec.NewDAGRunRef(parentStatus.Name, parentStatus.DAGRunID),
+			subRunID,
+		)
+		require.NoError(t, err)
+
+		childStatus, err := subAttempt.ReadStatus(f.coord.Context)
+		require.NoError(t, err)
+		require.NotNil(t, childStatus)
+		require.Equal(t, core.Succeeded, childStatus.Status)
+		require.Equal(t, "worker-1", childStatus.WorkerID)
+	})
+}
+
 func TestSubDAG_FailurePropagation(t *testing.T) {
 	t.Run("childFailurePropagatesToParent", func(t *testing.T) {
 		f := newTestFixture(t, `
 steps:
   - name: run-local-on-worker
-    call: local-sub
+    action: dag.run
+    with:
+      dag: local-sub
 
 ---
 name: local-sub
@@ -49,7 +179,7 @@ worker_selector:
   type: test-worker
 steps:
   - name: worker-task
-    command: |
+    run: |
       echo "Start task"
       exit 1
 `, withLabels(map[string]string{"type": "test-worker"}))
@@ -77,7 +207,9 @@ func TestSubDAG_NoMatchingWorker(t *testing.T) {
 		f := newTestFixture(t, `
 steps:
   - name: run-on-nonexistent-worker
-    call: local-sub
+    action: dag.run
+    with:
+      dag: local-sub
     output: RESULT
 
 ---
@@ -87,7 +219,7 @@ worker_selector:
   type: nonexistent-worker
 steps:
   - name: worker-task
-    command: echo "Should not run"
+    run: echo "Should not run"
     output: MESSAGE
 `, withWorkerCount(0))
 
@@ -111,20 +243,22 @@ worker_selector:
   type: child
 steps:
   - name: child-step
-    command: echo "child executed"
+    run: echo "child executed"
 `
 		f := newTestFixture(t, `
 name: parent-remote
 worker_selector:
   type: parent
 steps:
-  - call: child-remote
+  - action: dag.run
+    with:
+      dag: child-remote
 `, withLabels(map[string]string{"type": "parent"}))
 		defer f.cleanup()
 
 		f.coord.CreateDAGFile(t, f.coord.Config.Paths.DAGsDir, "child-remote", []byte(childYAML))
 
-		childWorker := f.setupSharedNothingWorker("child-worker", map[string]string{"type": "child"}, "")
+		childWorker := f.setupWorker("child-worker", map[string]string{"type": "child"}, "")
 		_ = childWorker
 
 		require.NoError(t, f.enqueue())
@@ -141,7 +275,9 @@ func TestSubDAG_InSameFile(t *testing.T) {
 	t.Run("parentAndChildInSameYAMLFile", func(t *testing.T) {
 		f := newTestFixture(t, `
 steps:
-  - call: dotest
+  - action: dag.run
+    with:
+      dag: dotest
 params:
   - URL: default_value
 ---
@@ -150,7 +286,7 @@ worker_selector:
   foo: bar
 steps:
   - name: task
-    command: echo "Sub-DAG executed"
+    run: echo "Sub-DAG executed"
 `, withLabels(map[string]string{"foo": "bar"}))
 		defer f.cleanup()
 
@@ -173,21 +309,23 @@ func TestSubDAG_ParentWithInlineChildOnWorker(t *testing.T) {
 		// fail with "file does not exist".
 		//
 		// The inline child also has a worker_selector so it dispatches
-		// through the coordinator (shared-nothing workers don't have a
-		// local DAGRunStore for subprocess-based sub-DAG execution).
+		// through the coordinator because workers execute task payloads
+		// without a local DAGRunStore for subprocess-based sub-DAG execution.
 		f := newTestFixture(t, `
 worker_selector:
   test: "true"
 steps:
   - name: call-child
-    call: inline-child
+    action: dag.run
+    with:
+      dag: inline-child
 ---
 name: inline-child
 worker_selector:
   test: "true"
 steps:
   - name: task
-    command: echo "inline child executed"
+    run: echo "inline child executed"
 `)
 		defer f.cleanup()
 

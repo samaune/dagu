@@ -4,9 +4,11 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // Constants for validation limits.
@@ -58,9 +60,20 @@ type StepValidator func(step Step) error
 // stepValidators holds registered validators for each executor type.
 var stepValidators = make(map[string]StepValidator)
 
+var stepValidatorsMu sync.RWMutex
+
 // RegisterStepValidator registers a validator for a specific executor type.
 func RegisterStepValidator(executorType string, validator StepValidator) {
+	stepValidatorsMu.Lock()
+	defer stepValidatorsMu.Unlock()
 	stepValidators[executorType] = validator
+}
+
+// UnregisterStepValidator removes a validator for a specific executor type.
+func UnregisterStepValidator(executorType string) {
+	stepValidatorsMu.Lock()
+	defer stepValidatorsMu.Unlock()
+	delete(stepValidators, executorType)
 }
 
 // ValidateSteps validates all steps in a DAG, collecting all validation errors.
@@ -70,10 +83,13 @@ func ValidateSteps(dag *DAG) error {
 	stepNames, stepIDs := collectNamesAndIDs(dag, &errs)
 	validateNameIDConflicts(dag, stepNames, stepIDs, &errs)
 	resolveStepDependencies(dag)
+	resolveForeachStepDependencies(dag.Steps)
 	validateDependenciesExist(dag, stepNames, &errs)
+	validateApprovalRewindTargets(dag, stepNames, &errs)
 
 	for _, step := range dag.Steps {
 		errs = append(errs, validateStep(step)...)
+		validateForeachConfig(step, stepNames, stepIDs, &errs)
 	}
 
 	if len(errs) == 0 {
@@ -165,6 +181,61 @@ func validateDependenciesExist(dag *DAG, stepNames map[string]struct{}, errs *Er
 	}
 }
 
+func validateApprovalRewindTargets(dag *DAG, stepNames map[string]struct{}, errs *ErrorList) {
+	stepByName := make(map[string]Step, len(dag.Steps))
+	for _, step := range dag.Steps {
+		stepByName[step.Name] = step
+	}
+
+	for _, step := range dag.Steps {
+		if step.Approval == nil || step.Approval.RewindTo == "" {
+			continue
+		}
+
+		target := step.Approval.RewindTo
+		if _, exists := stepNames[target]; !exists {
+			*errs = append(*errs, NewValidationError("approval.rewind_to", target,
+				fmt.Errorf("step %s approval.rewind_to references non-existent step %s", step.Name, target)))
+			continue
+		}
+
+		if target == step.Name {
+			continue
+		}
+
+		if !isUpstreamDependency(stepByName, step.Name, target) {
+			*errs = append(*errs, NewValidationError("approval.rewind_to", target,
+				fmt.Errorf("step %s approval.rewind_to must reference the step itself or an upstream dependency", step.Name)))
+		}
+	}
+}
+
+func isUpstreamDependency(stepByName map[string]Step, stepName, target string) bool {
+	start, ok := stepByName[stepName]
+	if !ok {
+		return false
+	}
+
+	queue := append([]string(nil), start.Depends...)
+	visited := make(map[string]struct{}, len(queue))
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if current == target {
+			return true
+		}
+		if _, ok := visited[current]; ok {
+			continue
+		}
+		visited[current] = struct{}{}
+		if step, ok := stepByName[current]; ok {
+			queue = append(queue, step.Depends...)
+		}
+	}
+
+	return false
+}
+
 func validateStep(step Step) ErrorList {
 	var errs ErrorList
 
@@ -198,11 +269,11 @@ func validateParallelConfig(step Step) ErrorList {
 	var errs ErrorList
 
 	if step.SubDAG == nil {
-		errs = append(errs, NewValidationError("parallel", step.Parallel, fmt.Errorf("parallel execution is only supported for child-DAGs (must have 'run' field)")))
+		errs = append(errs, NewValidationError("parallel", step.Parallel, fmt.Errorf("parallel currently requires action: dag.run or dag.enqueue")))
 	}
 
-	if step.Parallel.MaxConcurrent <= 0 {
-		errs = append(errs, NewValidationError("parallel.max_concurrent", step.Parallel.MaxConcurrent, fmt.Errorf("max_concurrent must be greater than 0")))
+	if step.Parallel.MaxConcurrent < 1 || step.Parallel.MaxConcurrent > MaxExpansionConcurrency {
+		errs = append(errs, NewValidationError("parallel.max_concurrent", step.Parallel.MaxConcurrent, fmt.Errorf("max_concurrent must be an integer from 1 through %d", MaxExpansionConcurrency)))
 	}
 
 	if len(step.Parallel.Items) == 0 && step.Parallel.Variable == "" {
@@ -212,15 +283,86 @@ func validateParallelConfig(step Step) ErrorList {
 	return errs
 }
 
+func validateForeachConfig(step Step, visibleNames, visibleIDs map[string]struct{}, errs *ErrorList) {
+	if step.Foreach == nil {
+		return
+	}
+
+	bodyDAG := &DAG{Steps: step.Foreach.Steps}
+	bodyNames, bodyIDs := collectNamesAndIDs(bodyDAG, errs)
+	validateNameIDConflicts(bodyDAG, bodyNames, bodyIDs, errs)
+	validateForeachBodyCollisions(step, bodyDAG.Steps, visibleNames, visibleIDs, errs)
+	validateForeachBodyDependencies(step, bodyDAG.Steps, bodyNames, visibleNames, visibleIDs, errs)
+	validateApprovalRewindTargets(bodyDAG, bodyNames, errs)
+
+	for _, bodyStep := range bodyDAG.Steps {
+		*errs = append(*errs, validateStep(bodyStep)...)
+		validateForeachConfig(bodyStep, bodyNames, bodyIDs, errs)
+	}
+}
+
+func validateForeachBodyCollisions(parent Step, bodySteps []Step, visibleNames, visibleIDs map[string]struct{}, errs *ErrorList) {
+	for _, bodyStep := range bodySteps {
+		validateForeachBodyIdentityCollision(parent, "name", bodyStep.Name, visibleNames, visibleIDs, errs)
+		validateForeachBodyIdentityCollision(parent, "id", bodyStep.ID, visibleNames, visibleIDs, errs)
+	}
+}
+
+func validateForeachBodyIdentityCollision(parent Step, kind, value string, visibleNames, visibleIDs map[string]struct{}, errs *ErrorList) {
+	if value == "" {
+		return
+	}
+	if _, ok := visibleNames[value]; ok {
+		*errs = append(*errs, NewValidationError("foreach.steps", value,
+			fmt.Errorf("foreach step %s body step %s %q collides with a visible step name", parent.Name, kind, value)))
+	}
+	if _, ok := visibleIDs[value]; ok {
+		*errs = append(*errs, NewValidationError("foreach.steps", value,
+			fmt.Errorf("foreach step %s body step %s %q collides with a visible step ID", parent.Name, kind, value)))
+	}
+}
+
+func validateForeachBodyDependencies(parent Step, bodySteps []Step, bodyNames, visibleNames, visibleIDs map[string]struct{}, errs *ErrorList) {
+	for _, bodyStep := range bodySteps {
+		for _, dep := range bodyStep.Depends {
+			if _, ok := bodyNames[dep]; ok {
+				continue
+			}
+			if _, ok := visibleNames[dep]; ok {
+				*errs = append(*errs, NewValidationError("foreach.steps.depends", dep,
+					fmt.Errorf("foreach step %s body step %s depends on visible top-level step %s; body dependencies must stay inside foreach.steps", parent.Name, bodyStep.Name, dep)))
+				continue
+			}
+			if _, ok := visibleIDs[dep]; ok {
+				*errs = append(*errs, NewValidationError("foreach.steps.depends", dep,
+					fmt.Errorf("foreach step %s body step %s depends on visible top-level step ID %s; body dependencies must stay inside foreach.steps", parent.Name, bodyStep.Name, dep)))
+				continue
+			}
+			*errs = append(*errs, NewValidationError("foreach.steps.depends", dep,
+				fmt.Errorf("foreach step %s body step %s depends on non-existent body step %s", parent.Name, bodyStep.Name, dep)))
+		}
+	}
+}
+
 func validateStepWithValidator(step Step) error {
-	validator := stepValidators[step.ExecutorConfig.Type]
+	validator := stepValidator(step.ExecutorConfig.Type)
 	if validator == nil {
 		return nil
 	}
 	if err := validator(step); err != nil {
-		return NewValidationError("executor_config", step.ExecutorConfig, err)
+		var ve *ValidationError
+		if errors.As(err, &ve) {
+			return err
+		}
+		return NewValidationError("type", nil, err)
 	}
 	return nil
+}
+
+func stepValidator(executorType string) StepValidator {
+	stepValidatorsMu.RLock()
+	defer stepValidatorsMu.RUnlock()
+	return stepValidators[executorType]
 }
 
 func isValidStepID(id string) bool {
@@ -246,5 +388,22 @@ func resolveStepDependencies(dag *DAG) {
 				dag.Steps[i].Depends[j] = name
 			}
 		}
+		if dag.Steps[i].Approval != nil {
+			if name, exists := idToName[dag.Steps[i].Approval.RewindTo]; exists {
+				dag.Steps[i].Approval.RewindTo = name
+			}
+		}
+	}
+}
+
+func resolveForeachStepDependencies(steps []Step) {
+	for i := range steps {
+		if steps[i].Foreach == nil {
+			continue
+		}
+		bodyDAG := &DAG{Steps: steps[i].Foreach.Steps}
+		resolveStepDependencies(bodyDAG)
+		steps[i].Foreach.Steps = bodyDAG.Steps
+		resolveForeachStepDependencies(steps[i].Foreach.Steps)
 	}
 }

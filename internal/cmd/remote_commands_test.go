@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ func TestToExecStatus_MapsRemoteFieldsExplicitly(t *testing.T) {
 		Log:            "/tmp/example.log",
 		Params:         new("P1=foo"),
 		WorkerId:       new("worker-a"),
-		Tags:           &[]string{"env=prod"},
+		Labels:         &[]string{"env=prod"},
 		Nodes: []api.Node{
 			{
 				Step: api.Step{
@@ -88,6 +89,44 @@ func TestBuildRemoteHistoryQueryRejectsMalformedLimit(t *testing.T) {
 	assert.Contains(t, err.Error(), "greater than 0")
 }
 
+func TestBuildRemoteHistoryQueryParsesMultipleStatuses(t *testing.T) {
+	t.Parallel()
+
+	command := &cobra.Command{Use: "history"}
+	initFlags(command, historyFlags...)
+	require.NoError(t, command.Flags().Set("status", "running,queued"))
+
+	ctx := &Context{Command: command}
+	query, limit, err := buildRemoteHistoryQuery(ctx, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, 100, limit)
+	assert.Equal(t, []int{int(core.Running), int(core.Queued)}, query.Statuses)
+}
+
+func TestRemoteClientListDAGRunsUsesRepeatedStatusParams(t *testing.T) {
+	t.Parallel()
+
+	statusValues := make(chan []string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		statusValues <- append([]string(nil), r.URL.Query()["status"]...)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"dagRuns":[]}`))
+	}))
+	defer server.Close()
+
+	client := &remoteClient{
+		baseURL: server.URL,
+		client:  server.Client(),
+	}
+
+	_, err := client.listDAGRuns(context.Background(), remoteHistoryQuery{
+		Statuses: []int{int(core.Running), int(core.Queued)},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1", "5"}, <-statusValues)
+}
+
 func TestWaitForRemoteStopHonorsContextCancellation(t *testing.T) {
 	t.Parallel()
 
@@ -117,7 +156,7 @@ func TestEnrichRemoteHistoryStatusPopulatesErrorAndMetadata(t *testing.T) {
 		RootDAGRunId:   "run-1",
 		Status:         api.Status(core.Failed),
 		WorkerId:       new("worker-a"),
-		Tags:           &[]string{"env=prod"},
+		Labels:         &[]string{"env=prod"},
 		Nodes: []api.Node{
 			{
 				Step:   api.Step{Name: "step-1"},
@@ -128,7 +167,7 @@ func TestEnrichRemoteHistoryStatusPopulatesErrorAndMetadata(t *testing.T) {
 	}
 
 	require.NoError(t, enrichRemoteHistoryStatus(status, detail))
-	assert.Equal(t, []string{"env=prod"}, status.Tags)
+	assert.Equal(t, []string{"env=prod"}, status.Labels)
 	assert.Equal(t, "worker-a", status.WorkerID)
 	assert.Contains(t, status.Error, "boom")
 }

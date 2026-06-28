@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/dagucloud/dagu/internal/cmn/eval"
+	cmnvalue "github.com/dagucloud/dagu/internal/cmn/value"
 	"github.com/dagucloud/dagu/internal/core"
 )
 
@@ -44,12 +44,18 @@ func (r *envResolver) Validate(ref core.SecretRef) error {
 	return nil
 }
 
+// CheckCapability reports that environment lookup can check existence without
+// returning the value to callers.
+func (r *envResolver) CheckCapability(core.SecretRef) CheckCapability {
+	return CheckCapabilityNoFetch
+}
+
 // Resolve fetches the secret value from the environment.
 // It first checks the context-provided EnvScope (for DAG-level env vars),
 // then falls back to the global OS environment.
 func (r *envResolver) Resolve(ctx context.Context, ref core.SecretRef) (string, error) {
 	// First check context-provided env vars (DAG env: field, .env files)
-	if scope := eval.GetEnvScope(ctx); scope != nil {
+	if scope := cmnvalue.GetEnvScope(ctx); scope != nil {
 		if value, exists := scope.Get(ref.Key); exists {
 			return value, nil
 		}
@@ -72,7 +78,7 @@ func (r *envResolver) Resolve(ctx context.Context, ref core.SecretRef) (string, 
 // It first checks the context-provided EnvScope, then falls back to the global OS environment.
 func (r *envResolver) CheckAccessibility(ctx context.Context, ref core.SecretRef) error {
 	// First check context-provided env vars (DAG env: field, .env files)
-	if scope := eval.GetEnvScope(ctx); scope != nil {
+	if scope := cmnvalue.GetEnvScope(ctx); scope != nil {
 		if _, exists := scope.Get(ref.Key); exists {
 			return nil
 		}

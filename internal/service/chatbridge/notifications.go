@@ -175,6 +175,9 @@ func (b *NotificationBatcher) Enqueue(destination string, event NotificationEven
 	if destination == "" || event.Status == nil || event.Key == "" {
 		return false
 	}
+	if shouldSuppressNotificationEvent(event) {
+		return false
+	}
 
 	eventType := event.Type
 	if eventType == "" {
@@ -355,6 +358,31 @@ func (b *NotificationBatcher) DiscardDestinations(destinations []string) {
 	}
 }
 
+// flushBucketsLocked synchronously moves buffered buckets of the given class
+// to the ready queue, stopping any pending timers. It is safe to call when the
+// batcher has not been stopped.
+func (b *NotificationBatcher) flushBucketsLocked(class NotificationClass) {
+	b.mu.Lock()
+	type bucketRef struct {
+		key string
+		id  uint64
+	}
+	refs := make([]bucketRef, 0)
+	for key, bucket := range b.buckets {
+		if bucket != nil && bucket.class == class {
+			if bucket.timer != nil {
+				bucket.timer.Stop()
+			}
+			refs = append(refs, bucketRef{key: key, id: bucket.id})
+		}
+	}
+	b.mu.Unlock()
+
+	for _, ref := range refs {
+		b.readyBucket(ref.key, ref.id)
+	}
+}
+
 func (b *NotificationBatcher) readyBucket(bucketKey string, bucketID uint64) {
 	b.mu.Lock()
 	if b.stopped {
@@ -404,7 +432,7 @@ func NotificationClassForEvent(eventType eventstore.EventType, status core.Statu
 		return NotificationClassInformational, true
 	case eventstore.TypeDAGRunAborted, eventstore.TypeDAGRunRejected:
 		return NotificationClassUrgent, true
-	case eventstore.TypeLLMUsageRecorded:
+	case eventstore.TypeDAGRunUpdated, eventstore.TypeLLMUsageRecorded:
 		return NotificationClassUnknown, false
 	default:
 		switch status { //nolint:exhaustive // legacy direct notifications may only pass status
@@ -416,6 +444,10 @@ func NotificationClassForEvent(eventType eventstore.EventType, status core.Statu
 			return NotificationClassUnknown, false
 		}
 	}
+}
+
+func shouldSuppressNotificationEvent(event NotificationEvent) bool {
+	return exec.CanCancelFailedAutoRetryPendingRun(event.Status)
 }
 
 // NotificationSeenKey is used by monitors to suppress repeated polling of the same status.

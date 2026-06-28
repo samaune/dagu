@@ -1,8 +1,19 @@
-import { useCallback, useContext, useEffect, useState } from 'react';
+// Copyright (C) 2026 Yota Hamada
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { components } from '../../../api/v1/schema';
 import { AppBarContext } from '../../../contexts/AppBarContext';
 import { usePageContext } from '../../../contexts/PageContext';
+import { RemoteNodeProvider } from '../../../contexts/RemoteNodeContext';
 import { UnsavedChangesProvider } from '../../../contexts/UnsavedChangesContext';
 import {
   DAGDetailsContent,
@@ -20,6 +31,13 @@ import {
 } from '../../../hooks/useSSECacheSync';
 import { useSubDAGRunSSE } from '../../../hooks/useSubDAGRunSSE';
 import dayjs from '../../../lib/dayjs';
+import {
+  hasWorkspaceLabel,
+  sanitizeWorkspaceName,
+  sanitizeWorkspaceSelection,
+  WorkspaceKind,
+  workspaceNameFromLabels,
+} from '../../../lib/workspace';
 
 type Params = {
   fileName: string;
@@ -40,10 +58,29 @@ function DAGDetails() {
   const stepName = searchParams.get('step');
   const subDAGRunId = searchParams.get('subDAGRunId');
   const queriedDAGRunName = searchParams.get('dagRunName');
-  const remoteNode =
-    searchParams.get('remoteNode') ||
-    appBarContext.selectedRemoteNode ||
-    'local';
+  const [trackedDagRunId, setTrackedDagRunId] = useState<string>();
+  const previousURLDagRunId = useRef<string | null>(dagRunId);
+  const queryRemoteNode = searchParams.get('remoteNode')?.trim();
+  const appBarRemoteNode = appBarContext.selectedRemoteNode?.trim();
+  const remoteNode = queryRemoteNode || appBarRemoteNode || 'local';
+  const preserveRemoteNode =
+    searchParams.has('remoteNode') || remoteNode !== 'local';
+  const queryWorkspace = sanitizeWorkspaceName(
+    searchParams.get('workspace') ?? ''
+  );
+  const appWorkspaceSelection = appBarContext.workspaceSelection;
+  const workspaceSelection = useMemo(() => {
+    if (queryWorkspace) {
+      return { kind: WorkspaceKind.workspace, workspace: queryWorkspace };
+    }
+    return sanitizeWorkspaceSelection(appWorkspaceSelection);
+  }, [appWorkspaceSelection, queryWorkspace]);
+  const scopedQuery = useMemo(
+    () => ({
+      remoteNode,
+    }),
+    [remoteNode]
+  );
   const fileName = params.fileName || '';
 
   // Set page context for agent chat
@@ -60,7 +97,7 @@ function DAGDetails() {
     };
   }, [fileName, dagRunId, setContext]);
 
-  const dagSSE = useDAGSSE(fileName, !!fileName);
+  const dagSSE = useDAGSSE(fileName, !!fileName, remoteNode);
 
   // Determine active tab
   const tab = params.tab || 'status';
@@ -85,12 +122,18 @@ function DAGDetails() {
   // Build URL with remote node parameter if needed
   const buildUrl = useCallback(
     (path: string) => {
-      if (remoteNode && remoteNode !== 'local') {
-        return `${path}?remoteNode=${encodeURIComponent(remoteNode)}`;
+      const [pathname = '', existingQuery = ''] = path.split('?');
+      const nextSearchParams = new URLSearchParams(existingQuery);
+      if (preserveRemoteNode) {
+        nextSearchParams.set('remoteNode', remoteNode);
       }
-      return path;
+      if (queryWorkspace) {
+        nextSearchParams.set('workspace', queryWorkspace);
+      }
+      const query = nextSearchParams.toString();
+      return query ? `${pathname}?${query}` : pathname;
     },
-    [remoteNode]
+    [preserveRemoteNode, queryWorkspace, remoteNode]
   );
 
   // Handle tab changes - navigates to the appropriate URL for the given tab
@@ -118,22 +161,37 @@ function DAGDetails() {
     '/dags/{fileName}',
     {
       params: {
-        query: { remoteNode },
+        query: scopedQuery,
         path: { fileName },
       },
     },
     sseFallbackOptions(dagSSE)
   );
   useSSECacheSync(dagSSE, mutateDag);
+  const dagLabels = [
+    ...(dagData?.dag?.labels ?? []),
+    ...(dagData?.dag?.tags ?? []),
+  ];
+  const dagWorkspaceName = workspaceNameFromLabels(dagLabels);
+  const dagHasWorkspaceLabel = hasWorkspaceLabel(dagLabels);
+  const dagMatchesWorkspace =
+    workspaceSelection.kind === WorkspaceKind.all ||
+    (workspaceSelection.kind === WorkspaceKind.default &&
+      !dagHasWorkspaceLabel) ||
+    (workspaceSelection.kind === WorkspaceKind.workspace &&
+      dagWorkspaceName === workspaceSelection.workspace);
 
   // Use dagRunName from URL if available, otherwise use the name from dagData
   const dagRunName = queriedDAGRunName || dagData?.dag?.name || '';
-  const dagRunQueryEnabled = Boolean(dagRunName && dagRunId && !subDAGRunId);
+  const effectiveDAGRunId = trackedDagRunId || dagRunId;
+  const dagRunQueryEnabled = Boolean(
+    dagRunName && effectiveDAGRunId && !subDAGRunId && dagMatchesWorkspace
+  );
 
   // Fetch specific DAG-run data if dagRunId is provided
   const dagRunSSE = useDAGRunSSE(
     dagRunName,
-    dagRunId || '',
+    effectiveDAGRunId || '',
     dagRunQueryEnabled,
     remoteNode
   );
@@ -143,9 +201,9 @@ function DAGDetails() {
       params: {
         path: {
           name: dagRunName,
-          dagRunId: dagRunId || '',
+          dagRunId: effectiveDAGRunId || '',
         },
-        query: { remoteNode },
+        query: scopedQuery,
       },
     }),
     sseFallbackOptions(dagRunSSE)
@@ -153,7 +211,9 @@ function DAGDetails() {
   useSSECacheSync(dagRunSSE, mutateDagRun);
 
   // Fetch sub DAG-run data if needed
-  const subDAGRunQueryEnabled = Boolean(subDAGRunId && dagRunId && dagRunName);
+  const subDAGRunQueryEnabled = Boolean(
+    subDAGRunId && dagRunId && dagRunName && dagMatchesWorkspace
+  );
   const subDAGRunSSE = useSubDAGRunSSE(
     dagRunName,
     dagRunId || '',
@@ -170,7 +230,7 @@ function DAGDetails() {
           dagRunId: dagRunId || '',
           subDAGRunId: subDAGRunId || '',
         },
-        query: { remoteNode },
+        query: scopedQuery,
       },
     }),
     sseFallbackOptions(subDAGRunSSE)
@@ -182,7 +242,7 @@ function DAGDetails() {
     if (subDAGRunId) {
       return subDAGRunResponse?.dagRunDetails;
     }
-    if (dagRunId) {
+    if (effectiveDAGRunId) {
       return dagRunResponse?.dagRunDetails;
     }
     return dagData?.latestDAGRun;
@@ -207,64 +267,124 @@ function DAGDetails() {
     mutateDag();
     if (subDAGRunId) {
       mutateSubDagRun();
-    } else if (dagRunId) {
+    } else if (effectiveDAGRunId) {
       mutateDagRun();
     }
-  }, [mutateDag, mutateDagRun, mutateSubDagRun, dagRunId, subDAGRunId]);
+  }, [
+    mutateDag,
+    mutateDagRun,
+    mutateSubDagRun,
+    effectiveDAGRunId,
+    subDAGRunId,
+  ]);
+
+  const handleRunStarted = useCallback(
+    (nextDAGRunId: string) => {
+      setTrackedDagRunId(nextDAGRunId);
+      const nextSearchParams = new URLSearchParams();
+      nextSearchParams.set('dagRunId', nextDAGRunId);
+      nextSearchParams.set('dagRunName', dagData?.dag?.name || dagRunName);
+      if (preserveRemoteNode) {
+        nextSearchParams.set('remoteNode', remoteNode);
+      }
+      if (queryWorkspace) {
+        nextSearchParams.set('workspace', queryWorkspace);
+      }
+      navigate(`/dags/${fileName}?${nextSearchParams.toString()}`);
+      void mutateDag();
+    },
+    [
+      dagData?.dag?.name,
+      dagRunName,
+      fileName,
+      mutateDag,
+      navigate,
+      preserveRemoteNode,
+      queryWorkspace,
+      remoteNode,
+    ]
+  );
+
+  useEffect(() => {
+    const previous = previousURLDagRunId.current;
+    previousURLDagRunId.current = dagRunId;
+    if (!dagRunId || dagRunId === trackedDagRunId) {
+      return;
+    }
+    if (previous !== dagRunId) {
+      setTrackedDagRunId(undefined);
+    }
+  }, [dagRunId, trackedDagRunId]);
+
+  useEffect(() => {
+    setTrackedDagRunId(undefined);
+  }, [fileName, remoteNode]);
 
   // Determine which DAG-run to display - fallback to latest when specific run is loading
   const displayDAGRun = currentDAGRun || dagData?.latestDAGRun;
 
   return (
     <UnsavedChangesProvider>
-      <DAGContext.Provider
-        value={{
-          refresh: refreshData,
-          fileName,
-          name: dagRunName,
-        }}
-      >
-        <RootDAGRunContext.Provider
+      <RemoteNodeProvider remoteNode={remoteNode}>
+        <DAGContext.Provider
           value={{
-            data: rootDAGRunData,
-            setData: setRootDAGRunData,
+            refresh: refreshData,
+            fileName,
+            name: dagRunName,
           }}
         >
-          <div className="max-w-7xl flex flex-col">
-            {dagData?.dag && (
-              <>
-                <DAGHeader
-                  dag={dagData.dag}
-                  currentDAGRun={displayDAGRun}
-                  fileName={fileName}
-                  filePath={dagData.filePath}
-                  refreshFn={refreshData}
-                  formatDuration={formatDuration}
-                  navigateToStatusTab={navigateToStatusTab}
-                />
-                <DAGDetailsContent
-                  fileName={fileName}
-                  filePath={dagData.filePath}
-                  dag={dagData.dag}
-                  currentDAGRun={displayDAGRun}
-                  latestDAGRun={dagData.latestDAGRun}
-                  refreshFn={refreshData}
-                  formatDuration={formatDuration}
-                  activeTab={tab}
-                  onTabChange={handleTabChange}
-                  dagRunId={currentDAGRun?.dagRunId}
-                  stepName={stepName}
-                  isModal={false}
-                  navigateToStatusTab={navigateToStatusTab}
-                  skipHeader={true}
-                  localDags={dagData?.localDags}
-                  editorHints={dagData?.editorHints}
-                />
-              </>
-            )}
-          </div>
-        </RootDAGRunContext.Provider>
-      </DAGContext.Provider>
+          <RootDAGRunContext.Provider
+            value={{
+              data: rootDAGRunData,
+              setData: setRootDAGRunData,
+            }}
+          >
+            <div className="flex h-full min-h-0 w-full min-w-0 max-w-7xl flex-col">
+              {dagData?.dag && dagMatchesWorkspace && (
+                <>
+                  <DAGHeader
+                    dag={dagData.dag}
+                    currentDAGRun={displayDAGRun}
+                    fileName={fileName}
+                    filePath={dagData.filePath}
+                    refreshFn={refreshData}
+                    formatDuration={formatDuration}
+                    navigateToStatusTab={navigateToStatusTab}
+                    buildScopedUrl={buildUrl}
+                  />
+                  <div className="min-h-0 flex-1">
+                    <DAGDetailsContent
+                      fileName={fileName}
+                      filePath={dagData.filePath}
+                      dag={dagData.dag}
+                      currentDAGRun={displayDAGRun}
+                      refreshFn={refreshData}
+                      formatDuration={formatDuration}
+                      activeTab={tab}
+                      onTabChange={handleTabChange}
+                      dagRunId={currentDAGRun?.dagRunId}
+                      stepName={stepName}
+                      isModal={false}
+                      navigateToStatusTab={navigateToStatusTab}
+                      skipHeader={true}
+                      localDags={dagData?.localDags}
+                      editorHints={dagData?.editorHints}
+                      onRunStarted={handleRunStarted}
+                      buildScopedUrl={buildUrl}
+                      fillHeight
+                    />
+                  </div>
+                </>
+              )}
+              {dagData?.dag && !dagMatchesWorkspace && (
+                <div className="p-6 text-sm text-muted-foreground">
+                  This DAG is not in the selected workspace.
+                </div>
+              )}
+            </div>
+          </RootDAGRunContext.Provider>
+        </DAGContext.Provider>
+      </RemoteNodeProvider>
     </UnsavedChangesProvider>
   );
 }

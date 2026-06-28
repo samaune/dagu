@@ -1,6 +1,10 @@
+// Copyright (C) 2026 Yota Hamada
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SSEConnectionState } from '../SSEManager';
 import { endpointToTopic, SSEManager } from '../SSEManager';
+import { setAuthSession } from '../../lib/authSession';
 
 class MockEventSource {
   static instances: MockEventSource[] = [];
@@ -58,6 +62,10 @@ function lastState(
   return states[states.length - 1];
 }
 
+function lastEventSource(): MockEventSource | undefined {
+  return MockEventSource.instances[MockEventSource.instances.length - 1];
+}
+
 describe('endpointToTopic', () => {
   it('maps every supported legacy SSE endpoint to a canonical topic', () => {
     const cases: Array<[string, string]> = [
@@ -104,6 +112,7 @@ describe('SSEManager', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    localStorage.clear();
   });
 
   it('keeps a fresh topic pending until the server acknowledges the subscription', async () => {
@@ -385,5 +394,295 @@ describe('SSEManager', () => {
 
     unsubscribeSecondary();
     unsubscribePrimary();
+  });
+
+  it('resubscribes a topic removed by an in-flight stale mutation', async () => {
+    const manager = new SSEManager();
+    const states: SSEConnectionState[] = [];
+    let resolveRemoveMutation:
+      | ((value: Response | PromiseLike<Response>) => void)
+      | undefined;
+
+    vi.mocked(fetch)
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveRemoveMutation = resolve;
+          })
+      )
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          subscribed: ['dag:test.yaml'],
+          errors: [],
+        }),
+      } as Response);
+
+    const unsubscribeInitial = manager.subscribeTopic(
+      'dag:test.yaml',
+      'local',
+      '/api/v1',
+      {
+        onData: () => undefined,
+        onStateChange: () => undefined,
+      }
+    );
+
+    const eventSource = MockEventSource.instances[0];
+    if (!eventSource) {
+      throw new Error('expected EventSource instance');
+    }
+    eventSource.emit('control', {
+      sessionID: 'session-1',
+      subscribed: ['dag:test.yaml'],
+    });
+
+    unsubscribeInitial();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    const unsubscribeResubscribed = manager.subscribeTopic(
+      'dag:test.yaml',
+      'local',
+      '/api/v1',
+      {
+        onData: () => undefined,
+        onStateChange: (state) => states.push(snapshotState(state)),
+      }
+    );
+
+    expect(lastState(states)).toMatchObject({
+      isConnected: true,
+      isConnecting: false,
+    });
+
+    resolveRemoveMutation?.({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        subscribed: [],
+        errors: [],
+      }),
+    } as Response);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(lastState(states)).toMatchObject({
+      isConnected: false,
+      isConnecting: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(lastState(states)).toMatchObject({
+      isConnected: true,
+      isConnecting: false,
+    });
+
+    unsubscribeResubscribed();
+  });
+
+  it('re-adds an active topic when an in-flight stale remove fails', async () => {
+    const manager = new SSEManager();
+    const states: SSEConnectionState[] = [];
+    let rejectRemoveMutation: ((reason?: unknown) => void) | undefined;
+
+    vi.mocked(fetch)
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((_resolve, reject) => {
+            rejectRemoveMutation = reject;
+          })
+      )
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          subscribed: ['dag:test.yaml'],
+          errors: [],
+        }),
+      } as Response);
+
+    const unsubscribeInitial = manager.subscribeTopic(
+      'dag:test.yaml',
+      'local',
+      '/api/v1',
+      {
+        onData: () => undefined,
+        onStateChange: () => undefined,
+      }
+    );
+
+    const eventSource = MockEventSource.instances[0];
+    if (!eventSource) {
+      throw new Error('expected EventSource instance');
+    }
+    eventSource.emit('control', {
+      sessionID: 'session-1',
+      subscribed: ['dag:test.yaml'],
+    });
+
+    unsubscribeInitial();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    const unsubscribeResubscribed = manager.subscribeTopic(
+      'dag:test.yaml',
+      'local',
+      '/api/v1',
+      {
+        onData: () => undefined,
+        onStateChange: (state) => states.push(snapshotState(state)),
+      }
+    );
+
+    expect(lastState(states)).toMatchObject({
+      isConnected: true,
+      isConnecting: false,
+    });
+
+    rejectRemoveMutation?.(new Error('network failed after server remove'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(lastState(states)).toMatchObject({
+      isConnected: false,
+      isConnecting: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(lastState(states)).toMatchObject({
+      isConnected: true,
+      isConnecting: false,
+    });
+
+    unsubscribeResubscribed();
+  });
+
+  it('enables fallback only after the retry threshold is reached', async () => {
+    const manager = new SSEManager();
+    const states: SSEConnectionState[] = [];
+
+    const unsubscribe = manager.subscribeTopic(
+      'dag:test.yaml',
+      'local',
+      '/api/v1',
+      {
+        onData: () => undefined,
+        onStateChange: (state) => states.push(snapshotState(state)),
+      }
+    );
+
+    const retryDelays = [1000, 2000, 4000, 8000];
+    for (const delay of retryDelays) {
+      const eventSource = lastEventSource();
+      if (!eventSource) {
+        throw new Error('expected EventSource instance');
+      }
+      eventSource.onerror?.();
+      expect(lastState(states)).toMatchObject({
+        isConnected: false,
+        isConnecting: true,
+        shouldUseFallback: false,
+      });
+      await vi.advanceTimersByTimeAsync(delay);
+    }
+
+    const thresholdEventSource = lastEventSource();
+    if (!thresholdEventSource) {
+      throw new Error('expected EventSource instance');
+    }
+    thresholdEventSource.onerror?.();
+    expect(lastState(states)).toMatchObject({
+      isConnected: false,
+      isConnecting: false,
+      shouldUseFallback: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(16000);
+    expect(lastState(states)).toMatchObject({
+      isConnected: false,
+      isConnecting: true,
+      shouldUseFallback: true,
+    });
+
+    const recoveredEventSource = lastEventSource();
+    if (!recoveredEventSource) {
+      throw new Error('expected EventSource instance');
+    }
+    recoveredEventSource.emit('control', {
+      sessionID: 'session-recovered',
+      subscribed: ['dag:test.yaml'],
+    });
+    expect(lastState(states)).toMatchObject({
+      isConnected: true,
+      isConnecting: false,
+      shouldUseFallback: false,
+    });
+
+    unsubscribe();
+  });
+
+  it('does not open a builtin-auth stream when the local token is expired', () => {
+    vi.stubGlobal('getConfig', () => ({ authMode: 'builtin' }));
+    localStorage.setItem('dagu_auth_token', 'expired-token');
+    localStorage.setItem(
+      'dagu_auth_token_expires_at',
+      new Date(Date.now() - 1000).toISOString()
+    );
+
+    const manager = new SSEManager();
+    const states: SSEConnectionState[] = [];
+
+    const unsubscribe = manager.subscribeTopic(
+      'dag:test.yaml',
+      'local',
+      '/api/v1',
+      {
+        onData: () => undefined,
+        onStateChange: (state) => states.push(snapshotState(state)),
+      }
+    );
+
+    expect(MockEventSource.instances).toHaveLength(0);
+    expect(localStorage.getItem('dagu_auth_token')).toBeNull();
+    expect(lastState(states)).toMatchObject({
+      isConnected: false,
+      isConnecting: false,
+      shouldUseFallback: false,
+    });
+
+    unsubscribe();
+  });
+
+  it('retries builtin-auth streams when a token becomes available', () => {
+    vi.stubGlobal('getConfig', () => ({ authMode: 'builtin' }));
+
+    const manager = new SSEManager();
+    const states: SSEConnectionState[] = [];
+
+    const unsubscribe = manager.subscribeTopic(
+      'dag:test.yaml',
+      'local',
+      '/api/v1',
+      {
+        onData: () => undefined,
+        onStateChange: (state) => states.push(snapshotState(state)),
+      }
+    );
+
+    expect(MockEventSource.instances).toHaveLength(0);
+    expect(lastState(states)?.error?.message).toBe('Authentication required');
+
+    setAuthSession('fresh-token', new Date(Date.now() + 60_000).toISOString());
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    expect(MockEventSource.instances[0]?.url).toContain('token=fresh-token');
+
+    unsubscribe();
   });
 });

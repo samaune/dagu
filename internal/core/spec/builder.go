@@ -6,9 +6,10 @@ package spec
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
-	"github.com/dagucloud/dagu/internal/cmn/eval"
+	cmnvalue "github.com/dagucloud/dagu/internal/cmn/value"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/go-viper/mapstructure/v2"
 )
@@ -42,13 +43,19 @@ type BuildContext struct {
 	// paramsState caches DAG-level parameter parsing/resolution during a single build.
 	// This avoids reparsing params for Params, DefaultParams, ParamsJSON, and ParamDefs.
 	paramsState *paramsState
+
+	// valueReferenceNotices receives passive notices produced while building the DAG.
+	valueReferenceNotices cmnvalue.ValueReferenceNoticeSink
 }
 
 // envScopeState holds mutable state that needs to be shared across transformers.
 // Using a pointer allows value-passed BuildContext to share state.
 type envScopeState struct {
-	scope    *eval.EnvScope
-	buildEnv map[string]string // Also store as map for WithVariables
+	scope             *cmnvalue.EnvScope
+	buildEnv          map[string]string // Also store as map for WithVariables
+	consts            map[string]any
+	params            cmnvalue.Values
+	paramDeclarations cmnvalue.Values
 }
 
 type paramsState struct {
@@ -103,6 +110,8 @@ type BuildOpts struct {
 	// BaseConfigContent is the raw base config YAML content.
 	// When set, this takes precedence over Base file path.
 	BaseConfigContent []byte
+	// WorkspaceBaseConfigDir contains per-workspace base configs at <workspace>/base.yaml.
+	WorkspaceBaseConfigDir string
 	// Parameters specifies the Parameters to the DAG.
 	// Parameters are used to override the default Parameters in the DAG.
 	Parameters string
@@ -199,23 +208,55 @@ func parsePrecondition(ctx BuildContext, precondition any) ([]*core.Condition, e
 	}
 }
 
+var (
+	secretEnvNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	secretRefPathPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)*$`)
+)
+
+// Keep in sync with internal/core/exec runtime env keys. This package cannot
+// import core/exec because core/exec imports spec for DAG loading.
+var reservedSecretEnvNames = []string{
+	"DAG_NAME",
+	"DAG_RUN_ID",
+	"DAG_RUN_LOG_FILE",
+	"DAG_RUN_STEP_NAME",
+	"DAG_RUN_STEP_STDOUT_FILE",
+	"DAG_RUN_STEP_STDERR_FILE",
+	"DAG_RUN_STATUS",
+	"DAGU_PARAMS_JSON",
+	"DAG_DOCS_DIR",
+	"DAG_PARAMS_JSON",
+	"DAG_RUN_WORK_DIR",
+	"DAG_RUN_ARTIFACTS_DIR",
+	"DAG_PUSHBACK",
+	"DAG_PUSHBACK_ITERATION",
+	"DAG_PUSHBACK_PREVIOUS_STDOUT_FILE",
+	"DAGU_EXTERNAL_STEP_RETRY",
+	"DAGU_QUEUE_DISPATCH_RETRY",
+}
+
 // parseSecretRefs parses secret references from the YAML definition.
-func parseSecretRefs(secretRefs []secretRef) ([]core.SecretRef, error) {
+func parseSecretRefs(ctx BuildContext, d *dag) ([]core.SecretRef, error) {
+	secretRefs := d.Secrets
 
 	// Convert secretRef to core.SecretRef and validate
 	secrets := make([]core.SecretRef, 0, len(secretRefs))
 	names := make(map[string]bool)
+	conflicts := reservedSecretNameConflicts()
 
 	for i, def := range secretRefs {
 		// Validate required fields
 		if def.Name == "" {
 			return nil, core.NewValidationError("secrets", def, fmt.Errorf("secret at index %d: 'name' field is required", i))
 		}
-		if def.Provider == "" {
-			return nil, core.NewValidationError("secrets", def, fmt.Errorf("secret at index %d: 'provider' field is required", i))
+		if !secretEnvNamePattern.MatchString(def.Name) {
+			return nil, core.NewValidationError("secrets", def, fmt.Errorf("secret %q must be a valid environment variable name", def.Name))
 		}
-		if def.Key == "" {
-			return nil, core.NewValidationError("secrets", def, fmt.Errorf("secret at index %d: 'key' field is required", i))
+		if strings.HasPrefix(def.Name, "DAGU_") {
+			return nil, core.NewValidationError("secrets", def, fmt.Errorf("secret %q must not start with DAGU_", def.Name))
+		}
+		if source, ok := conflicts[def.Name]; ok {
+			return nil, core.NewValidationError("secrets", def, fmt.Errorf("secret %q collides with %s", def.Name, source))
 		}
 
 		// Check for duplicate names
@@ -224,8 +265,25 @@ func parseSecretRefs(secretRefs []secretRef) ([]core.SecretRef, error) {
 		}
 		names[def.Name] = true
 
+		hasRef := strings.TrimSpace(def.Ref) != ""
+		hasProvider := strings.TrimSpace(def.Provider) != ""
+		hasKey := strings.TrimSpace(def.Key) != ""
+		if hasRef && (hasProvider || hasKey) {
+			return nil, core.NewValidationError("secrets", def, fmt.Errorf("secret %q: exactly one of 'ref' or 'provider' plus 'key' is required", def.Name))
+		}
+		if !hasRef && (!hasProvider || !hasKey) {
+			return nil, core.NewValidationError("secrets", def, fmt.Errorf("secret %q: exactly one of 'ref' or 'provider' plus 'key' is required", def.Name))
+		}
+		if hasRef && len(def.Options) > 0 {
+			return nil, core.NewValidationError("secrets", def, fmt.Errorf("secret %q: 'options' cannot be used with registry ref", def.Name))
+		}
+		if hasRef && !secretRefPathPattern.MatchString(def.Ref) {
+			return nil, core.NewValidationError("secrets", def, fmt.Errorf("secret %q: registry ref must be a slash-separated lowercase slug path", def.Name))
+		}
+
 		secrets = append(secrets, core.SecretRef{
 			Name:     def.Name,
+			Ref:      def.Ref,
 			Provider: def.Provider,
 			Key:      def.Key,
 			Options:  def.Options,
@@ -233,6 +291,14 @@ func parseSecretRefs(secretRefs []secretRef) ([]core.SecretRef, error) {
 	}
 
 	return secrets, nil
+}
+
+func reservedSecretNameConflicts() map[string]string {
+	conflicts := make(map[string]string)
+	for _, name := range reservedSecretEnvNames {
+		conflicts[name] = "Dagu-managed runtime environment variable"
+	}
+	return conflicts
 }
 
 // generateTypedStepName generates a type-based name for a step after it's been built
@@ -290,6 +356,10 @@ func normalizeStepData(ctx BuildContext, data []any) []any {
 }
 
 func decodeStep(raw map[string]any) (*step, error) {
+	if err := validateStepConfigAliasRaw(raw); err != nil {
+		return nil, err
+	}
+
 	var st step
 	md, _ := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		ErrorUnused: true,
@@ -300,6 +370,7 @@ func decodeStep(raw map[string]any) (*step, error) {
 	if err := md.Decode(raw); err != nil {
 		return nil, core.NewValidationError("steps", raw, withSnakeCaseKeyHint(err))
 	}
+	_, st.outputsSet = raw["outputs"]
 	return &st, nil
 }
 
@@ -323,11 +394,15 @@ func buildConcreteStep(ctx StepBuildContext, s *step) (*core.Step, error) {
 
 // buildStepFromRaw build core.Step from give raw data (map[string]any)
 func buildStepFromRaw(ctx StepBuildContext, idx int, raw map[string]any, names map[string]struct{}, defs *defaults) (*core.Step, error) {
-	st, err := decodeStep(raw)
+	normalizedRaw, err := normalizeStepExecutionRaw(raw, ctx.customStepTypes)
 	if err != nil {
 		return nil, err
 	}
-	builtStep, err := buildStepFromSpec(ctx, idx, st, raw, names, defs, "")
+	st, err := decodeStep(normalizedRaw)
+	if err != nil {
+		return nil, err
+	}
+	builtStep, err := buildStepFromSpec(ctx, idx, st, normalizedRaw, names, defs, "")
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +418,27 @@ func buildStepFromSpec(
 	defs *defaults,
 	forcedName string,
 ) (*core.Step, error) {
+	if raw != nil {
+		_, hasRun := raw["run"]
+		_, hasAction := raw["action"]
+		if hasRun || hasAction {
+			normalizedRaw, err := normalizeStepExecutionRaw(raw, ctx.customStepTypes)
+			if err != nil {
+				return nil, err
+			}
+			normalizedSpec, err := decodeStep(normalizedRaw)
+			if err != nil {
+				return nil, err
+			}
+			st = normalizedSpec
+			raw = normalizedRaw
+		}
+	}
+
 	stCopy := *st
+	if raw != nil {
+		_, stCopy.outputsSet = raw["outputs"]
+	}
 	if forcedName != "" {
 		stCopy.Name = forcedName
 	}

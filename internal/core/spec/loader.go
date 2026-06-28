@@ -4,11 +4,9 @@
 package spec
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -17,11 +15,14 @@ import (
 
 	"dario.cat/mergo"
 	"github.com/dagucloud/dagu/internal/cmn/fileutil"
+	cmnvalue "github.com/dagucloud/dagu/internal/cmn/value"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/spec/types"
+	"github.com/dagucloud/dagu/internal/workspace"
 	"github.com/go-viper/mapstructure/v2"
 
 	"github.com/goccy/go-yaml"
+	"github.com/goccy/go-yaml/parser"
 )
 
 // Errors for loading DAGs
@@ -32,15 +33,22 @@ var (
 
 // LoadOptions contains options for loading a DAG.
 type LoadOptions struct {
-	name              string   // Name of the DAG.
-	baseConfig        string   // Path to the base core.DAG configuration file.
-	baseConfigContent []byte   // Raw base config YAML content (used when file is unavailable, e.g., distributed mode).
-	params            string   // Parameters to override default parameters in the DAG.
-	paramsList        []string // List of parameters to override default parameters in the DAG.
-	flags             BuildFlag
-	dagsDir           string            // Directory containing the core.DAG files.
-	defaultWorkingDir string            // Default working directory for DAGs without explicit workingDir.
-	buildEnv          map[string]string // Pre-populated env vars for build (used for retry with dotenv).
+	name                   string   // Name of the DAG.
+	baseConfig             string   // Path to the base core.DAG configuration file.
+	baseConfigContent      []byte   // Raw base config YAML content (used when file is unavailable, e.g., distributed mode).
+	workspaceBaseConfigDir string   // Directory containing workspace base configs (<workspace>/base.yaml).
+	params                 string   // Parameters to override default parameters in the DAG.
+	paramsList             []string // List of parameters to override default parameters in the DAG.
+	flags                  BuildFlag
+	dagsDir                string            // Directory containing the core.DAG files.
+	defaultWorkingDir      string            // Default working directory for DAGs without explicit workingDir.
+	buildEnv               map[string]string // Pre-populated env vars for build (used for retry with dotenv).
+}
+
+// LoadResult contains a loaded DAG and transient value-reference notices produced by that load operation.
+type LoadResult struct {
+	DAG                   *core.DAG
+	ValueReferenceNotices []cmnvalue.ValueReferenceNotice
 }
 
 // LoadOption is a function type for setting LoadOptions.
@@ -59,6 +67,14 @@ func WithBaseConfig(baseDAG string) LoadOption {
 func WithBaseConfigContent(content []byte) LoadOption {
 	return func(o *LoadOptions) {
 		o.baseConfigContent = content
+	}
+}
+
+// WithWorkspaceBaseConfigDir sets the directory containing workspace base configs.
+// Named workspace DAGs inherit <dir>/<workspace>/base.yaml after the global base config.
+func WithWorkspaceBaseConfigDir(dir string) LoadOption {
+	return func(o *LoadOptions) {
+		o.workspaceBaseConfigDir = dir
 	}
 }
 
@@ -177,106 +193,133 @@ func Load(ctx context.Context, nameOrPath string, opts ...LoadOption) (*core.DAG
 	if nameOrPath == "" {
 		return nil, ErrNameOrPathRequired
 	}
-	var options LoadOptions
-	for _, opt := range opts {
-		opt(&options)
-	}
-	buildContext := BuildContext{
-		ctx: ctx,
-		opts: BuildOpts{
-			Base:              options.baseConfig,
-			BaseConfigContent: options.baseConfigContent,
-			Parameters:        options.params,
-			ParametersList:    options.paramsList,
-			Name:              options.name,
-			DAGsDir:           options.dagsDir,
-			DefaultWorkingDir: options.defaultWorkingDir,
-			Flags:             options.flags,
-			BuildEnv:          options.buildEnv,
-		},
-	}
+	buildContext := loadBuildContext(ctx, opts...)
 	return loadDAG(buildContext, nameOrPath)
+}
+
+// LoadWithResult loads a DAG and returns transient value-reference notices produced by that load operation.
+func LoadWithResult(ctx context.Context, nameOrPath string, opts ...LoadOption) (*LoadResult, error) {
+	if nameOrPath == "" {
+		return nil, ErrNameOrPathRequired
+	}
+	var collector cmnvalue.ValueReferenceNoticeCollector
+	buildContext := loadBuildContext(ctx, opts...)
+	buildContext.valueReferenceNotices = &collector
+	dag, err := loadDAG(buildContext, nameOrPath)
+	if err != nil {
+		return nil, err
+	}
+	core.ReportValueReferenceNotices(dag, &collector)
+	return &LoadResult{DAG: dag, ValueReferenceNotices: collector.Notices()}, nil
+}
+
+func loadBuildContext(ctx context.Context, opts ...LoadOption) BuildContext {
+	return BuildContext{
+		ctx:  ctx,
+		opts: loadBuildOpts(loadOptions(opts...)),
+	}
 }
 
 // LoadYAML loads the core.DAG from the given YAML data with the specified options.
 func LoadYAML(ctx context.Context, data []byte, opts ...LoadOption) (*core.DAG, error) {
+	return LoadYAMLWithOpts(ctx, data, loadBuildOpts(loadOptions(opts...)))
+}
+
+// LoadYAMLWithResult loads a DAG from YAML and returns transient value-reference notices produced by that load operation.
+func LoadYAMLWithResult(ctx context.Context, data []byte, opts ...LoadOption) (*LoadResult, error) {
+	var collector cmnvalue.ValueReferenceNoticeCollector
+	dag, err := loadYAMLWithOptsAndNotices(ctx, data, loadBuildOpts(loadOptions(opts...)), &collector)
+	if err != nil {
+		return nil, err
+	}
+	core.ReportValueReferenceNotices(dag, &collector)
+	return &LoadResult{DAG: dag, ValueReferenceNotices: collector.Notices()}, nil
+}
+
+func loadOptions(opts ...LoadOption) LoadOptions {
 	var options LoadOptions
 	for _, opt := range opts {
 		opt(&options)
 	}
-	return LoadYAMLWithOpts(ctx, data, BuildOpts{
-		Base:              options.baseConfig,
-		BaseConfigContent: options.baseConfigContent,
-		Parameters:        options.params,
-		ParametersList:    options.paramsList,
-		Name:              options.name,
-		DAGsDir:           options.dagsDir,
-		DefaultWorkingDir: options.defaultWorkingDir,
-		Flags:             options.flags,
-		BuildEnv:          options.buildEnv,
-	})
+	return options
+}
+
+func loadBuildOpts(options LoadOptions) BuildOpts {
+	return BuildOpts{
+		Base:                   options.baseConfig,
+		BaseConfigContent:      options.baseConfigContent,
+		WorkspaceBaseConfigDir: options.workspaceBaseConfigDir,
+		Parameters:             options.params,
+		ParametersList:         options.paramsList,
+		Name:                   options.name,
+		DAGsDir:                options.dagsDir,
+		DefaultWorkingDir:      options.defaultWorkingDir,
+		Flags:                  options.flags,
+		BuildEnv:               options.buildEnv,
+	}
 }
 
 // LoadYAMLWithOpts loads the core.DAG configuration from YAML data.
 func LoadYAMLWithOpts(ctx context.Context, data []byte, opts BuildOpts) (*core.DAG, error) {
+	return loadYAMLWithOptsAndNotices(ctx, data, opts, nil)
+}
+
+func loadYAMLWithOptsAndNotices(
+	ctx context.Context,
+	data []byte,
+	opts BuildOpts,
+	valueReferenceNotices *cmnvalue.ValueReferenceNoticeCollector,
+) (*core.DAG, error) {
 	baseDef, baseRaw, err := loadBaseDefinition(opts)
 	if err != nil {
-		if opts.Has(BuildFlagAllowBuildErrors) {
-			return &core.DAG{
-				Name:        opts.Name,
-				BuildErrors: []error{err},
-			}, nil
-		}
-		return nil, core.ErrorList{err}
+		return loadYAMLFailure(opts, err)
 	}
 
-	buildCtx := BuildContext{ctx: ctx, opts: opts}
-	dags, err := loadDAGsFromData(buildCtx, data, "", baseDef)
+	buildContext := BuildContext{ctx: ctx, opts: opts}
+	if valueReferenceNotices != nil {
+		buildContext.valueReferenceNotices = valueReferenceNotices
+	}
+	dags, err := loadDAGsFromData(buildContext, data, "", baseDef, baseRaw)
 	if err != nil {
-		if opts.Has(BuildFlagAllowBuildErrors) {
-			return &core.DAG{
-				Name:        opts.Name,
-				BuildErrors: []error{err},
-			}, nil
-		}
-		return nil, core.ErrorList{err}
-	}
-	if len(dags) == 0 {
-		err := fmt.Errorf("no DAGs found in YAML data")
-		if opts.Has(BuildFlagAllowBuildErrors) {
-			return &core.DAG{
-				Name:        opts.Name,
-				BuildErrors: []error{err},
-			}, nil
-		}
-		return nil, core.ErrorList{err}
+		return loadYAMLFailure(opts, err)
 	}
 
-	mainDAG := dags[0]
-	if len(dags) > 1 {
-		mainDAG.LocalDAGs = make(map[string]*core.DAG, len(dags)-1)
-		for i := 1; i < len(dags); i++ {
-			subDAG := dags[i]
-			if subDAG.Name == "" {
-				err := fmt.Errorf("child core.DAG at index %d must have a name", i)
-				if opts.Has(BuildFlagAllowBuildErrors) {
-					return &core.DAG{
-						Name:        opts.Name,
-						BuildErrors: []error{err},
-					}, nil
-				}
-				return nil, core.ErrorList{err}
-			}
-			mainDAG.LocalDAGs[subDAG.Name] = subDAG
-		}
+	mainDAG, err := assembleLoadedDAGs(dags, fmt.Errorf("no DAGs found in YAML data"))
+	if err != nil {
+		return loadYAMLFailure(opts, err)
 	}
 
 	mainDAG.YamlData = data
-	if len(baseRaw) > 0 {
-		mainDAG.BaseConfigData = baseRaw
-	}
+	markConfiguredWorkingDirsExplicit(mainDAG)
 
 	return mainDAG, nil
+}
+
+// loadYAMLFailure returns a placeholder DAG when YAML loading is allowed to fail.
+func loadYAMLFailure(opts BuildOpts, err error) (*core.DAG, error) {
+	if dag := buildLoadErrorDAG(opts, "", err); dag != nil {
+		return dag, nil
+	}
+	return nil, core.ErrorList{err}
+}
+
+// buildLoadErrorDAG creates a placeholder DAG when build errors are allowed.
+func buildLoadErrorDAG(opts BuildOpts, filePath string, err error) *core.DAG {
+	if !opts.Has(BuildFlagAllowBuildErrors) {
+		return nil
+	}
+
+	name := opts.Name
+	if name == "" {
+		name = defaultName(filePath)
+	}
+
+	return &core.DAG{
+		Name:        name,
+		Location:    filePath,
+		SourceFile:  filePath,
+		BuildErrors: []error{err},
+	}
 }
 
 // LoadBaseConfig loads the global configuration from the given file.
@@ -315,212 +358,249 @@ func loadDAG(ctx BuildContext, nameOrPath string) (*core.DAG, error) {
 
 	ctx = ctx.WithFile(filePath)
 
-	// errorDAG returns a minimal DAG with the error recorded when
-	// BuildFlagAllowBuildErrors is set, or the raw error otherwise.
-	errorDAG := func(err error) (*core.DAG, error) {
-		if ctx.opts.Has(BuildFlagAllowBuildErrors) {
-			name := ctx.opts.Name
-			if name == "" {
-				name = defaultName(filePath)
-			}
-			return &core.DAG{
-				Name:        name,
-				Location:    filePath,
-				SourceFile:  filePath,
-				BuildErrors: []error{err},
-			}, nil
-		}
-		return nil, err
-	}
-
-	// Load base manifest if specified.
-	// Priority: embedded content (BaseConfigContent) > file path (Base).
-	var baseDef *dag
-	var baseRaw []byte
-	if !ctx.opts.Has(BuildFlagOnlyMetadata) {
-		if len(ctx.opts.BaseConfigContent) > 0 {
-			// Use embedded base config content (distributed mode / sub-DAG propagation)
-			baseRaw = ctx.opts.BaseConfigContent
-			raw, err := unmarshalData(baseRaw)
-			if err != nil {
-				return errorDAG(fmt.Errorf("failed to unmarshal embedded base config: %w", err))
-			}
-			baseDef, err = decode(raw)
-			if err != nil {
-				return errorDAG(fmt.Errorf("failed to decode embedded base config: %w", err))
-			}
-		} else if ctx.opts.Base != "" {
-			baseRaw, err = os.ReadFile(ctx.opts.Base) //nolint:gosec
-			if err != nil {
-				if !os.IsNotExist(err) {
-					return errorDAG(fmt.Errorf("failed to read base config: %w", err))
-				}
-				// File doesn't exist — skip base config gracefully
-			} else {
-				raw, err := unmarshalData(baseRaw)
-				if err != nil {
-					return errorDAG(fmt.Errorf("failed to unmarshal base config: %w", err))
-				}
-				baseDef, err = decode(raw)
-				if err != nil {
-					return errorDAG(fmt.Errorf("failed to decode base config: %w", err))
-				}
-			}
-		}
-	}
-
-	// Load all DAGs from the file
-	dags, err := loadDAGsFromFile(ctx, filePath, baseDef)
+	baseDef, baseRaw, err := loadBaseDefinition(ctx.opts)
 	if err != nil {
-		return errorDAG(err)
+		return loadDAGFailure(ctx, filePath, err)
 	}
 
-	if len(dags) == 0 {
-		return errorDAG(fmt.Errorf("no DAGs found in file %q", filePath))
+	dags, err := loadDAGsFromFile(ctx, filePath, baseDef, baseRaw)
+	if err != nil {
+		return loadDAGFailure(ctx, filePath, err)
 	}
 
-	// Get the main core.DAG (first one)
-	mainDAG := dags[0]
-
-	// If there are sub DAGs, add them to the main core.DAG
-	if len(dags) > 1 {
-		mainDAG.LocalDAGs = make(map[string]*core.DAG)
-		for i := 1; i < len(dags); i++ {
-			subDAG := dags[i]
-			if subDAG.Name == "" {
-				return errorDAG(fmt.Errorf("child core.DAG at index %d must have a name", i))
-			}
-			mainDAG.LocalDAGs[subDAG.Name] = subDAG
-		}
-	}
-
-	// Store base config data for propagation through distributed execution
-	if len(baseRaw) > 0 {
-		mainDAG.BaseConfigData = baseRaw
+	mainDAG, err := assembleLoadedDAGs(dags, fmt.Errorf("no DAGs found in file %q", filePath))
+	if err != nil {
+		return loadDAGFailure(ctx, filePath, err)
 	}
 
 	core.InitializeDefaults(mainDAG)
-
-	// Apply working directory fallback if not set by YAML, base config, or DefaultWorkingDir.
-	if mainDAG.WorkingDir == "" {
-		if filePath != "" {
-			mainDAG.WorkingDir = filepath.Dir(filePath)
-		} else {
-			wd, err := getDefaultWorkingDir()
-			if err != nil {
-				return nil, fmt.Errorf("failed to determine working directory: %w", err)
-			}
-			mainDAG.WorkingDir = wd
-		}
-	} else {
-		mainDAG.WorkingDirExplicit = true
+	if err := applyWorkingDirFallback(mainDAG, filePath); err != nil {
+		return nil, err
 	}
 
 	return mainDAG, nil
 }
 
-// loadDAGsFromFile loads all DAGs from a multi-document YAML file
-func loadDAGsFromFile(ctx BuildContext, filePath string, baseDef *dag) ([]*core.DAG, error) {
-	// Open the file
-	f, err := os.Open(filePath) //nolint:gosec
-	if err != nil {
-		return nil, fmt.Errorf("failed to open file %q: %w", filePath, err)
+// loadDAGFailure returns a placeholder DAG when file loading is allowed to fail.
+func loadDAGFailure(ctx BuildContext, filePath string, err error) (*core.DAG, error) {
+	if dag := buildLoadErrorDAG(ctx.opts, filePath, err); dag != nil {
+		return dag, nil
 	}
-	defer func() { _ = f.Close() }()
-
-	// Read data from the file
-	dat, err := io.ReadAll(f)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file %q", filePath)
-	}
-
-	return loadDAGsFromData(ctx, dat, filePath, baseDef)
+	return nil, err
 }
 
-func loadDAGsFromData(ctx BuildContext, dat []byte, filePath string, baseDef *dag) ([]*core.DAG, error) {
-	var dags []*core.DAG
-	decoder := yaml.NewDecoder(bytes.NewReader(dat))
-
-	// Read all documents from the file
-	docIndex := 0
-	for {
-		var doc map[string]any
-		err := decoder.Decode(&doc)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			// Note: The YAML decoder has limitations with empty documents
-			// and may return errors for them. We skip and continue.
-			return nil, fmt.Errorf("failed to decode document %d: %w", docIndex, err)
-		}
-
-		// Skip empty documents
-		if len(doc) == 0 {
-			docIndex++
-			continue
-		}
-
-		// Update the context with the current document index
-		ctx.index = docIndex
-
-		// Process the document
-		dag, err := processDAGDocument(ctx, doc, baseDef, filePath, dat, docIndex)
-		if err != nil {
-			return nil, fmt.Errorf("failed to process document %d: %w", docIndex, err)
-		}
-
-		dags = append(dags, dag)
-		docIndex++
+// assembleLoadedDAGs returns the first DAG and attaches later documents as locals.
+func assembleLoadedDAGs(dags []*core.DAG, emptyErr error) (*core.DAG, error) {
+	if len(dags) == 0 {
+		return nil, emptyErr
 	}
 
-	// Validate unique names in multi-DAG files
-	if err := validateUniqueNames(dags); err != nil {
+	mainDAG := dags[0]
+	if err := attachLocalDAGs(mainDAG, dags[1:]); err != nil {
 		return nil, err
 	}
 
+	return mainDAG, nil
+}
+
+// attachLocalDAGs registers secondary documents as named local DAGs.
+func attachLocalDAGs(mainDAG *core.DAG, localDAGs []*core.DAG) error {
+	if len(localDAGs) == 0 {
+		return nil
+	}
+
+	mainDAG.LocalDAGs = make(map[string]*core.DAG, len(localDAGs))
+	for i, dag := range localDAGs {
+		index := i + 1
+		if dag.Name == "" {
+			return fmt.Errorf("child core.DAG at index %d must have a name", index)
+		}
+		mainDAG.LocalDAGs[dag.Name] = dag
+	}
+	return nil
+}
+
+// applyWorkingDirFallback marks configured working directories as explicit,
+// then synthesizes a fallback from filePath or the process working directory
+// when the manifest omits one, returning an error if the process working
+// directory cannot be determined.
+func applyWorkingDirFallback(dag *core.DAG, filePath string) error {
+	markConfiguredWorkingDirsExplicit(dag)
+
+	if dag.WorkingDir != "" {
+		return nil
+	}
+
+	if filePath != "" {
+		dag.WorkingDir = filepath.Dir(filePath)
+		return nil
+	}
+
+	wd, err := getDefaultWorkingDir()
+	if err != nil {
+		return fmt.Errorf("failed to determine working directory: %w", err)
+	}
+	dag.WorkingDir = wd
+	return nil
+}
+
+// markConfiguredWorkingDirsExplicit preserves configured working directories
+// without synthesizing fallback values for YAML-only loads.
+func markConfiguredWorkingDirsExplicit(dag *core.DAG) {
+	if dag == nil {
+		return
+	}
+	if dag.WorkingDir != "" {
+		dag.WorkingDirExplicit = true
+	}
+	for _, localDAG := range dag.LocalDAGs {
+		markConfiguredWorkingDirsExplicit(localDAG)
+	}
+}
+
+// loadDAGsFromFile loads all DAGs from a multi-document YAML file.
+func loadDAGsFromFile(ctx BuildContext, filePath string, baseDef *dag, baseRaw []byte) ([]*core.DAG, error) {
+	data, err := fileutil.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file %q: %w", filePath, err)
+	}
+	return loadDAGsFromData(ctx, data, filePath, baseDef, baseRaw)
+}
+
+type dagDocument struct {
+	index int
+	data  map[string]any
+}
+
+// loadDAGsFromData builds DAGs from every non-empty YAML document in the input.
+func loadDAGsFromData(ctx BuildContext, data []byte, filePath string, baseDef *dag, baseRaw []byte) ([]*core.DAG, error) {
+	docs, err := decodeDocuments(data)
+	if err != nil {
+		return nil, err
+	}
+
+	fileBaseDef, fileBaseRaw := baseDef, baseRaw
+	if len(docs) > 0 {
+		fileBaseDef, fileBaseRaw, err = loadEffectiveBaseDefinition(ctx.opts, docs[0].data, baseDef, baseRaw)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process document %d: %w", docs[0].index, err)
+		}
+	}
+
+	dags := make([]*core.DAG, 0, len(docs))
+	for _, doc := range docs {
+		docBaseDef, docBaseRaw := fileBaseDef, fileBaseRaw
+		if doc.index == 0 || workspaceNameFromDocument(doc.data) != "" {
+			docBaseDef, docBaseRaw, err = loadEffectiveBaseDefinition(ctx.opts, doc.data, baseDef, baseRaw)
+			if err != nil {
+				return nil, fmt.Errorf("failed to process document %d: %w", doc.index, err)
+			}
+		}
+
+		dag, err := processDAGDocument(buildDocumentContext(ctx, doc.index), doc.data, docBaseDef, docBaseRaw, filePath, data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process document %d: %w", doc.index, err)
+		}
+		dags = append(dags, dag)
+	}
+
+	if err := validateUniqueNames(dags); err != nil {
+		return nil, err
+	}
 	return dags, nil
 }
 
+// decodeDocuments splits a YAML stream into non-empty manifest documents.
+func decodeDocuments(data []byte) ([]dagDocument, error) {
+	file, err := parser.ParseBytes(data, 0)
+	if err != nil {
+		return nil, err
+	}
+	if file == nil {
+		return nil, nil
+	}
+
+	decoder := newManifestDecoder()
+	docs := make([]dagDocument, 0, 1)
+	if len(file.Docs) == 1 {
+		doc, err := decoder.Unmarshal(data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode document 0: %w", err)
+		}
+		if len(doc) == 0 {
+			return docs, nil
+		}
+		return append(docs, dagDocument{index: 0, data: doc}), nil
+	}
+
+	for index, docNode := range file.Docs {
+		if docNode == nil || docNode.Body == nil {
+			continue
+		}
+		docData, err := docNode.MarshalYAML()
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal document %d: %w", index, err)
+		}
+		doc, err := decoder.Unmarshal(docData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode document %d: %w", index, err)
+		}
+		if len(doc) == 0 {
+			continue
+		}
+		docs = append(docs, dagDocument{index: len(docs), data: doc})
+	}
+	return docs, nil
+}
+
+// loadBaseDefinition loads and decodes the optional base manifest.
 func loadBaseDefinition(opts BuildOpts) (*dag, []byte, error) {
 	if opts.Has(BuildFlagOnlyMetadata) {
 		return nil, nil, nil
 	}
 
+	baseRaw, description, err := readBaseDefinitionData(opts)
+	if err != nil || len(baseRaw) == 0 {
+		return nil, nil, err
+	}
+
+	baseDef, err := decodeDefinitionData(baseRaw, description)
+	if err != nil {
+		return nil, nil, err
+	}
+	return baseDef, baseRaw, nil
+}
+
+// readBaseDefinitionData returns the raw bytes and label for the base manifest.
+func readBaseDefinitionData(opts BuildOpts) ([]byte, string, error) {
 	if len(opts.BaseConfigContent) > 0 {
-		raw, err := unmarshalData(opts.BaseConfigContent)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to unmarshal embedded base config: %w", err)
-		}
-		baseDef, err := decode(raw)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to decode embedded base config: %w", err)
-		}
-		return baseDef, opts.BaseConfigContent, nil
+		return opts.BaseConfigContent, "embedded base config", nil
 	}
-
 	if opts.Base == "" {
-		return nil, nil, nil
+		return nil, "", nil
 	}
 
-	baseRaw, err := os.ReadFile(opts.Base) //nolint:gosec
+	baseRaw, err := fileutil.ReadFile(opts.Base)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil, nil
+			return nil, "", nil
 		}
-		return nil, nil, fmt.Errorf("failed to read base config: %w", err)
+		return nil, "", fmt.Errorf("failed to read base config: %w", err)
 	}
+	return baseRaw, "base config", nil
+}
 
-	raw, err := unmarshalData(baseRaw)
+// decodeDefinitionData parses manifest data into the internal dag definition.
+func decodeDefinitionData(data []byte, description string) (*dag, error) {
+	raw, err := unmarshalData(data)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to unmarshal base config: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal %s: %w", description, err)
 	}
-	baseDef, err := decode(raw)
+	def, err := decode(raw)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to decode base config: %w", err)
+		return nil, fmt.Errorf("failed to decode %s: %w", description, err)
 	}
-
-	return baseDef, baseRaw, nil
+	return def, nil
 }
 
 // processDAGDocument processes a single DAG document from the YAML file.
@@ -528,93 +608,289 @@ func processDAGDocument(
 	ctx BuildContext,
 	doc map[string]any,
 	baseDef *dag,
+	baseRaw []byte,
 	filePath string,
 	fullData []byte,
-	docIndex int,
 ) (*core.DAG, error) {
-	// Decode the document into manifest
 	spec, err := decode(doc)
 	if err != nil {
 		return nil, err
 	}
 
-	docCtx := ctx
-	if docIndex > 0 {
-		docCtx.opts.Parameters = ""
-		docCtx.opts.ParametersList = nil
-		docCtx.opts.Flags &^= BuildFlagValidateRuntimeParams
-	}
-
-	customStepTypes, err := buildCustomStepTypeRegistry(stepTypesOf(baseDef), stepTypesOf(spec))
+	docCtx, _, err := prepareDocumentContext(ctx, baseDef, spec)
 	if err != nil {
 		return nil, err
-	}
-	docCtx = docCtx.WithCustomStepTypes(customStepTypes)
-
-	// Build a fresh base core.DAG from base manifest if provided
-	var dest *core.DAG
-	if baseDef != nil {
-		dest, err = buildBaseDAG(docCtx, baseDef)
-		if err != nil {
-			return nil, err
-		}
-		docCtx.baseDefaults, err = decodeDefaults(baseDef.Defaults)
-		if err != nil {
-			return nil, err
-		}
-		docCtx.baseDAG = dest
-	} else {
-		dest = new(core.DAG)
 	}
 
 	if shouldInheritType(doc, baseDef, spec) {
 		spec.Type = baseDef.Type
 	}
 
-	// Build the core.DAG from the current document
 	dag, err := spec.build(docCtx)
 	if err != nil {
 		return nil, err
 	}
+	if len(baseRaw) > 0 {
+		dag.BaseConfigData = baseRaw
+	}
+	applyHistoryRetentionOverride(dag, spec.HistRetentionDays != nil, spec.HistRetentionRuns != nil)
 
-	// Merge the current core.DAG into the base core.DAG
-	if err := merge(dest, dag); err != nil {
+	dag.Location = filePath
+	dag.SourceFile = filePath
+	dag.YamlData, err = documentYAML(ctx.index, doc, fullData)
+	if err != nil {
 		return nil, err
 	}
+	return dag, nil
+}
 
-	// Preserve runtime location separately from source provenance.
-	dest.Location = filePath
-	dest.SourceFile = filePath
+// loadEffectiveBaseDefinition returns the base definition that applies to a document.
+// Embedded base configs are already effective for distributed workers, so local
+// workspace config files are only considered when loading from filesystem state.
+func loadEffectiveBaseDefinition(opts BuildOpts, doc map[string]any, baseDef *dag, baseRaw []byte) (*dag, []byte, error) {
+	workspaceRaw, err := readWorkspaceBaseDefinitionData(opts, doc)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(workspaceRaw) == 0 {
+		return baseDef, baseRaw, nil
+	}
+	return mergeBaseDefinitionData(baseRaw, workspaceRaw)
+}
 
-	if docIndex == 0 {
-		// If this is the first document, set the entire core.DAG
-		dest.YamlData = fullData
-	} else {
-		// Marshal the document back to YAML to preserve original data
-		yamlData, err := yaml.Marshal(doc)
-		if err != nil {
-			return nil, err
-		}
-		dest.YamlData = yamlData
+// readWorkspaceBaseDefinitionData returns raw per-workspace base config data for a named workspace DAG.
+func readWorkspaceBaseDefinitionData(opts BuildOpts, doc map[string]any) ([]byte, error) {
+	if opts.Has(BuildFlagOnlyMetadata) || opts.WorkspaceBaseConfigDir == "" || len(opts.BaseConfigContent) > 0 {
+		return nil, nil
 	}
 
-	return dest, nil
+	workspaceName := workspaceNameFromDocument(doc)
+	if workspaceName == "" {
+		return nil, nil
+	}
+
+	data, err := fileutil.ReadFile(filepath.Join(opts.WorkspaceBaseConfigDir, workspaceName, workspace.BaseConfigFileName))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read workspace base config %q: %w", workspaceName, err)
+	}
+	return data, nil
+}
+
+func workspaceNameFromDocument(doc map[string]any) string {
+	for _, key := range []string{"labels", "tags"} {
+		labels, ok := labelsValueFromRaw(doc[key])
+		if !ok {
+			continue
+		}
+
+		var workspaceName string
+		for _, entry := range labels.Entries() {
+			labelKey := strings.ToLower(strings.TrimSpace(entry.Key()))
+			if labelKey != "workspace" {
+				continue
+			}
+
+			value := strings.TrimSpace(entry.Value())
+			if err := workspace.ValidateName(value); err != nil {
+				return ""
+			}
+			if workspaceName != "" && !strings.EqualFold(workspaceName, value) {
+				return ""
+			}
+			workspaceName = value
+		}
+		if workspaceName != "" {
+			return workspaceName
+		}
+	}
+	return ""
+}
+
+func labelsValueFromRaw(raw any) (types.LabelsValue, bool) {
+	if raw == nil {
+		return types.LabelsValue{}, false
+	}
+
+	data, err := yaml.Marshal(raw)
+	if err != nil {
+		return types.LabelsValue{}, false
+	}
+
+	var labels types.LabelsValue
+	if err := yaml.Unmarshal(data, &labels); err != nil {
+		return types.LabelsValue{}, false
+	}
+	if labels.IsZero() {
+		return types.LabelsValue{}, false
+	}
+	return labels, true
+}
+
+func mergeBaseDefinitionData(baseRaw, overrideRaw []byte) (*dag, []byte, error) {
+	if len(baseRaw) == 0 {
+		def, err := decodeDefinitionData(overrideRaw, "workspace base config")
+		return def, overrideRaw, err
+	}
+	if len(overrideRaw) == 0 {
+		def, err := decodeDefinitionData(baseRaw, "base config")
+		return def, baseRaw, err
+	}
+
+	baseMap, err := unmarshalData(baseRaw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to unmarshal base config: %w", err)
+	}
+	overrideMap, err := unmarshalData(overrideRaw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to unmarshal workspace base config: %w", err)
+	}
+
+	mergedMap, err := mergeDefinitionMaps(baseMap, overrideMap)
+	if err != nil {
+		return nil, nil, err
+	}
+	def, err := decode(mergedMap)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to decode merged base config: %w", err)
+	}
+
+	mergedRaw, err := yaml.Marshal(mergedMap)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to marshal merged base config: %w", err)
+	}
+	return def, mergedRaw, nil
+}
+
+func mergeDefinitionMaps(base, override map[string]any) (map[string]any, error) {
+	merged := cloneMap(base)
+	if merged == nil {
+		merged = make(map[string]any, len(override))
+	}
+	for key, overrideValue := range override {
+		baseValue, ok := merged[key]
+		if key == "env" {
+			mergedEnv, err := mergeBaseEnvRaw(baseValue, overrideValue)
+			if err != nil {
+				return nil, err
+			}
+			merged[key] = mergedEnv
+			continue
+		}
+
+		baseMap, baseIsMap := baseValue.(map[string]any)
+		overrideMap, overrideIsMap := overrideValue.(map[string]any)
+		if ok && baseIsMap && overrideIsMap {
+			mergedNested, err := mergeDefinitionMaps(baseMap, overrideMap)
+			if err != nil {
+				return nil, err
+			}
+			merged[key] = mergedNested
+			continue
+		}
+		merged[key] = cloneAny(overrideValue)
+	}
+	return merged, nil
+}
+
+func mergeBaseEnvRaw(base, override any) (any, error) {
+	switch {
+	case base == nil:
+		return cloneAny(override), nil
+	case override == nil:
+		return cloneAny(base), nil
+	}
+
+	baseEnv, err := decodeViaYAML[types.EnvValue](base)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base config env: %w", err)
+	}
+	overrideEnv, err := decodeViaYAML[types.EnvValue](override)
+	if err != nil {
+		return nil, fmt.Errorf("invalid workspace base config env: %w", err)
+	}
+
+	combined := overrideEnv.Prepend(baseEnv)
+	return envValueToRaw(combined), nil
+}
+
+// buildDocumentContext applies per-document overrides for multi-DAG files.
+func buildDocumentContext(ctx BuildContext, index int) BuildContext {
+	ctx.index = index
+	if index == 0 {
+		return ctx
+	}
+
+	opts := ctx.opts
+	opts.Parameters = ""
+	opts.ParametersList = nil
+	opts.Flags &^= BuildFlagValidateRuntimeParams
+	return ctx.WithOpts(opts)
+}
+
+// prepareDocumentContext builds the inherited context and destination DAG.
+func prepareDocumentContext(ctx BuildContext, baseDef, spec *dag) (BuildContext, *core.DAG, error) {
+	customStepTypes, err := buildCustomStepActionRegistry(
+		stepTypesOf(baseDef),
+		stepTypesOf(spec),
+		actionsOf(baseDef),
+		actionsOf(spec),
+	)
+	if err != nil {
+		return ctx, nil, err
+	}
+	ctx = ctx.WithCustomStepTypes(customStepTypes)
+
+	if baseDef == nil {
+		return ctx, new(core.DAG), nil
+	}
+
+	baseDAG, baseDefaults, err := buildDocumentBase(ctx, baseDef)
+	if err != nil {
+		return ctx, nil, err
+	}
+	ctx.baseDAG = baseDAG
+	ctx.baseDefaults = baseDefaults
+	return ctx, baseDAG, nil
+}
+
+// buildDocumentBase builds the reusable base DAG and decoded defaults.
+func buildDocumentBase(ctx BuildContext, baseDef *dag) (*core.DAG, *defaults, error) {
+	baseDAG, err := buildBaseDAG(ctx, baseDef)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	baseDefaults, err := decodeDefaults(baseDef.Defaults)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return baseDAG, baseDefaults, nil
+}
+
+// documentYAML returns the YAML payload stored for a specific document.
+func documentYAML(index int, doc map[string]any, fullData []byte) ([]byte, error) {
+	if index == 0 {
+		return fullData, nil
+	}
+	return yaml.Marshal(doc)
 }
 
 // buildBaseDAG builds a new base DAG from the base definition.
 func buildBaseDAG(ctx BuildContext, baseDef *dag) (*core.DAG, error) {
-	buildCtx := ctx
-	// Don't parse parameters for the base core.DAG
-	buildCtx.opts.Parameters = ""
-	buildCtx.opts.ParametersList = nil
-	customStepTypes, err := buildCustomStepTypeRegistry(stepTypesOf(baseDef), nil)
+	buildOpts := ctx.opts
+	buildOpts.Parameters = ""
+	buildOpts.ParametersList = nil
+
+	customStepTypes, err := buildCustomStepActionRegistry(stepTypesOf(baseDef), nil, actionsOf(baseDef), nil)
 	if err != nil {
 		return nil, err
 	}
-	buildCtx = buildCtx.WithCustomStepTypes(customStepTypes)
 
-	// Build the base core.DAG
-	baseDAG, err := baseDef.build(buildCtx)
+	baseDAG, err := baseDef.build(ctx.WithOpts(buildOpts).WithCustomStepTypes(customStepTypes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to build base core.DAG: %w", err)
 	}
@@ -628,6 +904,7 @@ func buildBaseDAG(ctx BuildContext, baseDef *dag) (*core.DAG, error) {
 	return baseDAG, nil
 }
 
+// stepTypesOf returns the deprecated legacy step_types declarations for a manifest.
 func stepTypesOf(d *dag) map[string]customStepTypeSpec {
 	if d == nil {
 		return nil
@@ -635,6 +912,15 @@ func stepTypesOf(d *dag) map[string]customStepTypeSpec {
 	return d.StepTypes
 }
 
+// actionsOf returns the custom action declarations for a manifest.
+func actionsOf(d *dag) map[string]customStepTypeSpec {
+	if d == nil {
+		return nil
+	}
+	return d.Actions
+}
+
+// shouldInheritType reports whether a document should reuse the base DAG type.
 func shouldInheritType(doc map[string]any, baseDef, spec *dag) bool {
 	if baseDef == nil || spec == nil {
 		return false
@@ -647,21 +933,23 @@ func shouldInheritType(doc map[string]any, baseDef, spec *dag) bool {
 
 // validateUniqueNames ensures all DAGs in a multi-DAG file have unique names.
 func validateUniqueNames(dags []*core.DAG) error {
-	if len(dags) > 1 {
-		names := make(map[string]bool)
-		for i, dag := range dags {
-			// Skip validation for the first core.DAG as it's the main core.DAG
-			if i == 0 {
-				continue
-			}
-			if dag.Name == "" {
-				return fmt.Errorf("DAG at index %d must have a name in multi-DAG file", i)
-			}
-			if names[dag.Name] {
-				return fmt.Errorf("duplicate DAG name %q found", dag.Name)
-			}
-			names[dag.Name] = true
+	if len(dags) < 2 {
+		return nil
+	}
+
+	names := make(map[string]struct{}, len(dags))
+	if dags[0].Name != "" {
+		names[dags[0].Name] = struct{}{}
+	}
+	for i, dag := range dags[1:] {
+		index := i + 1
+		if dag.Name == "" {
+			return fmt.Errorf("DAG at index %d must have a name in multi-DAG file", index)
 		}
+		if _, exists := names[dag.Name]; exists {
+			return fmt.Errorf("duplicate DAG name %q found", dag.Name)
+		}
+		names[dag.Name] = struct{}{}
 	}
 	return nil
 }
@@ -678,49 +966,50 @@ func defaultName(file string) string {
 // resolveYamlFilePath resolves the YAML file path.
 // If the file name does not have an extension, it appends ".yaml".
 func resolveYamlFilePath(ctx BuildContext, file string) (string, error) {
+	file = strings.TrimSpace(file)
 	if file == "" {
 		return "", errors.New("file path is required")
 	}
 
-	file = strings.TrimSpace(file) // Remove leading and trailing whitespace
+	file = expandHomeDir(file)
 
 	if filepath.IsAbs(file) {
-		// If the file is an absolute path, return it as is.
 		return file, nil
 	}
 
-	// Replace '~' with the user's home directory if present.
-	if strings.HasPrefix(file, "~") {
-		if homeDir, err := os.UserHomeDir(); err == nil {
-			file = strings.Replace(file, "~", homeDir, 1)
-		}
-	}
-
-	// Check if the file exists in the current Directory.
-	absFile, err := filepath.Abs(file)
-	if err == nil && fileutil.FileExists(absFile) {
-		// If	the file exists, return the absolute path.
+	if absFile, err := filepath.Abs(file); err == nil && fileutil.FileExists(absFile) {
 		return absFile, nil
 	}
 
-	// If the file does not exist, check if it exists in the DAGsDir.
 	if ctx.opts.DAGsDir != "" {
-		// If the file is not an absolute path, prepend the DAGsDir to the file name.
 		file = filepath.Join(ctx.opts.DAGsDir, file)
 	}
 
-	// The file name can be specified without the extension.
 	if !strings.HasSuffix(file, ".yaml") && !strings.HasSuffix(file, ".yml") {
-		file = fmt.Sprintf("%s.yaml", file)
+		file += ".yaml"
 	}
 
 	return filepath.Abs(file)
+}
+
+// expandHomeDir expands a leading tilde when the caller used a home-relative path.
+func expandHomeDir(file string) string {
+	if file != "~" && !strings.HasPrefix(file, "~/") && !strings.HasPrefix(file, `~\`) {
+		return file
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return file
+	}
+	return strings.Replace(file, "~", homeDir, 1)
 }
 
 type mergeTransformer struct{}
 
 var _ mergo.Transformers = (*mergeTransformer)(nil)
 
+// Transformer customizes merge behavior for fields that need non-default semantics.
 func (*mergeTransformer) Transformer(
 	typ reflect.Type,
 ) func(dst, src reflect.Value) error {
@@ -728,6 +1017,31 @@ func (*mergeTransformer) Transformer(
 	if typ == reflect.TypeFor[core.MailOn]() {
 		// We need to explicitly override the value for a pointer with a zero
 		// value.
+		return func(dst, src reflect.Value) error {
+			if dst.CanSet() {
+				dst.Set(src)
+			}
+
+			return nil
+		}
+	}
+
+	if typ == reflect.TypeFor[core.DAGRetryPolicy]() {
+		// DAG retry policies are configured as a single root object. Replace the
+		// inherited policy wholesale so limit: 0 can intentionally disable retries.
+		return func(dst, src reflect.Value) error {
+			if dst.CanSet() {
+				dst.Set(src)
+			}
+
+			return nil
+		}
+	}
+
+	if typ == reflect.TypeFor[core.WebhookConfig]() {
+		// Webhook forwarding config is a single DAG-level object. Replace the
+		// inherited object wholesale so child DAGs can override or clear the
+		// header allowlist deterministically.
 		return func(dst, src reflect.Value) error {
 			if dst.CanSet() {
 				dst.Set(src)
@@ -842,7 +1156,7 @@ func (*mergeTransformer) Transformer(
 
 // readYAMLFile reads the contents of the file into a map.
 func readYAMLFile(file string) (cfg map[string]any, err error) {
-	data, err := os.ReadFile(file) //nolint:gosec
+	data, err := fileutil.ReadFile(file)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file %q: %v", file, err)
 	}
@@ -852,34 +1166,15 @@ func readYAMLFile(file string) (cfg map[string]any, err error) {
 
 // unmarshalData unmarshals the data into a map.
 func unmarshalData(data []byte) (map[string]any, error) {
-	var cm map[string]any
-	err := yaml.NewDecoder(bytes.NewReader(data)).Decode(&cm)
-	if errors.Is(err, io.EOF) {
-		err = nil
-	}
-
-	return cm, err
+	return newManifestDecoder().Unmarshal(data)
 }
 
 // decode decodes the configuration map into a manifest.
 func decode(cm map[string]any) (*dag, error) {
-	c := new(dag)
-	md, _ := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		ErrorUnused: true,
-		Result:      c,
-		TagName:     "yaml",
-		DecodeHook:  TypedUnionDecodeHook(),
-	})
-	err := md.Decode(cm)
-	err = withSnakeCaseKeyHint(err)
-	if err == nil {
-		c.handlerOnRaw = extractRawHandlerOn(cm)
-		c.defaultsRaw = extractRawDefaults(cm)
-	}
-
-	return c, err
+	return newManifestDecoder().Decode(cm)
 }
 
+// extractRawHandlerOn copies raw handler definitions for later processing.
 func extractRawHandlerOn(cm map[string]any) map[string]map[string]any {
 	rawHandlers, ok := cm["handler_on"].(map[string]any)
 	if !ok || len(rawHandlers) == 0 {
@@ -900,6 +1195,7 @@ func extractRawHandlerOn(cm map[string]any) map[string]map[string]any {
 	return cloned
 }
 
+// extractRawDefaults copies raw defaults from the decoded manifest map.
 func extractRawDefaults(cm map[string]any) map[string]any {
 	rawDefaults, ok := cm["defaults"].(map[string]any)
 	if !ok || len(rawDefaults) == 0 {
@@ -912,6 +1208,22 @@ func extractRawDefaults(cm map[string]any) map[string]any {
 // It converts raw map[string]any values to the appropriate typed values.
 func TypedUnionDecodeHook() mapstructure.DecodeHookFunc {
 	return func(_ reflect.Type, to reflect.Type, data any) (any, error) {
+		if to == reflect.TypeFor[toolsConfig]() {
+			return decodeViaYAML[toolsConfig](data)
+		}
+		if to == reflect.TypeFor[*toolsConfig]() {
+			if data == nil {
+				return nil, nil
+			}
+			result, err := decodeViaYAML[toolsConfig](data)
+			if err != nil {
+				return nil, err
+			}
+			return &result, nil
+		}
+		if to == reflect.TypeFor[toolPackage]() {
+			return decodeViaYAML[toolPackage](data)
+		}
 		// Handle types.ShellValue
 		if to == reflect.TypeFor[types.ShellValue]() {
 			return decodeViaYAML[types.ShellValue](data)
@@ -944,9 +1256,9 @@ func TypedUnionDecodeHook() mapstructure.DecodeHookFunc {
 		if to == reflect.TypeFor[types.ModelValue]() {
 			return decodeViaYAML[types.ModelValue](data)
 		}
-		// Handle types.TagsValue
-		if to == reflect.TypeFor[types.TagsValue]() {
-			return decodeViaYAML[types.TagsValue](data)
+		// Handle types.LabelsValue
+		if to == reflect.TypeFor[types.LabelsValue]() {
+			return decodeViaYAML[types.LabelsValue](data)
 		}
 		// Handle types.RepeatMode
 		if to == reflect.TypeFor[types.RepeatMode]() {

@@ -18,6 +18,13 @@ import (
 
 // Config holds the configuration for creating or using a container.
 type Config struct {
+	// DaemonHost optionally overrides the Docker-compatible daemon API host the
+	// Moby SDK client connects to (e.g. "unix:///run/podman/podman.sock"). Empty
+	// preserves the upstream client.FromEnv behavior (DOCKER_HOST or the default
+	// docker socket). Set from the DAGU_CONTAINER_RUNTIME service setting for all
+	// container forms: DAG-level container, step-level container jobs, and
+	// harness.run container steps (see ResolveDaemonHost in runtime.go).
+	DaemonHost string
 	// Image is the Docker image to use for creating a new container.
 	Image string
 	// Platform is the target platform for the container (e.g., linux/amd64).
@@ -57,8 +64,14 @@ type Config struct {
 	Shell []string
 }
 
-// LoadConfig parses executorConfig into Container struct with registry auth
+// LoadConfigFromMap parses executorConfig into Container struct with registry auth.
 func LoadConfigFromMap(data map[string]any, registryAuths map[string]*core.AuthConfig) (*Config, error) {
+	return LoadConfigFromMapWithWorkDir("", data, registryAuths)
+}
+
+// LoadConfigFromMapWithWorkDir parses executorConfig and resolves shortcut
+// volume sources relative to workDir.
+func LoadConfigFromMapWithWorkDir(workDir string, data map[string]any, registryAuths map[string]*core.AuthConfig) (*Config, error) {
 	ret := struct {
 		Container     container.Config         `mapstructure:"container"`
 		Host          container.HostConfig     `mapstructure:"host"`
@@ -146,9 +159,14 @@ func LoadConfigFromMap(data map[string]any, registryAuths map[string]*core.AuthC
 		ret.Container.WorkingDir = ret.WorkingDir
 	}
 
-	// volumes -> host.Binds (append to existing binds)
+	// volumes -> host.Binds or host.Mounts (append to existing host config)
 	if len(ret.Volumes) > 0 {
-		ret.Host.Binds = append(ret.Host.Binds, ret.Volumes...)
+		binds, mounts, err := parseVolumes(workDir, ret.Volumes, "executor.config.volumes")
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse volumes: %w", err)
+		}
+		ret.Host.Binds = append(ret.Host.Binds, binds...)
+		ret.Host.Mounts = append(ret.Host.Mounts, mounts...)
 	}
 
 	// Set up registry authentication if provided
@@ -218,7 +236,7 @@ func LoadConfig(workDir string, ct core.Container, registryAuths map[string]*cor
 
 	// Parse volumes
 	if len(ct.Volumes) > 0 {
-		binds, mounts, err := parseVolumes(workDir, ct.Volumes)
+		binds, mounts, err := parseVolumes(workDir, ct.Volumes, "container.volumes")
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse volumes: %w", err)
 		}
@@ -298,6 +316,32 @@ func loadDefaults(cfg *Config) *Config {
 		cfg.WaitFor = "running"
 	}
 	return cfg
+}
+
+// ApplyResourceLimits maps DAG resource limits to Docker host resources.
+func ApplyResourceLimits(host *container.HostConfig, limits *core.ResourceLimits) bool {
+	if host == nil || limits == nil {
+		return false
+	}
+	if limits.CPUMillis > 0 {
+		host.Resources.NanoCPUs = limits.CPUMillis * 1_000_000
+	}
+	if limits.MemoryBytes > 0 {
+		host.Resources.Memory = limits.MemoryBytes
+	}
+	return limits.CPUMillis > 0 || limits.MemoryBytes > 0
+}
+
+// ApplyResourceLimitsToConfig applies limits only to configurations that create
+// a new container. Existing-container exec mode cannot change host resources.
+func ApplyResourceLimitsToConfig(cfg *Config, limits *core.ResourceLimits) bool {
+	if cfg == nil || limits == nil || cfg.Image == "" {
+		return false
+	}
+	if cfg.Host == nil {
+		cfg.Host = &container.HostConfig{}
+	}
+	return ApplyResourceLimits(cfg.Host, limits)
 }
 
 func init() {

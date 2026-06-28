@@ -45,7 +45,7 @@ func validateStep(step core.Step) error {
 		command = step.Commands[0].Command
 	}
 	if strings.TrimSpace(command) == "" {
-		return fmt.Errorf("%w: command is required (upload, download, list, delete)", ErrConfig)
+		return core.NewValidationError("command", nil, fmt.Errorf("%w: command is required (upload, download, list, delete)", ErrConfig))
 	}
 	return nil
 }
@@ -72,7 +72,7 @@ func newExecutor(ctx context.Context, step core.Step) (executor.Executor, error)
 		cfg.ApplyDefaults(dagS3)
 	}
 
-	// Step-level config overrides DAG-level defaults
+	// Step-level with/config values override DAG-level defaults.
 	if step.ExecutorConfig.Config != nil {
 		if err := decodeConfig(step.ExecutorConfig.Config, cfg); err != nil {
 			return nil, fmt.Errorf("invalid s3 configuration: %w", err)

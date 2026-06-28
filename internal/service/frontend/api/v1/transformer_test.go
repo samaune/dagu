@@ -4,6 +4,9 @@
 package api
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -14,12 +17,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func writeArtifactFile(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	err := os.WriteFile(filepath.Join(dir, "artifact.txt"), []byte("artifact"), 0o600)
+	require.NoError(t, err)
+	return dir
+}
+
 func TestToDAGRunSummaryIncludesScheduleTime(t *testing.T) {
 	status := exec.DAGRunStatus{
 		Name:           "test-dag",
 		DAGRunID:       "run-1",
 		AutoRetryCount: 2,
 		AutoRetryLimit: 5,
+		ArchiveDir:     writeArtifactFile(t),
 		Status:         core.Queued,
 		ScheduleTime:   "2026-03-13T00:00:00Z",
 	}
@@ -30,6 +43,7 @@ func TestToDAGRunSummaryIncludesScheduleTime(t *testing.T) {
 	assert.Equal(t, status.AutoRetryCount, summary.AutoRetryCount)
 	require.NotNil(t, summary.AutoRetryLimit)
 	assert.Equal(t, status.AutoRetryLimit, *summary.AutoRetryLimit)
+	assert.True(t, summary.ArtifactsAvailable)
 }
 
 func TestToDAGRunDetailsIncludesScheduleTime(t *testing.T) {
@@ -38,6 +52,7 @@ func TestToDAGRunDetailsIncludesScheduleTime(t *testing.T) {
 		DAGRunID:       "run-1",
 		AutoRetryCount: 3,
 		AutoRetryLimit: 5,
+		ArchiveDir:     writeArtifactFile(t),
 		Status:         core.Queued,
 		QueuedAt:       "2026-03-13T00:01:00Z",
 		ScheduleTime:   "2026-03-13T00:00:00Z",
@@ -51,6 +66,7 @@ func TestToDAGRunDetailsIncludesScheduleTime(t *testing.T) {
 	assert.Equal(t, status.AutoRetryCount, details.AutoRetryCount)
 	require.NotNil(t, details.AutoRetryLimit)
 	assert.Equal(t, status.AutoRetryLimit, *details.AutoRetryLimit)
+	assert.True(t, details.ArtifactsAvailable)
 }
 
 func TestToDAGRunSummaryOmitsAutoRetryLimitWhenUnconfigured(t *testing.T) {
@@ -64,6 +80,7 @@ func TestToDAGRunSummaryOmitsAutoRetryLimitWhenUnconfigured(t *testing.T) {
 
 	summary := toDAGRunSummary(status)
 	assert.Nil(t, summary.AutoRetryLimit)
+	assert.False(t, summary.ArtifactsAvailable)
 }
 
 func TestToDAGRunDetailsOmitsAutoRetryLimitWhenUnconfigured(t *testing.T) {
@@ -77,6 +94,55 @@ func TestToDAGRunDetailsOmitsAutoRetryLimitWhenUnconfigured(t *testing.T) {
 
 	details := ToDAGRunDetails(status)
 	assert.Nil(t, details.AutoRetryLimit)
+	assert.False(t, details.ArtifactsAvailable)
+}
+
+func TestToDAGRunSummarySetsProfileNameWhenPresent(t *testing.T) {
+	status := exec.DAGRunStatus{
+		Name:        "test-dag",
+		DAGRunID:    "run-1",
+		Status:      core.Succeeded,
+		ProfileName: "prod",
+	}
+
+	summary := toDAGRunSummary(status)
+	require.NotNil(t, summary.ProfileName)
+	assert.Equal(t, "prod", string(*summary.ProfileName))
+}
+
+func TestToDAGRunSummaryOmitsProfileNameWhenEmpty(t *testing.T) {
+	status := exec.DAGRunStatus{
+		Name:     "test-dag",
+		DAGRunID: "run-1",
+		Status:   core.Succeeded,
+	}
+
+	summary := toDAGRunSummary(status)
+	assert.Nil(t, summary.ProfileName)
+}
+
+func TestToDAGRunDetailsSetsProfileNameWhenPresent(t *testing.T) {
+	status := exec.DAGRunStatus{
+		Name:        "test-dag",
+		DAGRunID:    "run-1",
+		Status:      core.Succeeded,
+		ProfileName: "prod",
+	}
+
+	details := ToDAGRunDetails(status)
+	require.NotNil(t, details.ProfileName)
+	assert.Equal(t, "prod", string(*details.ProfileName))
+}
+
+func TestToDAGRunDetailsOmitsProfileNameWhenEmpty(t *testing.T) {
+	status := exec.DAGRunStatus{
+		Name:     "test-dag",
+		DAGRunID: "run-1",
+		Status:   core.Succeeded,
+	}
+
+	details := ToDAGRunDetails(status)
+	assert.Nil(t, details.ProfileName)
 }
 
 func TestToDAGDetailsIncludesParamDefDescriptions(t *testing.T) {
@@ -98,6 +164,88 @@ func TestToDAGDetailsIncludesParamDefDescriptions(t *testing.T) {
 	assert.Equal(t, "Free-form operator notes", *(*details.ParamDefs)[0].Description)
 }
 
+func TestToDAGDetailsIncludesHistoryRetentionRuns(t *testing.T) {
+	details := toDAGDetails(&core.DAG{
+		Name:              "retention-runs",
+		HistRetentionRuns: 3,
+	})
+
+	require.NotNil(t, details)
+	require.NotNil(t, details.HistRetentionRuns)
+	assert.Equal(t, 3, *details.HistRetentionRuns)
+}
+
+func TestToDAGIncludesResources(t *testing.T) {
+	limits, err := core.NewResourceLimits("500m", "1Gi")
+	require.NoError(t, err)
+
+	dag := toDAG(&core.DAG{
+		Name:      "limited-dag",
+		Resources: &core.Resources{Limits: limits},
+	})
+
+	require.NotNil(t, dag.Resources)
+	require.NotNil(t, dag.Resources.Limits)
+	require.NotNil(t, dag.Resources.Limits.Cpu)
+	assert.Equal(t, "500m", *dag.Resources.Limits.Cpu)
+	require.NotNil(t, dag.Resources.Limits.Memory)
+	assert.Equal(t, "1Gi", *dag.Resources.Limits.Memory)
+}
+
+func TestToDAGDetailsIncludesResources(t *testing.T) {
+	limits, err := core.NewResourceLimits("750m", "512Mi")
+	require.NoError(t, err)
+
+	details := toDAGDetails(&core.DAG{
+		Name:      "limited-dag",
+		Resources: &core.Resources{Limits: limits},
+	})
+
+	require.NotNil(t, details)
+	require.NotNil(t, details.Resources)
+	require.NotNil(t, details.Resources.Limits)
+	require.NotNil(t, details.Resources.Limits.Cpu)
+	assert.Equal(t, "750m", *details.Resources.Limits.Cpu)
+	require.NotNil(t, details.Resources.Limits.Memory)
+	assert.Equal(t, "512Mi", *details.Resources.Limits.Memory)
+}
+
+func TestToDAGDetailsIncludesParamSchema(t *testing.T) {
+	details := toDAGDetails(&core.DAG{
+		Name:        "schema-params",
+		ParamSchema: json.RawMessage(`{"type":"object","properties":{"region":{"type":"string"}}}`),
+	})
+
+	require.NotNil(t, details)
+	require.NotNil(t, details.ParamSchema)
+
+	properties, ok := (*details.ParamSchema)["properties"].(map[string]any)
+	require.True(t, ok)
+
+	region, ok := properties["region"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "string", region["type"])
+}
+
+func TestToDAGDetailsOmitsInvalidParamSchema(t *testing.T) {
+	t.Run("missing schema", func(t *testing.T) {
+		details := toDAGDetails(&core.DAG{Name: "no-schema"})
+
+		require.NotNil(t, details)
+		assert.Nil(t, details.ParamSchema)
+	})
+
+	t.Run("malformed schema", func(t *testing.T) {
+		details := toDAGDetails(&core.DAG{
+			Name:        "bad-schema",
+			ParamSchema: json.RawMessage(`{"type":"object"`),
+		})
+
+		require.NotNil(t, details)
+		assert.Nil(t, details.ParamSchema)
+	})
+}
+
 func TestToDAGDetailsIncludesArtifactsDir(t *testing.T) {
 	details := toDAGDetails(&core.DAG{
 		Name: "artifacts-dir",
@@ -112,6 +260,45 @@ func TestToDAGDetailsIncludesArtifactsDir(t *testing.T) {
 	assert.True(t, details.Artifacts.Enabled)
 	require.NotNil(t, details.Artifacts.Dir)
 	assert.Equal(t, "/var/lib/dagu/artifacts", *details.Artifacts.Dir)
+}
+
+func TestToNodeIncludesNormalizedPushBackHistory(t *testing.T) {
+	node := &exec.Node{
+		Step: core.Step{
+			Name: "review",
+			Approval: &core.ApprovalConfig{
+				Input: []string{"FEEDBACK"},
+			},
+		},
+		Status:            core.NodeWaiting,
+		StartedAt:         "2026-04-26T06:00:00Z",
+		FinishedAt:        "2026-04-26T06:01:00Z",
+		Stdout:            "stdout.log",
+		Stderr:            "stderr.log",
+		ApprovalIteration: 1,
+		PushBackInputs:    map[string]string{"FEEDBACK": "revise the summary", "IGNORED": "x"},
+		PushBackHistory: []exec.PushBackEntry{{
+			Iteration: 1,
+			By:        "reviewer",
+			At:        "2026-04-26T06:02:00Z",
+			Inputs:    map[string]string{"FEEDBACK": "revise the summary", "IGNORED": "x"},
+		}},
+	}
+
+	result := toNode(node)
+
+	require.NotNil(t, result.PushBackHistory)
+	require.Len(t, *result.PushBackHistory, 1)
+	entry := (*result.PushBackHistory)[0]
+	assert.Equal(t, 1, entry.Iteration)
+	require.NotNil(t, entry.By)
+	assert.Equal(t, "reviewer", *entry.By)
+	require.NotNil(t, entry.At)
+	assert.Equal(t, "2026-04-26T06:02:00Z", entry.At.UTC().Format(time.RFC3339))
+	require.NotNil(t, entry.Inputs)
+	assert.Equal(t, "revise the summary", (*entry.Inputs)["FEEDBACK"])
+	_, ok := (*entry.Inputs)["IGNORED"]
+	assert.False(t, ok)
 }
 
 func TestToDAGIncludesTypedSchedules(t *testing.T) {

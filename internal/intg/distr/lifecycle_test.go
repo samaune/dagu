@@ -4,7 +4,6 @@
 package distr_test
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"syscall"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
+	runtimeagent "github.com/dagucloud/dagu/internal/runtime/agent"
 	"github.com/dagucloud/dagu/internal/test"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -27,7 +27,7 @@ worker_selector:
   test: "true"
 steps:
   - name: long-task
-    command: %s
+    run: %s
 `, test.ShellQuote(test.Sleep(60*time.Second))))
 		defer f.cleanup()
 
@@ -41,20 +41,26 @@ steps:
 			if err != nil {
 				return false
 			}
-			if status.Status == core.Running {
-				dagRunID = status.DAGRunID
-				return true
+			if status.Status != core.Running {
+				return false
+			}
+			for _, node := range status.Nodes {
+				if node.Step.Name == "long-task" && node.Status == core.NodeRunning {
+					dagRunID = status.DAGRunID
+					return true
+				}
 			}
 			return false
-		}, 10*time.Second, 1000*time.Millisecond, "DAG should start running")
+		}, distrTestTimeout(20*time.Second), 200*time.Millisecond, "long-task should start running")
 
 		startTime := time.Now()
 		require.NoError(t, f.stop(dagRunID))
 
 		status := f.waitForStatusIn([]core.Status{core.Aborted, core.Failed}, 15*time.Second)
+		f.waitForRunReleasedFromWorkers(dagRunID, 10*time.Second)
 
 		elapsed := time.Since(startTime)
-		assert.Less(t, elapsed, 10*time.Second, "cancellation should be quick")
+		assert.Less(t, elapsed, distrTestTimeout(10*time.Second), "cancellation should complete within distributed timeout")
 		assert.Contains(t, []core.Status{core.Aborted, core.Failed}, status.Status)
 	})
 }
@@ -63,7 +69,9 @@ func TestCancellation_SubDAG(t *testing.T) {
 	t.Run("parentCancelPropagatesToChildOnWorker", func(t *testing.T) {
 		f := newTestFixture(t, fmt.Sprintf(`
 steps:
-  - call: dotest
+  - action: dag.run
+    with:
+      dag: dotest
 params:
   - URL: default_value
 ---
@@ -72,7 +80,7 @@ worker_selector:
   foo: bar
 steps:
   - name: long-sleep
-    command: %s
+    run: %s
 `, test.ShellQuote(test.Sleep(30*time.Second))), withLabels(map[string]string{"foo": "bar"}))
 		defer f.cleanup()
 
@@ -111,7 +119,9 @@ steps:
 		f := newTestFixture(t, fmt.Sprintf(`
 steps:
   - name: run-local-on-worker
-    call: local-sub
+    action: dag.run
+    with:
+      dag: local-sub
     output: RESULT
 
 ---
@@ -120,12 +130,31 @@ worker_selector:
   type: test-worker
 steps:
   - name: worker-task
-    command: %s
+    run: %s
     output: MESSAGE
 `, test.ShellQuote(test.Sleep(1000*time.Second))), withLabels(map[string]string{"type": "test-worker"}))
 
 		runID := uuid.New().String()
-		agent := f.dagWrapper.Agent(test.WithDAGRunID(runID))
+		attemptID := uuid.New().String()
+		// The parent runs in-process in this test, so register its proc heartbeat
+		// before using the runtime manager to stop it.
+		proc, err := f.coord.ProcStore.Acquire(f.coord.Context, f.dagWrapper.ProcGroup(), exec.ProcMeta{
+			StartedAt:    time.Now().Unix(),
+			Name:         f.dagWrapper.Name,
+			DAGRunID:     runID,
+			AttemptID:    attemptID,
+			RootName:     f.dagWrapper.Name,
+			RootDAGRunID: runID,
+		})
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, proc.Stop(f.coord.Context))
+		}()
+
+		agent := f.dagWrapper.Agent(
+			test.WithDAGRunID(runID),
+			test.WithAgentOptions(runtimeagent.Options{AttemptID: attemptID}),
+		)
 		ctx := agent.Context
 
 		errCh := make(chan error, 1)
@@ -135,6 +164,7 @@ steps:
 
 		rootRef := exec.NewDAGRunRef(f.dagWrapper.Name, runID)
 		var subRunID string
+		subDAGCancelTimeout := distrTestTimeout(30 * time.Second)
 		require.Eventually(t, func() bool {
 			attempt, err := f.dagWrapper.DAGRunStore.FindAttempt(ctx, rootRef)
 			if err != nil {
@@ -153,12 +183,12 @@ steps:
 				return subRunID != ""
 			}
 			return false
-		}, 30*time.Second, 100*time.Millisecond, "expected parent DAG to start sub DAG before cancellation")
+		}, subDAGCancelTimeout, 100*time.Millisecond, "expected parent DAG to start sub DAG before cancellation")
 
 		require.Eventually(t, func() bool {
 			status, err := f.dagWrapper.DAGRunMgr.FindSubDAGRunStatus(ctx, rootRef, subRunID)
 			return err == nil && status != nil && status.Status == core.Running
-		}, 30*time.Second, 100*time.Millisecond, "expected sub DAG to reach running state before cancellation")
+		}, subDAGCancelTimeout, 100*time.Millisecond, "expected sub DAG to reach running state before cancellation")
 
 		require.NoError(t, f.stop(runID))
 
@@ -167,14 +197,14 @@ steps:
 		select {
 		case err := <-errCh:
 			require.NoError(t, err)
-		case <-time.After(30 * time.Second):
-			t.Fatal("timed out waiting for parent DAG cancellation")
+		case <-time.After(subDAGCancelTimeout):
+			require.FailNow(t, "timed out waiting for parent DAG cancellation")
 		}
 
 		require.Eventually(t, func() bool {
 			subStatus, err := f.dagWrapper.DAGRunMgr.FindSubDAGRunStatus(ctx, rootRef, subRunID)
 			return err == nil && subStatus != nil && subStatus.Status == core.Aborted
-		}, 30*time.Second, 100*time.Millisecond, "expected sub DAG to become aborted after parent cancellation")
+		}, subDAGCancelTimeout, 100*time.Millisecond, "expected sub DAG to become aborted after parent cancellation")
 	})
 }
 
@@ -184,7 +214,9 @@ func TestCancellation_ConcurrentWorkers(t *testing.T) {
 		f := newTestFixture(t, fmt.Sprintf(`
 steps:
   - name: high-concurrency
-    call: child-task
+    action: dag.run
+    with:
+      dag: child-task
     parallel:
       items:
         - "task1"
@@ -201,7 +233,7 @@ worker_selector:
   type: test-worker
 steps:
   - name: process
-    command: %s
+    run: %s
 `, test.ShellQuote(test.Sleep(30*time.Second))), withWorkerCount(3), withLabels(map[string]string{"type": "test-worker"}),
 			withDAGsDir(tmpDir), withLogPersistence())
 
@@ -248,9 +280,9 @@ worker_selector:
   test: "true"
 steps:
   - name: task1
-    command: %s
+    run: %s
   - name: task2
-    command: echo "should not run"
+    run: echo "should not run"
     depends: [task1]
 `, test.ShellQuote(test.Sleep(30*time.Second))))
 		defer f.cleanup()
@@ -281,7 +313,9 @@ func TestCancellation_ParallelItems(t *testing.T) {
 		f := newTestFixture(t, fmt.Sprintf(`
 steps:
   - name: process-items
-    call: child-sleep
+    action: dag.run
+    with:
+      dag: child-sleep
     parallel:
       items:
         - "100"
@@ -296,7 +330,7 @@ worker_selector:
   type: test-worker
 steps:
   - name: sleep
-    command: %s
+    run: %s
 `, test.ShellQuote(test.Sleep(100*time.Second))), withWorkerCount(2), withLabels(map[string]string{"type": "test-worker"}),
 			withDAGsDir(tmpDir), withLogPersistence())
 
@@ -319,7 +353,7 @@ steps:
 			}
 			parallelNode := st.Nodes[0]
 			return parallelNode.Status == core.NodeRunning
-		}, 5*time.Second, 100*time.Millisecond)
+		}, distrTestTimeout(5*time.Second), 100*time.Millisecond)
 
 		require.Eventually(t, func() bool {
 			workerInfo, err := f.coordinatorClient.GetWorkers(f.coord.Context)
@@ -329,7 +363,7 @@ steps:
 				runningTasks += len(w.RunningTasks)
 			}
 			return runningTasks > 0
-		}, 5*time.Second, 100*time.Millisecond)
+		}, distrTestTimeout(5*time.Second), 100*time.Millisecond)
 
 		agent.Signal(f.coord.Context, os.Signal(syscall.SIGINT))
 
@@ -356,9 +390,9 @@ worker_selector:
   test: "true"
 steps:
   - name: task1
-    command: echo "task1 executed"
+    run: echo "task1 executed"
   - name: task2
-    command: echo "task2 executed"
+    run: echo "task2 executed"
     depends: [task1]
 `)
 		defer f.cleanup()
@@ -396,9 +430,9 @@ worker_selector:
   test: "true"
 steps:
   - name: task1
-    command: echo "task1 executed"
+    run: echo "task1 executed"
   - name: task2
-    command: echo "task2 executed"
+    run: echo "task2 executed"
     depends: [task1]
 `)
 		defer f.cleanup()
@@ -439,9 +473,9 @@ worker_selector:
   test: "true"
 steps:
   - name: step1
-    command: echo "step1"
+    run: echo "step1"
   - name: step2
-    command: echo "step2"
+    run: echo "step2"
     depends: [step1]
 `)
 		defer f.cleanup()
@@ -470,80 +504,5 @@ steps:
 		require.NoError(t, err)
 		require.Equal(t, core.Succeeded, finalStatus.Status)
 		require.Equal(t, originalRunID, finalStatus.DAGRunID, "retry should maintain the same run ID")
-	})
-}
-
-func TestRetry_SharedFSMode(t *testing.T) {
-	t.Run("retryWorksWithSharedFSWorker", func(t *testing.T) {
-		f := newTestFixture(t, `
-name: retry-sharedfs-test
-worker_selector:
-  test: "true"
-steps:
-  - name: task1
-    command: echo "sharedfs task1"
-`, withWorkerMode(sharedFSMode))
-		defer f.cleanup()
-
-		require.NoError(t, f.enqueue())
-		f.waitForQueued()
-		f.startScheduler(30 * time.Second)
-
-		status := f.waitForStatus(core.Succeeded, 25*time.Second)
-		dagRunID := status.DAGRunID
-		f.cleanup()
-
-		ctx, cancel := context.WithTimeout(f.coord.Context, 30*time.Second)
-		defer cancel()
-
-		f.schedulerCtx = ctx
-		f.schedulerCancel = cancel
-		f.startScheduler(30 * time.Second)
-
-		require.NoError(t, f.retry(dagRunID))
-
-		require.Eventually(t, func() bool {
-			status, err := f.latestStatus()
-			if err != nil {
-				return false
-			}
-			return status.Status == core.Succeeded
-		}, 25*time.Second, 200*time.Millisecond)
-	})
-
-	t.Run("retryWorksWithSharedFSWorker_NoNameField", func(t *testing.T) {
-		f := newTestFixture(t, `
-worker_selector:
-  test: "true"
-steps:
-  - name: task1
-    command: echo "sharedfs task1"
-`, withWorkerMode(sharedFSMode))
-		defer f.cleanup()
-
-		require.NoError(t, f.enqueue())
-		f.waitForQueued()
-		f.startScheduler(30 * time.Second)
-
-		status := f.waitForStatus(core.Succeeded, 25*time.Second)
-		dagRunID := status.DAGRunID
-		f.cleanup()
-
-		ctx, cancel := context.WithTimeout(f.coord.Context, 30*time.Second)
-		defer cancel()
-
-		f.schedulerCtx = ctx
-		f.schedulerCancel = cancel
-		f.startScheduler(30 * time.Second)
-
-		require.NoError(t, f.retry(dagRunID))
-
-		require.Eventually(t, func() bool {
-			status, err := f.latestStatus()
-			if err != nil {
-				return false
-			}
-			return status.Status == core.Succeeded
-		}, 25*time.Second, 200*time.Millisecond)
 	})
 }

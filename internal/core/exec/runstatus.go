@@ -68,7 +68,7 @@ func InitialStatus(dag *core.DAG) DAGRunStatus {
 		StartedAt:            stringutil.FormatTime(time.Time{}),
 		FinishedAt:           stringutil.FormatTime(time.Time{}),
 		Preconditions:        dag.Preconditions,
-		Tags:                 dag.Tags.Strings(),
+		Labels:               dag.Labels.Strings(),
 	}
 }
 
@@ -84,6 +84,7 @@ type DAGRunStatus struct {
 	TriggerType    core.TriggerType `json:"triggerType,omitempty"`
 	WorkerID       string           `json:"workerId,omitempty"`
 	PID            PID              `json:"pid,omitempty"`
+	PIDStartedAt   int64            `json:"pidStartedAt,omitempty"`
 	Nodes          []*Node          `json:"nodes,omitempty"`
 	OnInit         *Node            `json:"onInit,omitempty"`
 	OnExit         *Node            `json:"onExit,omitempty"`
@@ -102,18 +103,28 @@ type DAGRunStatus struct {
 	AutoRetryInterval time.Duration `json:"autoRetryInterval,omitempty"`
 	AutoRetryBackoff  float64       `json:"autoRetryBackoff,omitempty"`
 	// AutoRetryMaxInterval is stored as a duration snapshot for retry scanner decisions.
-	AutoRetryMaxInterval time.Duration      `json:"autoRetryMaxInterval,omitempty"`
-	ProcGroup            string             `json:"procGroup,omitempty"`
-	SuspendFlagName      string             `json:"suspendFlagName,omitempty"`
-	Log                  string             `json:"log,omitempty"`
-	ArchiveDir           string             `json:"archiveDir,omitempty"`
-	Error                string             `json:"error,omitempty"`
-	Params               string             `json:"params,omitempty"`
-	ParamsList           []string           `json:"paramsList,omitempty"`
-	PendingStepRetries   []PendingStepRetry `json:"pendingStepRetries"`
-	Preconditions        []*core.Condition  `json:"preconditions,omitempty"`
-	Tags                 []string           `json:"tags,omitempty"`
-	LeaseAt              int64              `json:"leaseAt,omitempty"` // Unix millis; stamped by coordinator on observed run liveness
+	AutoRetryMaxInterval time.Duration         `json:"autoRetryMaxInterval,omitempty"`
+	ProcGroup            string                `json:"procGroup,omitempty"`
+	SuspendFlagName      string                `json:"suspendFlagName,omitempty"`
+	Log                  string                `json:"log,omitempty"`
+	WorkingDir           string                `json:"workingDir,omitempty"`
+	ArchiveDir           string                `json:"archiveDir,omitempty"`
+	Error                string                `json:"error,omitempty"`
+	Params               string                `json:"params,omitempty"`
+	ParamsList           []string              `json:"paramsList,omitempty"`
+	ProfileName          string                `json:"profileName,omitempty"`
+	ProfileResolvedAt    string                `json:"profileResolvedAt,omitempty"`
+	ProfileEntries       []RuntimeProfileEntry `json:"profileEntries,omitempty"`
+	PendingStepRetries   []PendingStepRetry    `json:"pendingStepRetries"`
+	Preconditions        []*core.Condition     `json:"preconditions,omitempty"`
+	Labels               []string              `json:"labels,omitempty"`
+	LeaseAt              int64                 `json:"leaseAt,omitempty"` // Unix millis; stamped by coordinator on observed run liveness
+}
+
+// Tags returns labels under their deprecated name.
+// Deprecated: use Labels directly.
+func (s DAGRunStatus) Tags() []string {
+	return s.Labels
 }
 
 // IsLeaseActive reports whether the run's lease is fresh (i.e. a worker is
@@ -219,19 +230,29 @@ func StatusFromJSON(s string) (*DAGRunStatus, error) {
 	return &status, nil
 }
 
-// UnmarshalJSON keeps legacy onCancel status files readable while normalizing
-// the canonical handler identity to onAbort in memory.
+// UnmarshalJSON keeps legacy onCancel and tags status files readable while
+// normalizing canonical handler/metadata names in memory.
 func (st *DAGRunStatus) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	_, hasLabels := raw["labels"]
+
 	type alias DAGRunStatus
 	aux := struct {
 		alias
-		OnCancel *Node `json:"onCancel,omitempty"`
+		OnCancel       *Node    `json:"onCancel,omitempty"`
+		DeprecatedTags []string `json:"tags,omitempty"`
 	}{}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
 
 	*st = DAGRunStatus(aux.alias)
+	if !hasLabels && len(aux.DeprecatedTags) > 0 {
+		st.Labels = aux.DeprecatedTags
+	}
 	if st.OnAbort == nil {
 		st.OnAbort = aux.OnCancel
 	}

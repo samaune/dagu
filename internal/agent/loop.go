@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,9 +19,6 @@ import (
 const (
 	// idlePollingInterval is the interval for polling when no messages are queued.
 	idlePollingInterval = 100 * time.Millisecond
-
-	// llmRequestTimeout is the maximum time allowed for an LLM request.
-	llmRequestTimeout = 5 * time.Minute
 
 	// maxToolCallDepth limits nested tool call chains to prevent infinite recursion.
 	// This can happen if an LLM continuously makes tool calls without producing a final response.
@@ -53,6 +51,9 @@ type LoopConfig struct {
 	Logger *slog.Logger
 	// SystemPrompt is the system message to prepend.
 	SystemPrompt string
+	// DynamicSystemContext returns volatile context appended to the system
+	// message for each LLM request.
+	DynamicSystemContext DynamicSystemContextFunc
 	// WorkingDir is the working directory for tools.
 	WorkingDir string
 	// SessionID is the ID of the session.
@@ -85,6 +86,12 @@ type LoopConfig struct {
 	// processed (processLLMRequest returned nil). For single-shot callers
 	// like the agent-step executor this is the signal to cancel the loop.
 	OnTurnComplete func()
+	// ReturnTurnErrors makes Go return turn-processing errors instead of
+	// recording them and waiting for another queued message. Interactive
+	// sessions keep this false so a later user message can recover.
+	ReturnTurnErrors bool
+	// LogicalRetryConfig overrides the default logical retry budget for LLM requests.
+	LogicalRetryConfig llm.LogicalRetryConfig
 }
 
 // Loop manages a session turn with an LLM including tool execution.
@@ -99,6 +106,7 @@ type Loop struct {
 	mu                 sync.Mutex
 	logger             *slog.Logger
 	systemPrompt       string
+	dynamicSystemCtx   DynamicSystemContextFunc
 	workingDir         string
 	sessionID          string
 	onWorking          func(working bool)
@@ -115,6 +123,8 @@ type Loop struct {
 	registry           SubSessionRegistry
 	webSearch          *llm.WebSearchRequest
 	onTurnComplete     func()
+	returnTurnErrors   bool
+	logicalRetryConfig llm.LogicalRetryConfig
 	activeTurn         bool
 	interruptRequested bool
 }
@@ -127,29 +137,40 @@ func NewLoop(config LoopConfig) *Loop {
 	}
 
 	return &Loop{
-		provider:         config.Provider,
-		model:            config.Model,
-		history:          config.History,
-		tools:            config.Tools,
-		recordMessage:    config.RecordMessage,
-		logger:           logger,
-		systemPrompt:     config.SystemPrompt,
-		workingDir:       config.WorkingDir,
-		sessionID:        config.SessionID,
-		onWorking:        config.OnWorking,
-		onHeartbeat:      config.OnHeartbeat,
-		emitUIAction:     config.EmitUIAction,
-		emitUserPrompt:   config.EmitUserPrompt,
-		waitUserResponse: config.WaitUserResponse,
-		safeMode:         config.SafeMode,
-		thinkingEffort:   config.ThinkingEffort,
-		hooks:            config.Hooks,
-		user:             config.User,
-		sessionStore:     config.SessionStore,
-		registry:         config.Registry,
-		webSearch:        config.WebSearch,
-		onTurnComplete:   config.OnTurnComplete,
+		provider:           config.Provider,
+		model:              config.Model,
+		history:            config.History,
+		tools:              config.Tools,
+		recordMessage:      config.RecordMessage,
+		logger:             logger,
+		systemPrompt:       config.SystemPrompt,
+		dynamicSystemCtx:   config.DynamicSystemContext,
+		workingDir:         config.WorkingDir,
+		sessionID:          config.SessionID,
+		onWorking:          config.OnWorking,
+		onHeartbeat:        config.OnHeartbeat,
+		emitUIAction:       config.EmitUIAction,
+		emitUserPrompt:     config.EmitUserPrompt,
+		waitUserResponse:   config.WaitUserResponse,
+		safeMode:           config.SafeMode,
+		thinkingEffort:     config.ThinkingEffort,
+		hooks:              config.Hooks,
+		user:               config.User,
+		sessionStore:       config.SessionStore,
+		registry:           config.Registry,
+		webSearch:          config.WebSearch,
+		onTurnComplete:     config.OnTurnComplete,
+		returnTurnErrors:   config.ReturnTurnErrors,
+		logicalRetryConfig: config.LogicalRetryConfig,
 	}
+}
+
+// SetDynamicSystemContext updates the volatile context provider used by future
+// LLM requests.
+func (l *Loop) SetDynamicSystemContext(fn DynamicSystemContextFunc) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.dynamicSystemCtx = fn
 }
 
 // QueueUserMessage adds a user message to the queue to be processed.
@@ -244,6 +265,9 @@ func (l *Loop) Go(ctx context.Context) error {
 				}
 				l.logger.Error("failed to process LLM request", "error", err)
 				l.finishActiveTurn()
+				if l.returnTurnErrors {
+					return err
+				}
 				continue
 			}
 			l.finishActiveTurn()
@@ -313,7 +337,7 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 // accumulates usage and records the assistant message.
 func (l *Loop) sendRequest(ctx context.Context) (*llm.ChatResponse, error) {
 	history := l.copyHistory()
-	messages := l.buildMessages(history)
+	messages := l.buildMessages(ctx, history)
 	tools := l.buildToolDefinitions()
 	l.mu.Lock()
 	provider := l.provider
@@ -342,12 +366,10 @@ func (l *Loop) sendRequest(ctx context.Context) (*llm.ChatResponse, error) {
 
 	l.setWorking(true)
 
-	llmCtx, cancel := context.WithTimeout(ctx, llmRequestTimeout)
-	defer cancel()
-	stopHeartbeat := startHeartbeatPump(llmCtx, loopHeartbeatInterval, l.onHeartbeat)
+	stopHeartbeat := startHeartbeatPump(ctx, loopHeartbeatInterval, l.onHeartbeat)
 	defer stopHeartbeat()
 
-	resp, err := llm.ChatWithRetry(llmCtx, provider, req, llm.DefaultLogicalRetryConfig())
+	resp, err := llm.ChatWithRetry(ctx, provider, req, l.logicalRetryConfig)
 	if err != nil {
 		l.recordErrorMessage(ctx, fmt.Sprintf("LLM request failed: %v", err))
 		l.setWorking(false)
@@ -497,7 +519,7 @@ func (l *Loop) executeTool(ctx context.Context, tc llm.ToolCall) ToolOut {
 		delegate = &DelegateContext{
 			Provider:     provider,
 			Model:        model,
-			SystemPrompt: l.systemPrompt,
+			SystemPrompt: l.currentSystemPrompt(ctx),
 			Tools:        l.tools,
 			Hooks:        l.hooks,
 			Logger:       l.logger,
@@ -516,6 +538,9 @@ func (l *Loop) executeTool(ctx context.Context, tc llm.ToolCall) ToolOut {
 		WaitUserResponse: l.waitUserResponse,
 		SafeMode:         safeMode,
 		Role:             user.Role,
+		SessionID:        l.sessionID,
+		User:             user,
+		SessionStore:     l.sessionStore,
 		Delegate:         delegate,
 	}, input)
 
@@ -653,17 +678,38 @@ func (l *Loop) recordErrorMessage(ctx context.Context, errMsg string) {
 
 // buildMessages prepares the message list for an LLM request by optionally
 // prepending the system prompt to the session history.
-func (l *Loop) buildMessages(history []llm.Message) []llm.Message {
-	if l.systemPrompt == "" {
+func (l *Loop) buildMessages(ctx context.Context, history []llm.Message) []llm.Message {
+	systemPrompt := l.currentSystemPrompt(ctx)
+	if systemPrompt == "" {
 		return history
 	}
 
 	messages := make([]llm.Message, 0, len(history)+1)
 	messages = append(messages, llm.Message{
 		Role:    llm.RoleSystem,
-		Content: l.systemPrompt,
+		Content: systemPrompt,
 	})
 	return append(messages, history...)
+}
+
+func (l *Loop) currentSystemPrompt(ctx context.Context) string {
+	l.mu.Lock()
+	base := l.systemPrompt
+	dynamicProvider := l.dynamicSystemCtx
+	l.mu.Unlock()
+
+	var dynamic string
+	if dynamicProvider != nil {
+		dynamic = strings.TrimSpace(dynamicProvider(ctx))
+	}
+	switch {
+	case strings.TrimSpace(base) == "":
+		return dynamic
+	case dynamic == "":
+		return base
+	default:
+		return base + "\n\n" + dynamic
+	}
 }
 
 // buildToolDefinitions converts agent tools to LLM tool definitions.
@@ -687,9 +733,10 @@ func (l *Loop) accumulateUsage(usage llm.Usage) {
 // recordAssistantMessage adds the assistant response to history and records it.
 func (l *Loop) recordAssistantMessage(ctx context.Context, resp *llm.ChatResponse) {
 	assistantMessage := llm.Message{
-		Role:      llm.RoleAssistant,
-		Content:   resp.Content,
-		ToolCalls: resp.ToolCalls,
+		Role:             llm.RoleAssistant,
+		Content:          resp.Content,
+		ReasoningContent: resp.ReasoningContent,
+		ToolCalls:        resp.ToolCalls,
 	}
 	seqID := l.appendToHistory(assistantMessage)
 

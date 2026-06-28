@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Yota Hamada
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -6,31 +9,35 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
- * Parses a tag string into its key and value components.
- * Supports both key-only tags ("production") and key=value tags ("env=prod").
- * For tags with multiple '=' characters, only the first '=' is used as delimiter.
+ * Parses a label string into its key and value components.
+ * Supports both key-only labels ("production") and key=value labels ("env=prod").
+ * For labels with multiple '=' characters, only the first '=' is used as delimiter.
  */
-export function parseTagParts(tag: string): { key: string; value: string | null } {
-  const eqIndex = tag.indexOf('=');
+export function parseLabelParts(label: string): {
+  key: string;
+  value: string | null;
+} {
+  const eqIndex = label.indexOf('=');
   if (eqIndex === -1) {
-    return { key: tag, value: null };
+    return { key: label, value: null };
   }
   return {
-    key: tag.slice(0, eqIndex),
-    value: tag.slice(eqIndex + 1),
+    key: label.slice(0, eqIndex),
+    value: label.slice(eqIndex + 1),
   };
 }
 
+export const parseTagParts = parseLabelParts;
+
 /**
- * Converts a step name to a valid Mermaid node ID by encoding
- * all non-ASCII-alphanumeric characters (including emojis, CJK characters,
- * and other Unicode) that could break Mermaid syntax.
- * Each character is encoded as its hex code point delimited by underscores
- * (e.g., 'ス' → 'u30b9_') to produce deterministic, collision-free IDs.
+ * Converts a step name to a deterministic Mermaid node ID by encoding every
+ * code point and adding a safe prefix. This avoids reserved Mermaid words,
+ * syntax-sensitive leading characters, and collisions between raw and encoded
+ * step names.
  */
 export function toMermaidNodeId(stepName: string): string {
-  return stepName.replace(
-    /[^a-zA-Z0-9_]/gu,
-    (ch) => `u${ch.codePointAt(0)!.toString(16)}_`,
-  );
+  const encoded = Array.from(stepName)
+    .map((ch) => ch.codePointAt(0)!.toString(16))
+    .join('_');
+  return `node_${encoded || 'empty'}`;
 }

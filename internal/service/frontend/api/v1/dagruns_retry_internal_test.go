@@ -16,23 +16,22 @@ import (
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
 	"github.com/dagucloud/dagu/internal/core/spec"
-	"github.com/dagucloud/dagu/internal/persis/filedagrun"
+	"github.com/dagucloud/dagu/internal/persis/file/dagrun"
 	"github.com/dagucloud/dagu/internal/runtime/transform"
 	"github.com/dagucloud/dagu/internal/service/coordinator"
-	coordinatorv1 "github.com/dagucloud/dagu/proto/coordinator/v1"
 	"github.com/stretchr/testify/require"
 )
 
 type retryCoordinatorRecorder struct {
 	stubCoordinatorClient
-	dispatched  []*coordinatorv1.Task
+	dispatched  []*exec.DispatchTask
 	dispatchErr error
 }
 
 var _ coordinator.Client = (*retryCoordinatorRecorder)(nil)
 
-func (c *retryCoordinatorRecorder) Dispatch(_ context.Context, task *coordinatorv1.Task) error {
-	c.dispatched = append(c.dispatched, task)
+func (c *retryCoordinatorRecorder) Dispatch(_ context.Context, req exec.DispatchRequest) error {
+	c.dispatched = append(c.dispatched, req.Task)
 	return c.dispatchErr
 }
 
@@ -47,13 +46,13 @@ worker_selector:
   region: apac
 steps:
   - name: main
-    command: echo distributed retry
+    run: echo distributed retry
 `), 0o600))
 
 	dag, err := spec.Load(ctx, dagFile)
 	require.NoError(t, err)
 
-	dagRunStore := filedagrun.New(filepath.Join(tmpDir, "dag-runs"))
+	dagRunStore := dagrun.New(filepath.Join(tmpDir, "dag-runs"))
 	attempt, err := dagRunStore.CreateAttempt(
 		ctx,
 		dag,
@@ -108,9 +107,9 @@ steps:
 
 	require.Len(t, coordinatorCli.dispatched, 1)
 	task := coordinatorCli.dispatched[0]
-	require.Equal(t, coordinatorv1.Operation_OPERATION_RETRY, task.Operation)
+	require.Equal(t, exec.DispatchOperationRetry, task.Operation)
 	require.Equal(t, dag.Name, task.Target)
-	require.Equal(t, "distributed-run", task.DagRunId)
+	require.Equal(t, "distributed-run", task.DAGRunID)
 	require.Equal(t, dag.WorkerSelector, task.WorkerSelector)
 	require.NotNil(t, task.PreviousStatus)
 }
@@ -155,13 +154,13 @@ worker_selector:
   region: apac
 steps:
   - name: main
-    command: echo distributed retry latest
+    run: echo distributed retry latest
 `), 0o600))
 
 	dag, err := spec.Load(ctx, dagFile)
 	require.NoError(t, err)
 
-	dagRunStore := filedagrun.New(filepath.Join(tmpDir, "dag-runs"))
+	dagRunStore := dagrun.New(filepath.Join(tmpDir, "dag-runs"))
 	attempt, err := dagRunStore.CreateAttempt(
 		ctx,
 		dag,
@@ -207,5 +206,5 @@ steps:
 	require.True(t, ok)
 
 	require.Len(t, coordinatorCli.dispatched, 1)
-	require.Equal(t, "latest-run", coordinatorCli.dispatched[0].DagRunId)
+	require.Equal(t, "latest-run", coordinatorCli.dispatched[0].DAGRunID)
 }

@@ -30,39 +30,42 @@ defaults:
     interval_sec: 5
 steps:
   - name: setup
-    command: echo "preparing data"
+    run: echo "preparing data"
   - name: task-a
-    command: echo "processing batch A"
+    run: echo "processing batch A"
     depends: [setup]
   - name: task-b
-    command: echo "processing batch B"
+    run: echo "processing batch B"
     depends: [setup]
   - name: task-c
-    command: echo "processing batch C"
+    run: echo "processing batch C"
     depends: [setup]
   - name: aggregate
-    command: echo "all tasks finished"
+    run: echo "all tasks finished"
     depends: [task-a, task-b, task-c]
 `,
 	},
 	{
 		ID:          2,
 		Name:        "output-passing",
-		Description: "Capture step output and pass between steps",
+		Description: "Use publish-only object-form output between steps",
 		Content: `type: graph
 steps:
-  - name: get-version
-    command: echo "2.5.0"
-    output: VERSION
-  - name: get-metadata
-    command: echo '{"build":"abc123","env":"staging"}'
+  - id: publish_version
     output:
-      name: BUILD_ID
-      key: build
-    depends: [get-version]
-  - name: deploy
-    command: echo "deploying v${VERSION} build ${BUILD_ID}"
-    depends: [get-version, get-metadata]
+      version: "2.5.0"
+  - id: publish_metadata
+    output:
+      build: abc123
+      env: staging
+  - id: publish_release
+    output:
+      version_label: "v${publish_version.output.version}"
+      target_env: "${publish_metadata.output.env}"
+    depends: [publish_version, publish_metadata]
+  - id: deploy
+    run: echo "deploying ${publish_release.output.version_label} build ${publish_metadata.output.build} to ${publish_release.output.target_env}"
+    depends: [publish_release]
 `,
 	},
 	{
@@ -77,19 +80,30 @@ defaults:
     limit: 2
     interval_sec: 5
 params:
-  - ENV: "production"
-  - BATCH_SIZE: "100"
+  - name: ENV
+    type: string
+    enum: [DEV, STG, PROD]
+    description: Target environment for the scheduled batch run
+    required: true
+    default: STG
+  - name: BATCH_SIZE
+    type: integer
+    minimum: 1
+    maximum: 1000
+    description: Number of records processed per batch
+    required: true
+    default: 100
 env:
   - LOG_LEVEL: "info"
   - TIMESTAMP: "` + "`date +%Y%m%d`" + `"
 steps:
   - name: extract
-    command: echo "extracting ${BATCH_SIZE} records in ${ENV}"
+    run: echo "extracting ${BATCH_SIZE} records in ${ENV}"
   - name: transform
-    command: echo "transforming with LOG_LEVEL=${LOG_LEVEL}"
+    run: echo "transforming with LOG_LEVEL=${LOG_LEVEL}"
     depends: [extract]
   - name: load
-    command: echo "loading batch from ${TIMESTAMP}"
+    run: echo "loading batch from ${TIMESTAMP}"
     depends: [transform]
 `,
 	},
@@ -105,12 +119,12 @@ defaults:
   continue_on: failed
 steps:
   - name: fetch-data
-    command: "curl -sf https://httpbin.org/status/200 || exit 1"
+    run: "curl -sf https://httpbin.org/status/200 || exit 1"
   - name: process
-    command: echo "processing data"
+    run: echo "processing data"
     depends: [fetch-data]
   - name: cleanup
-    command: echo "done"
+    run: echo "done"
     retry_policy:
       limit: 1
       interval_sec: 1
@@ -127,18 +141,23 @@ defaults:
     limit: 2
     interval_sec: 5
 params:
-  - ENV: "staging"
+  - name: ENV
+    type: string
+    enum: [DEV, STG, PROD]
+    description: Deployment environment; only PROD satisfies the gate
+    required: true
+    default: STG
 steps:
   - name: check-env
-    command: echo "verifying environment"
+    run: echo "verifying environment"
   - name: deploy
-    command: echo "deploying application"
+    run: echo "deploying application"
     preconditions:
-      - condition: "echo ${ENV}"
-        expected: "production"
+      - condition: "${ENV}"
+        expected: "PROD"
     depends: [check-env]
   - name: notify
-    command: echo "deployment complete"
+    run: echo "deployment complete"
     depends: [deploy]
 `,
 	},
@@ -153,38 +172,51 @@ defaults:
     interval_sec: 5
 handler_on:
   init:
-    command: echo "workflow starting"
+    run: echo "workflow starting"
   success:
-    command: echo "all steps succeeded"
+    run: echo "all steps succeeded"
   failure:
-    command: echo "a step failed"
+    run: echo "a step failed"
   exit:
-    command: echo "cleanup complete"
+    run: echo "cleanup complete"
 steps:
   - name: step-1
-    command: echo "running step 1"
+    run: echo "running step 1"
   - name: step-2
-    command: echo "running step 2"
+    run: echo "running step 2"
     depends: [step-1]
 `,
 	},
 	{
 		ID:          7,
 		Name:        "http-requests",
-		Description: "Make HTTP requests and use responses",
+		Description: "Make HTTP requests and parse JSON response fields",
 		Content: `type: graph
 defaults:
   retry_policy:
     limit: 2
     interval_sec: 5
 steps:
-  - name: get-todo
-    type: http
-    command: "GET https://jsonplaceholder.typicode.com/todos/1"
-    output: TODO
-  - name: show-result
-    command: echo "Received - ${TODO}"
-    depends: [get-todo]
+  - id: get_todo
+    action: http.request
+    with:
+      method: GET
+      url: https://jsonplaceholder.typicode.com/todos/1
+    output:
+      # decode + select act as a lightweight contract check.
+      # malformed JSON or a missing selected field fails the step,
+      # so the normal retry_policy can retry it.
+      title:
+        from: stdout
+        decode: json
+        select: .title
+      completed:
+        from: stdout
+        decode: json
+        select: .completed
+  - id: show_result
+    run: 'echo "Todo: ${get_todo.output.title} (completed=${get_todo.output.completed})"'
+    depends: [get_todo]
 `,
 	},
 	{
@@ -202,15 +234,11 @@ container:
     - /tmp/dagu-example:/work
 steps:
   - name: write-data
-    command: python -c "
-      with open('/work/data.txt', 'w') as f:
-        f.write('Hello from Dagu!')
-      "
+    run: >-
+      python -c "with open('/work/data.txt', 'w') as f: f.write('Hello from Dagu!')"
   - name: process
-    command: python -c "
-      with open('/work/data.txt') as f:
-        print(f.read().upper())
-      "
+    run: >-
+      python -c "with open('/work/data.txt') as f: print(f.read().upper())"
     depends: [write-data]
 `,
 	},
@@ -225,27 +253,37 @@ defaults:
     interval_sec: 5
 steps:
   - name: prepare
-    command: echo "starting main workflow"
+    run: echo "starting main workflow"
   - name: run-etl
-    call: etl-job
-    params:
-      SOURCE: "/data/input.csv"
-      TARGET: "/data/output.csv"
+    action: dag.run
+    with:
+      dag: etl-job
+      params:
+        SOURCE: /data/input.csv
+        TARGET: /data/output.csv
     depends: [prepare]
   - name: done
-    command: echo "pipeline complete"
+    run: echo "pipeline complete"
     depends: [run-etl]
 ---
 name: etl-job
 params:
-  - SOURCE: ""
-  - TARGET: ""
+  - name: SOURCE
+    type: string
+    description: Input dataset or file path received from the parent DAG
+    required: true
+    default: /data/default-input.csv
+  - name: TARGET
+    type: string
+    description: Output dataset or file path produced by the sub-DAG
+    required: true
+    default: /data/default-output.csv
 type: graph
 steps:
   - name: extract
-    command: echo "extracting from ${SOURCE}"
+    run: echo "extracting from ${SOURCE}"
   - name: load
-    command: echo "loading into ${TARGET}"
+    run: echo "loading into ${TARGET}"
     depends: [extract]
 `,
 	},
@@ -259,71 +297,292 @@ defaults:
     limit: 2
     interval_sec: 5
 steps:
-  - name: check-status
-    command: "echo success"
-    output: STATUS
-  - name: route
-    type: router
-    value: ${STATUS}
-    routes:
-      success: [on-success]
-      "re:.*": [on-failure]
-    depends: [check-status]
-  - name: on-success
-    command: echo "status was success"
-  - name: on-failure
-    command: echo "status was something else"
+  - id: check_status
+    output:
+      status: success
+  - id: route
+    action: router.route
+    with:
+      value: ${check_status.output.status}
+      routes:
+        success: [on_success]
+        "re:.*": [on_failure]
+    depends: [check_status]
+  - id: on_success
+    run: echo "status was success"
+  - id: on_failure
+    run: echo "status was something else"
 `,
 	},
 	{
 		ID:          11,
 		Name:        "approval-gate",
-		Description: "Add human approval gates to a workflow",
+		Description: "Draft release notes with an agent, push back with rewind_to, then deploy",
 		Content: `type: graph
+artifacts:
+  enabled: true
 steps:
-  - name: build
-    command: echo "build artifact v1.2.3"
-    output: VERSION
-  - name: review
-    command: echo "ready to deploy v${VERSION}"
-    approval:
-      prompt: "Approve deployment to production?"
-      input: [APPROVER, NOTES]
-      required: [APPROVER]
+  - id: build
+    output:
+      version: "v1.2.3"
+  - id: draft_release_notes
     depends: [build]
-  - name: deploy
-    command: echo "deploying v${VERSION} approved by ${APPROVER}"
-    depends: [review]
+    action: agent.run
+    with:
+      task: |
+        Draft concise release notes for version ${build.output.version}.
+
+        Current draft path: ${DAG_RUN_ARTIFACTS_DIR}/release-notes.md
+
+        Reviewer feedback from the latest push-back: ${FEEDBACK}
+
+        Return Markdown with a summary and deployment notes.
+        If FEEDBACK is empty, produce the first draft.
+        If FEEDBACK is set, read the existing draft from the path above and revise it to address the feedback.
+    stdout: ${DAG_RUN_ARTIFACTS_DIR}/release-notes.md
+    approval:
+      prompt: "Review the release-notes.md artifact. Push back with FEEDBACK to regenerate it, or approve to continue to deploy."
+      input: [FEEDBACK]
+      rewind_to: draft_release_notes
+  - id: deploy
+    depends: [draft_release_notes]
+    run: echo "deploying ${build.output.version} with reviewed release notes"
 `,
 	},
 	{
 		ID:          12,
 		Name:        "agent-step",
-		Description: "Run an AI agent as a workflow step",
+		Description: "Build the agent prompt with a template and write a report artifact",
 		Content: `type: graph
+artifacts:
+  enabled: true
 defaults:
   retry_policy:
     limit: 2
     interval_sec: 5
 steps:
-  - name: gather-logs
-    command: echo "error: connection timeout at 10:23 AM"
+  - id: gather_logs
+    run: 'echo "error: connection timeout at 10:23 AM"'
+    # output captures stdout into a variable, but the default max_output_size
+    # is 1048576 bytes (1 MiB). If logs can exceed that, write them to a
+    # temporary file instead and pass the file path to later steps.
     output: ERROR_LOG
-  - name: analyze
-    type: agent
-    agent:
-      prompt: "You are a concise incident analyst."
+  - id: build_prompt
+    action: template.render
+    with:
+      template: |
+        Analyze this incident log and suggest a fix:
+
+        {{ .error_log }}
+      data:
+        error_log: ${ERROR_LOG}
+    output: ANALYSIS_PROMPT
+    depends: [gather_logs]
+  - id: analyze
+    action: agent.run
+    with:
+      task: ${ANALYSIS_PROMPT}
       max_iterations: 10
-    messages:
-      - role: user
-        content: |
-          Analyze this error and suggest a fix:
-          ${ERROR_LOG}
     output: ANALYSIS
-    depends: [gather-logs]
-  - name: report
-    command: echo "Analysis result - ${ANALYSIS}"
+    depends: [build_prompt]
+  - id: report
+    action: template.render
+    with:
+      template: |
+        # Incident Report
+
+        ## Error Log
+
+        {{ .error_log }}
+
+        ## Analysis
+
+        {{ .analysis }}
+      output: ${DAG_RUN_ARTIFACTS_DIR}/report.md
+      data:
+        error_log: ${ERROR_LOG}
+        analysis: ${ANALYSIS}
     depends: [analyze]
+`,
+	},
+	{
+		ID:          13,
+		Name:        "custom-action",
+		Description: "Define a typed reusable action with actions and with",
+		Content: `type: graph
+actions:
+  release.announce:
+    description: Print a reusable release announcement
+    input_schema:
+      type: object
+      additionalProperties: false
+      required: [channel, version]
+      properties:
+        channel:
+          type: string
+          enum: [changelog, email, slack]
+        version:
+          type: string
+        summary:
+          type: string
+          default: Ready for rollout
+    template:
+      run: echo {{ json .input.channel }} release {{ json .input.version }} - {{ json .input.summary }}
+steps:
+  - id: build
+    output:
+      version: "v1.2.3"
+  - id: announce_changelog
+    action: release.announce
+    with:
+      channel: changelog
+      version: ${build.output.version}
+    depends: [build]
+  - id: announce_email
+    action: release.announce
+    with:
+      channel: email
+      version: ${build.output.version}
+      summary: Sent to subscribers
+    depends: [build]
+`,
+	},
+	{
+		ID:          14,
+		Name:        "template-step",
+		Description: "Render a deployment config artifact with structured data",
+		Content: `type: graph
+artifacts:
+  enabled: true
+params:
+  - name: ENV
+    type: string
+    enum: [DEV, STG, PROD]
+    description: Target environment for the rendered config
+    required: true
+    default: STG
+steps:
+  - id: build
+    output:
+      version: "v1.2.3"
+  - id: render_config
+    action: template.render
+    with:
+      template: |
+        APP_ENV={{ .env }}
+        APP_VERSION={{ .version }}
+        FEATURE_FLAG=true
+      output: ${DAG_RUN_ARTIFACTS_DIR}/deploy.env
+      data:
+        env: ${ENV}
+        version: ${build.output.version}
+    depends: [build]
+  - id: preview
+    run: cat ${DAG_RUN_ARTIFACTS_DIR}/deploy.env
+    depends: [render_config]
+`,
+	},
+	{
+		ID:          15,
+		Name:        "harness-step",
+		Description: "Build a harness prompt with template and write the result as an artifact",
+		Content: `type: graph
+artifacts:
+  enabled: true
+harness:
+  # DAG-level defaults for harness steps. provider may be built-in or from harnesses:.
+  provider: claude
+  model: sonnet
+  bare: true
+steps:
+  - id: gather_issue
+    output:
+      issue: "scheduler retries the same task after it already succeeded"
+  - id: build_prompt
+    action: template.render
+    with:
+      template: |
+        Review this workflow issue and suggest a fix:
+
+        {{ .issue }}
+      data:
+        issue: ${gather_issue.output.issue}
+    output: HARNESS_PROMPT
+    depends: [gather_issue]
+  - id: analyze
+    action: harness.run
+    with:
+      prompt: ${HARNESS_PROMPT}
+      effort: high
+    output: ANALYSIS
+    depends: [build_prompt]
+  - id: report
+    action: template.render
+    with:
+      template: |
+        # Harness Review
+
+        ## Issue
+
+        {{ .issue }}
+
+        ## Suggested Fix
+
+        {{ .analysis }}
+      output: ${DAG_RUN_ARTIFACTS_DIR}/harness-report.md
+      data:
+        issue: ${gather_issue.output.issue}
+        analysis: ${ANALYSIS}
+    depends: [analyze]
+`,
+	},
+	{
+		ID:          16,
+		Name:        "named-harnesses",
+		Description: "Define a named harness under harnesses and call it from a step",
+		Content: `type: graph
+artifacts:
+  enabled: true
+harnesses:
+  # Named custom harness adapters for CLIs that are not built in.
+  gemini:
+    binary: gemini
+    prompt_mode: flag
+    prompt_flag: --prompt
+    option_flags:
+      model: --model
+steps:
+  - id: gather_task
+    output:
+      task: "Summarize the deployment checklist for the next engineer"
+  - id: build_prompt
+    action: template.render
+    with:
+      template: |
+        {{ .task }}
+
+        Return a short handoff note.
+      data:
+        task: ${gather_task.output.task}
+    output: PROMPT
+    depends: [gather_task]
+  - id: summarize
+    action: harness.run
+    with:
+      prompt: ${PROMPT}
+      provider: gemini
+      model: gemini-2.5-pro
+    output: SUMMARY
+    depends: [build_prompt]
+  - id: save_summary
+    action: template.render
+    with:
+      template: |
+        {{ .summary }}
+      output: ${DAG_RUN_ARTIFACTS_DIR}/handoff.md
+      data:
+        summary: ${SUMMARY}
+    depends: [summarize]
 `,
 	},
 }

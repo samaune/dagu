@@ -36,6 +36,9 @@ func (a *API) ListWorkspaces(ctx context.Context, _ api.ListWorkspacesRequestObj
 
 	response := make([]api.WorkspaceResponse, 0, len(wsList))
 	for _, ws := range wsList {
+		if !a.canAccessWorkspace(ctx, ws.Name) {
+			continue
+		}
 		response = append(response, toWorkspaceResponse(ws))
 	}
 
@@ -56,6 +59,12 @@ func (a *API) CreateWorkspace(ctx context.Context, request api.CreateWorkspaceRe
 		return api.CreateWorkspace400JSONResponse{
 			Code:    api.ErrorCodeBadRequest,
 			Message: "Name is required",
+		}, nil
+	}
+	if err := workspace.ValidateName(body.Name); err != nil {
+		return api.CreateWorkspace400JSONResponse{
+			Code:    api.ErrorCodeBadRequest,
+			Message: "Workspace name must contain only letters, numbers, underscores, and hyphens",
 		}, nil
 	}
 
@@ -94,6 +103,12 @@ func (a *API) GetWorkspace(ctx context.Context, request api.GetWorkspaceRequestO
 		}
 		return nil, fmt.Errorf("failed to get workspace: %w", err)
 	}
+	if !a.canAccessWorkspace(ctx, ws.Name) {
+		return api.GetWorkspace404JSONResponse{
+			Code:    api.ErrorCodeNotFound,
+			Message: "Workspace not found",
+		}, nil
+	}
 
 	return api.GetWorkspace200JSONResponse(toWorkspaceResponse(ws)), nil
 }
@@ -117,9 +132,22 @@ func (a *API) UpdateWorkspace(ctx context.Context, request api.UpdateWorkspaceRe
 		}
 		return nil, fmt.Errorf("failed to get workspace: %w", err)
 	}
+	if !a.canAccessWorkspace(ctx, existing.Name) {
+		return api.UpdateWorkspace404JSONResponse{
+			Code:    api.ErrorCodeNotFound,
+			Message: "Workspace not found",
+		}, nil
+	}
 
 	body := request.Body
-	if body.Name != nil && *body.Name != "" {
+	if body.Name != nil {
+		if err := workspace.ValidateName(*body.Name); err != nil {
+			return nil, &Error{
+				Code:       api.ErrorCodeBadRequest,
+				Message:    "Workspace name must contain only letters, numbers, underscores, and hyphens",
+				HTTPStatus: http.StatusBadRequest,
+			}
+		}
 		existing.Name = *body.Name
 	}
 	if body.Description != nil {
@@ -164,6 +192,12 @@ func (a *API) DeleteWorkspace(ctx context.Context, request api.DeleteWorkspaceRe
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to get workspace: %w", err)
+	}
+	if !a.canAccessWorkspace(ctx, ws.Name) {
+		return api.DeleteWorkspace404JSONResponse{
+			Code:    api.ErrorCodeNotFound,
+			Message: "Workspace not found",
+		}, nil
 	}
 
 	if err := a.workspaceStore.Delete(ctx, request.WorkspaceId); err != nil {

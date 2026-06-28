@@ -39,6 +39,10 @@ var (
 	ErrInvalidAPIKeyID = errors.New("invalid API key ID")
 	// ErrInvalidAPIKeyHash is returned when the API key hash is empty.
 	ErrInvalidAPIKeyHash = errors.New("invalid API key hash")
+	// ErrInvalidAPIKeySurface is returned when the API key surface allowlist is invalid.
+	ErrInvalidAPIKeySurface = errors.New("invalid API key surface")
+	// ErrInvalidAPIKeyAttribution is returned when API key attribution metadata is invalid.
+	ErrInvalidAPIKeyAttribution = errors.New("invalid API key attribution")
 	// ErrInvalidRole is returned when the role is not a valid role.
 	ErrInvalidRole = errors.New("invalid role")
 )
@@ -56,6 +60,12 @@ var (
 	ErrInvalidWebhookID = errors.New("invalid webhook ID")
 	// ErrInvalidWebhookTokenHash is returned when the webhook token hash is empty.
 	ErrInvalidWebhookTokenHash = errors.New("invalid webhook token hash")
+	// ErrWebhookHMACEncryptorRequired is returned when encrypted HMAC secret
+	// storage is required but no encryptor is available.
+	ErrWebhookHMACEncryptorRequired = errors.New("webhook HMAC secret requires encryptor")
+	// ErrWebhookHMACDecryptFailed is returned when an encrypted HMAC secret
+	// cannot be decrypted from storage.
+	ErrWebhookHMACDecryptFailed = errors.New("failed to decrypt webhook HMAC secret")
 )
 
 // UserStore defines the interface for user persistence operations.

@@ -145,6 +145,14 @@ func WithLogFilePath(logFilePath string) StatusOption {
 	}
 }
 
+// WithWorkingDir returns a StatusOption that sets the effective dag-run
+// working directory path.
+func WithWorkingDir(workingDir string) StatusOption {
+	return func(s *exec.DAGRunStatus) {
+		s.WorkingDir = workingDir
+	}
+}
+
 // WithArchiveDir returns a StatusOption that sets the artifact/archive directory path.
 func WithArchiveDir(archiveDir string) StatusOption {
 	return func(s *exec.DAGRunStatus) {
@@ -173,6 +181,13 @@ func WithWorkerID(workerID string) StatusOption {
 	}
 }
 
+// WithPIDStartedAt returns a StatusOption that sets the OS process start time.
+func WithPIDStartedAt(startedAt int64) StatusOption {
+	return func(s *exec.DAGRunStatus) {
+		s.PIDStartedAt = startedAt
+	}
+}
+
 // WithTriggerType returns a StatusOption that sets the trigger type
 func WithTriggerType(triggerType core.TriggerType) StatusOption {
 	return func(s *exec.DAGRunStatus) {
@@ -192,6 +207,15 @@ func WithAutoRetryCount(autoRetryCount int) StatusOption {
 func WithPendingStepRetries(retries []exec.PendingStepRetry) StatusOption {
 	return func(s *exec.DAGRunStatus) {
 		s.PendingStepRetries = retries
+	}
+}
+
+// WithRuntimeProfile returns a StatusOption that records selected profile metadata.
+func WithRuntimeProfile(name, resolvedAt string, entries []exec.RuntimeProfileEntry) StatusOption {
+	return func(s *exec.DAGRunStatus) {
+		s.ProfileName = name
+		s.ProfileResolvedAt = resolvedAt
+		s.ProfileEntries = append([]exec.RuntimeProfileEntry(nil), entries...)
 	}
 }
 

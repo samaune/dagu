@@ -29,16 +29,32 @@ type (
 var (
 	// NewContext creates a new context with DAG execution metadata.
 	NewContext = exec.NewContext
+	// LookupDAGContext returns the DAG execution metadata when it is present.
+	LookupDAGContext = exec.LookupContext
 	// WithDatabase sets the database interface.
 	WithDatabase = exec.WithDatabase
 	// WithRootDAGRun sets the root DAG run reference for sub-DAG execution.
 	WithRootDAGRun = exec.WithRootDAGRun
+	// WithAttemptID sets the DAG-run attempt identifier.
+	WithAttemptID = exec.WithAttemptID
+	// WithTriggerType sets the DAG-run trigger type.
+	WithTriggerType = exec.WithTriggerType
+	// WithTriggerActor sets the attributable trigger actor.
+	WithTriggerActor = exec.WithTriggerActor
+	// WithRunStartedAt sets the recorded DAG-run start timestamp.
+	WithRunStartedAt = exec.WithRunStartedAt
+	// WithScheduleTime sets the logical schedule time.
+	WithScheduleTime = exec.WithScheduleTime
 	// WithParams sets runtime parameters.
 	WithParams = exec.WithParams
+	// WithDefaultEnvVars sets low-precedence inherited environment variables.
+	WithDefaultEnvVars = exec.WithDefaultEnvVars
 	// WithEnvVars sets additional execution-scoped environment variables.
 	WithEnvVars = exec.WithEnvVars
 	// WithCoordinator sets the coordinator dispatcher for distributed execution.
 	WithCoordinator = exec.WithCoordinator
+	// WithDefaultSecrets sets low-precedence inherited secret environment variables.
+	WithDefaultSecrets = exec.WithDefaultSecrets
 	// WithSecrets sets secret environment variables.
 	WithSecrets = exec.WithSecrets
 	// WithLogEncoding sets the log file character encoding.
@@ -47,10 +63,22 @@ var (
 	WithLogWriterFactory = exec.WithLogWriterFactory
 	// WithDefaultExecMode sets the server-level default execution mode.
 	WithDefaultExecMode = exec.WithDefaultExecMode
+	// WithDAGRunStore sets the dag-run store.
+	WithDAGRunStore = exec.WithDAGRunStore
+	// WithQueueStore sets the queue store.
+	WithQueueStore = exec.WithQueueStore
+	// WithStateStore sets the persistent DAG state store.
+	WithStateStore = exec.WithStateStore
+	// WithDAGRunLogDir sets the base log directory for newly persisted DAG runs.
+	WithDAGRunLogDir = exec.WithDAGRunLogDir
+	// WithDAGRunArtifactDir sets the base artifact directory for newly persisted DAG runs.
+	WithDAGRunArtifactDir = exec.WithDAGRunArtifactDir
 	// WithWorkDir sets the per-DAG-run working directory path.
 	WithWorkDir = exec.WithWorkDir
 	// WithArtifactDir sets the per-DAG-run artifact directory path.
 	WithArtifactDir = exec.WithArtifactDir
+	// WithRuntimeProfile sets selected runtime profile metadata.
+	WithRuntimeProfile = exec.WithRuntimeProfile
 )
 
 // LogWriterFactory is re-exported from execution package

@@ -1,6 +1,13 @@
+// Copyright (C) 2026 Yota Hamada
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { Button } from '@/components/ui/button';
 import { useClient } from '@/hooks/api';
 import { cn } from '@/lib/utils';
+import {
+  visibleDocumentPathForWorkspace,
+  workspaceDocumentQueryForWorkspace,
+} from '@/lib/workspace';
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { components } from '../../../api/v1/schema';
@@ -9,6 +16,9 @@ import { AppBarContext } from '../../../contexts/AppBarContext';
 type SearchMatch = components['schemas']['SearchMatchItem'];
 type DagResult = components['schemas']['DAGSearchPageItem'];
 type DocResult = components['schemas']['DocSearchPageItem'];
+type DAGWorkspaceQuery = {
+  workspace?: string;
+};
 
 type LoadMoreResponse = {
   error?: string;
@@ -18,7 +28,12 @@ type LoadMoreResponse = {
 };
 
 type Props =
-  | { type: 'dag'; query: string; results: DagResult[] }
+  | {
+      type: 'dag';
+      query: string;
+      results: DagResult[];
+      workspaceQuery?: DAGWorkspaceQuery;
+    }
   | { type: 'doc'; query: string; results: DocResult[] };
 
 type SearchResultItemProps = {
@@ -42,20 +57,20 @@ function SearchSnippet({ match }: { match: SearchMatch }) {
         const isHit = lineNumber === match.lineNumber;
 
         return (
-          <div
+          <span
             key={`${match.startLine}-${lineNumber}-${index}`}
             className={cn(
-              'grid grid-cols-[auto,1fr] gap-3 px-1',
+              'grid min-w-full w-max grid-cols-[max-content_minmax(0,max-content)] gap-3 px-1',
               isHit && 'rounded bg-primary/10'
             )}
           >
-            <span className="select-none text-[11px] text-muted-foreground">
+            <span className="w-8 select-none text-right text-[11px] tabular-nums text-muted-foreground">
               {lineNumber}
             </span>
-            <code className="font-mono text-foreground">
+            <code className="whitespace-pre font-mono text-foreground">
               {line || ' '}
             </code>
-          </div>
+          </span>
         );
       })}
     </pre>
@@ -165,65 +180,88 @@ function SearchResult(props: Props) {
   const client = useClient();
   const appBarContext = React.useContext(AppBarContext);
   const remoteNode = appBarContext.selectedRemoteNode || 'local';
+  const dagWorkspaceQuery = type === 'dag' ? (props.workspaceQuery ?? {}) : {};
 
   const items =
     type === 'dag'
-      ? results.map((result) => ({
-          key: `dag-${result.fileName}-${query}`,
-          kind: 'DAG' as const,
-          title: result.name,
-          link: `/dags/${encodeURI(result.fileName)}/spec`,
-          initialMatches: result.matches ?? [],
-          initialHasMoreMatches: result.hasMoreMatches,
-          initialNextCursor: result.nextMatchesCursor,
-          loadMore: async (cursor?: string): Promise<LoadMoreResponse> => {
-            const response = await client.GET('/search/dags/{fileName}/matches', {
-              params: {
-                path: { fileName: result.fileName },
-                query: {
-                  remoteNode,
-                  q: query,
-                  cursor,
-                },
-              },
-            });
+      ? results.map((result) => {
+          const linkSearch = result.workspace
+            ? `?workspace=${encodeURIComponent(result.workspace)}`
+            : '';
+          return {
+            key: `dag-${result.fileName}-${result.workspace ?? ''}-${query}`,
+            kind: 'DAG' as const,
+            title: result.name,
+            link: `/dags/${encodeURI(result.fileName)}/spec${linkSearch}`,
+            initialMatches: result.matches ?? [],
+            initialHasMoreMatches: result.hasMoreMatches,
+            initialNextCursor: result.nextMatchesCursor,
+            loadMore: async (cursor?: string): Promise<LoadMoreResponse> => {
+              const response = await client.GET(
+                '/search/dags/{fileName}/matches',
+                {
+                  params: {
+                    path: { fileName: result.fileName },
+                    query: {
+                      remoteNode,
+                      q: query,
+                      cursor,
+                      ...dagWorkspaceQuery,
+                    },
+                  },
+                }
+              );
 
-            return {
-              error: response.error?.message || undefined,
-              matches: response.data?.matches ?? [],
-              hasMore: response.data?.hasMore ?? false,
-              nextCursor: response.data?.nextCursor,
-            };
-          },
-        }))
-      : results.map((result) => ({
-          key: `doc-${result.id}-${query}`,
-          kind: 'Doc' as const,
-          title: result.title,
-          link: `/docs/${encodeURI(result.id)}`,
-          initialMatches: result.matches ?? [],
-          initialHasMoreMatches: result.hasMoreMatches,
-          initialNextCursor: result.nextMatchesCursor,
-          loadMore: async (cursor?: string): Promise<LoadMoreResponse> => {
-            const response = await client.GET('/search/docs/matches', {
-              params: {
-                query: {
-                  remoteNode,
-                  path: result.id,
-                  q: query,
-                  cursor,
+              return {
+                error: response.error?.message || undefined,
+                matches: response.data?.matches ?? [],
+                hasMore: response.data?.hasMore ?? false,
+                nextCursor: response.data?.nextCursor,
+              };
+            },
+          };
+        })
+      : results.map((result) => {
+          const docPath = visibleDocumentPathForWorkspace(
+            result.id,
+            result.workspace
+          );
+          const docWorkspaceQuery = workspaceDocumentQueryForWorkspace(
+            result.workspace
+          );
+          const linkSearch = result.workspace
+            ? `?workspace=${encodeURIComponent(result.workspace)}`
+            : '';
+          return {
+            key: `doc-${result.id}-${result.workspace ?? ''}-${query}`,
+            kind: 'Doc' as const,
+            title: result.title,
+            link: `/docs/${encodeURI(docPath)}${linkSearch}`,
+            initialMatches: result.matches ?? [],
+            initialHasMoreMatches: result.hasMoreMatches,
+            initialNextCursor: result.nextMatchesCursor,
+            loadMore: async (cursor?: string): Promise<LoadMoreResponse> => {
+              const response = await client.GET('/search/docs/matches', {
+                params: {
+                  query: {
+                    remoteNode,
+                    path: docPath,
+                    q: query,
+                    cursor,
+                    ...docWorkspaceQuery,
+                  },
                 },
-              },
-            });
+              });
 
-            return {
-              error: response.error?.message || undefined,
-              matches: response.data?.matches ?? [],
-              hasMore: response.data?.hasMore ?? false,
-              nextCursor: response.data?.nextCursor,
-            };
-          },
-        }));
+              return {
+                error: response.error?.message || undefined,
+                matches: response.data?.matches ?? [],
+                hasMore: response.data?.hasMore ?? false,
+                nextCursor: response.data?.nextCursor,
+              };
+            },
+          };
+        });
 
   return (
     <ul className="divide-y rounded-md border">

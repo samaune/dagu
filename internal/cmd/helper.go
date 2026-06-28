@@ -15,6 +15,7 @@ import (
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
 	"github.com/dagucloud/dagu/internal/core/spec"
+	"github.com/dagucloud/dagu/internal/dagwarning"
 )
 
 // parseTriggerTypeParam parses and validates the trigger-type flag from the command context.
@@ -40,6 +41,27 @@ func parseTriggerTypeParam(ctx *Context) (core.TriggerType, error) {
 	return triggerType, nil
 }
 
+func labelsParam(ctx *Context) (string, error) {
+	labels, err := ctx.StringParam("labels")
+	if err != nil {
+		return "", fmt.Errorf("failed to get labels: %w", err)
+	}
+	tags, err := ctx.StringParam("tags")
+	if err != nil {
+		return "", fmt.Errorf("failed to get deprecated tags: %w", err)
+	}
+
+	labelsChanged := ctx.Command.Flags().Changed("labels")
+	tagsChanged := ctx.Command.Flags().Changed("tags")
+	if labelsChanged && tagsChanged {
+		return "", fmt.Errorf("labels and deprecated tags cannot both be set")
+	}
+	if labelsChanged {
+		return labels, nil
+	}
+	return tags, nil
+}
+
 // parseScheduleTimeParam reads and validates the --schedule-time flag.
 // Returns the validated RFC 3339 string or empty if not set.
 func parseScheduleTimeParam(ctx *Context) (string, error) {
@@ -57,11 +79,27 @@ func parseScheduleTimeParam(ctx *Context) (string, error) {
 
 // restoreDAGFromStatus restores a DAG from a previous run's status and YAML.
 // It restores params from the status, loads dotenv, and rebuilds fields excluded
-// from JSON serialization (env, shell, workingDir, registryAuths, etc.).
+// from JSON serialization (env, params JSON, registryAuths, etc.).
 func restoreDAGFromStatus(ctx context.Context, dag *core.DAG, status *exec.DAGRunStatus) (*core.DAG, error) {
-	dag.Params = spec.QuoteRuntimeParams(status.ParamsList, dag.ParamDefs)
-	dag.LoadDotEnv(ctx)
-	return rebuildDAGFromYAML(ctx, dag)
+	runtimeParams := append([]string(nil), status.ParamsList...)
+	dag.Params = runtimeParams
+	if err := dagwarning.LoadDotEnv(ctx, dag); err != nil {
+		return nil, err
+	}
+	restored, err := rebuildDAGFromYAML(ctx, dag, spec.QuoteRuntimeParams(runtimeParams, dag.ParamDefs))
+	if err != nil {
+		return nil, err
+	}
+	applyPersistedRunWorkingDir(restored, status)
+	return restored, nil
+}
+
+func applyPersistedRunWorkingDir(dag *core.DAG, status *exec.DAGRunStatus) {
+	if dag == nil || status == nil || status.WorkingDir == "" {
+		return
+	}
+	dag.WorkingDir = status.WorkingDir
+	dag.WorkingDirExplicit = true
 }
 
 // rebuildDAGFromYAML rebuilds a DAG from its YamlData using the spec loader.
@@ -72,11 +110,12 @@ func restoreDAGFromStatus(ctx context.Context, dag *core.DAG, status *exec.DAGRu
 // only copies JSON-excluded fields (Env, Params, ParamsJSON, SMTP, SSH, S3,
 // Redis, Harness, Harnesses, Kubernetes, RegistryAuths, WorkingDirExplicit)
 // from the rebuilt DAG.
-func rebuildDAGFromYAML(ctx context.Context, dag *core.DAG) (*core.DAG, error) {
+func rebuildDAGFromYAML(ctx context.Context, dag *core.DAG, paramsOverride ...[]string) (*core.DAG, error) {
 	if len(dag.YamlData) == 0 {
 		return dag, nil
 	}
 
+	loadedEnv := append([]string{}, dag.Env...)
 	buildEnvMap := buildenv.ToMap(dag.Env)
 	for key, value := range dag.PresolvedBuildEnv {
 		if buildEnvMap == nil {
@@ -88,6 +127,7 @@ func rebuildDAGFromYAML(ctx context.Context, dag *core.DAG) (*core.DAG, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load presolved build env: %w", err)
 	}
+	transportEnv := buildenv.FromMap(presolvedBuildEnv)
 	for key, value := range presolvedBuildEnv {
 		if buildEnvMap == nil {
 			buildEnvMap = make(map[string]string)
@@ -95,8 +135,12 @@ func rebuildDAGFromYAML(ctx context.Context, dag *core.DAG) (*core.DAG, error) {
 		buildEnvMap[key] = value
 	}
 
+	params := dag.Params
+	if len(paramsOverride) > 0 {
+		params = paramsOverride[0]
+	}
 	loadOpts := []spec.LoadOption{
-		spec.WithParams(dag.Params),
+		spec.WithParams(params),
 		spec.SkipSchemaValidation(),
 	}
 	if len(buildEnvMap) > 0 {
@@ -116,9 +160,9 @@ func rebuildDAGFromYAML(ctx context.Context, dag *core.DAG) (*core.DAG, error) {
 	}
 
 	// Copy only fields excluded from JSON serialization (json:"-").
-	// All other fields (Queue, WorkerSelector, HandlerOn, Steps, Tags, etc.)
+	// All other fields (Queue, WorkerSelector, HandlerOn, Steps, Labels, etc.)
 	// are already correctly stored in dag.json and must be preserved.
-	dag.Env = fresh.Env
+	dag.Env = buildenv.AppendMissing(fresh.Env, loadedEnv, buildenv.FromMap(dag.PresolvedBuildEnv), transportEnv)
 	dag.Params = fresh.Params
 	dag.ParamsJSON = fresh.ParamsJSON
 	dag.SMTP = fresh.SMTP

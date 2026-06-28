@@ -10,10 +10,13 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
+	runtimeagent "github.com/dagucloud/dagu/internal/runtime/agent"
 	"github.com/dagucloud/dagu/internal/test"
+	"github.com/dagucloud/dagu/internal/test/intgharness"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,6 +24,37 @@ import (
 func assertEquivalentPath(t *testing.T, expected, actual string) {
 	t.Helper()
 	require.Equal(t, filepath.Clean(expected), filepath.Clean(filepath.FromSlash(actual)))
+}
+
+func dagAgentWithProc(t *testing.T, th test.Helper, dag test.DAG) *test.Agent {
+	t.Helper()
+
+	dagRunID, err := th.DAGRunMgr.GenDAGRunID(th.Context)
+	require.NoError(t, err)
+
+	compactRunID := strings.ReplaceAll(dagRunID, "-", "")
+	if len(compactRunID) > 12 {
+		compactRunID = compactRunID[:12]
+	}
+	attemptID := "attempt-" + compactRunID
+
+	proc, err := th.ProcStore.Acquire(th.Context, dag.ProcGroup(), exec.ProcMeta{
+		StartedAt:    time.Now().Unix(),
+		Name:         dag.Name,
+		DAGRunID:     dagRunID,
+		AttemptID:    attemptID,
+		RootName:     dag.Name,
+		RootDAGRunID: dagRunID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = proc.Stop(th.Context)
+	})
+
+	return dag.Agent(
+		test.WithDAGRunID(dagRunID),
+		test.WithAgentOptions(runtimeagent.Options{AttemptID: attemptID}),
+	)
 }
 
 func TestHandlerOn(t *testing.T) {
@@ -38,11 +72,11 @@ func TestHandlerOn(t *testing.T) {
 			dagYAML: `
 handler_on:
   init:
-    command: "true"
+    run: "true"
 
 steps:
   - name: step1
-    command: "true"
+    run: "true"
 `,
 			setupFunc: func(t *testing.T, dag *core.DAG) {
 				require.NotNil(t, dag.HandlerOn.Init)
@@ -62,13 +96,13 @@ steps:
 			dagYAML: `
 handler_on:
   init:
-    command: exit 1
+    run: exit 1
   exit:
-    command: "true"
+    run: "true"
 
 steps:
   - name: step1
-    command: "echo should-not-run"
+    run: "echo should-not-run"
 `,
 			runFunc: func(_ *testing.T, ctx context.Context, agent *test.Agent) {
 				_ = agent.Run(ctx)
@@ -93,12 +127,12 @@ steps:
 			dagYAML: `
 handler_on:
   init:
-    command: "echo init-should-not-run"
+    run: "echo init-should-not-run"
     preconditions: "false"
 
 steps:
   - name: step1
-    command: "true"
+    run: "true"
 `,
 			runFunc: func(t *testing.T, _ context.Context, agent *test.Agent) {
 				agent.RunSuccess(t)
@@ -119,11 +153,11 @@ preconditions: "false"
 
 handler_on:
   init:
-    command: "echo init-should-not-run"
+    run: "echo init-should-not-run"
 
 steps:
   - name: step1
-    command: "true"
+    run: "true"
 `,
 			runFunc: func(_ *testing.T, ctx context.Context, agent *test.Agent) {
 				_ = agent.Run(ctx)
@@ -149,13 +183,16 @@ steps:
 		{
 			name: "FailureHandler",
 			dagYAML: `
+retry_policy:
+  limit: 0
+
 handler_on:
   failure:
-    command: "true"
+    run: "true"
 
 steps:
   - name: failing-step
-    command: exit 1
+    run: exit 1
 `,
 			runFunc: func(t *testing.T, _ context.Context, agent *test.Agent) {
 				agent.RunError(t)
@@ -171,11 +208,11 @@ steps:
 			dagYAML: `
 handler_on:
   success:
-    command: "true"
+    run: "true"
 
 steps:
   - name: passing-step
-    command: "true"
+    run: "true"
 `,
 			runFunc: func(t *testing.T, _ context.Context, agent *test.Agent) {
 				agent.RunSuccess(t)
@@ -191,11 +228,11 @@ steps:
 			dagYAML: `
 handler_on:
   exit:
-    command: "true"
+    run: "true"
 
 steps:
   - name: passing-step
-    command: "true"
+    run: "true"
 `,
 			runFunc: func(t *testing.T, _ context.Context, agent *test.Agent) {
 				agent.RunSuccess(t)
@@ -211,11 +248,11 @@ steps:
 			dagYAML: `
 handler_on:
   wait:
-    command: "true"
+    run: "true"
 
 steps:
   - name: wait-step
-    command: "true"
+    run: "true"
     approval: {}
 `,
 			setupFunc: func(t *testing.T, dag *core.DAG) {
@@ -236,11 +273,11 @@ steps:
 			dagYAML: `
 handler_on:
   wait:
-    command: exit 1
+    run: exit 1
 
 steps:
   - name: wait-step
-    command: "true"
+    run: "true"
     approval: {}
 `,
 			runFunc: func(_ *testing.T, ctx context.Context, agent *test.Agent) {
@@ -277,26 +314,32 @@ func TestHandlerOn_Abort(t *testing.T) {
 	t.Parallel()
 
 	th := test.Setup(t)
-	releaseFile := filepath.Join(t.TempDir(), "abort.release")
+	h := intgharness.New(t, th)
+	tmpDir := t.TempDir()
+	releaseFile := filepath.Join(tmpDir, "abort.release")
+	startedFile := filepath.Join(tmpDir, "abort.started")
+	release := h.Marker(releaseFile)
+	started := h.Marker(startedFile)
 	t.Cleanup(func() {
-		_ = os.WriteFile(releaseFile, []byte("ok"), 0600)
+		release.Write("ok")
 	})
 	dag := th.DAG(t, `
 handler_on:
   abort:
-    command: "true"
+    run: "true"
 
 steps:
   - name: long-running
-    command: |
-`+indentTestScript(waitForFileCommand(releaseFile), 6)+`
+    run: |
+`+indentTestScript(started.WriteCommand("started"), 6)+`
+`+indentTestScript(release.WaitCommand(), 6)+`
 `)
 
 	// Verify parsing: abort field maps to the canonical abort handler
 	require.NotNil(t, dag.HandlerOn.Abort)
 	require.Equal(t, "onAbort", dag.HandlerOn.Abort.Name)
 
-	dagAgent := dag.Agent()
+	dagAgent := dagAgentWithProc(t, th, dag)
 
 	done := make(chan struct{})
 	go func() {
@@ -304,14 +347,17 @@ steps:
 		close(done)
 	}()
 
-	// Wait for the DAG to start running
-	dag.AssertLatestStatus(t, core.Running)
+	started.RequireExists(intgTestTimeout(10 * time.Second))
 
 	// Abort the DAG
 	dagAgent.Abort()
 
 	// Wait for completion
-	<-done
+	select {
+	case <-done:
+	case <-time.After(intgTestTimeout(30 * time.Second)):
+		t.Fatal("timed out waiting for aborted DAG run to finish")
+	}
 
 	// Verify the abort handler was executed
 	status := dagAgent.Status(th.Context)
@@ -358,13 +404,13 @@ func TestHandlerOn_EnvironmentVariables(t *testing.T) {
 		dag := th.DAG(t, `
 handler_on:
   init:
-    command: |
+    run: |
       echo "name:${DAG_NAME}|runid:${DAG_RUN_ID}|logfile:${DAG_RUN_LOG_FILE}|stepname:${DAG_RUN_STEP_NAME}"
     output: INIT_ENV_OUTPUT
 
 steps:
   - name: step1
-    command: "true"
+    run: "true"
 `)
 		agent := dag.Agent()
 		agent.RunSuccess(t)
@@ -405,12 +451,12 @@ steps:
 		dag := th.DAG(t, `
 handler_on:
   init:
-    command: echo "${DAG_RUN_STATUS}"
+    run: echo "${DAG_RUN_STATUS}"
     output: INIT_STATUS
 
 steps:
   - name: step1
-    command: "true"
+    run: "true"
 `)
 		agent := dag.Agent()
 		agent.RunSuccess(t)
@@ -434,13 +480,13 @@ steps:
 		dag := th.DAG(t, `
 handler_on:
   success:
-    command: |
+    run: |
       echo "name:${DAG_NAME}|status:${DAG_RUN_STATUS}|stepname:${DAG_RUN_STEP_NAME}"
     output: SUCCESS_ENV_OUTPUT
 
 steps:
   - name: step1
-    command: "true"
+    run: "true"
 `)
 		agent := dag.Agent()
 		agent.RunSuccess(t)
@@ -470,15 +516,18 @@ steps:
 		th := test.Setup(t)
 
 		dag := th.DAG(t, `
+retry_policy:
+  limit: 0
+
 handler_on:
   failure:
-    command: |
+    run: |
       echo "name:${DAG_NAME}|status:${DAG_RUN_STATUS}|stepname:${DAG_RUN_STEP_NAME}"
     output: FAILURE_ENV_OUTPUT
 
 steps:
   - name: failing-step
-    command: exit 1
+    run: exit 1
 `)
 		agent := dag.Agent()
 		agent.RunError(t)
@@ -510,13 +559,13 @@ steps:
 		dag := th.DAG(t, `
 handler_on:
   exit:
-    command: |
+    run: |
       echo "name:${DAG_NAME}|status:${DAG_RUN_STATUS}|stepname:${DAG_RUN_STEP_NAME}"
     output: EXIT_ENV_OUTPUT
 
 steps:
   - name: step1
-    command: "true"
+    run: "true"
 `)
 		agent := dag.Agent()
 		agent.RunSuccess(t)
@@ -548,13 +597,13 @@ steps:
 		dag := th.DAG(t, `
 handler_on:
   exit:
-    command: |
+    run: |
       echo "status:${DAG_RUN_STATUS}"
     output: EXIT_ENV_OUTPUT
 
 steps:
   - name: failing-step
-    command: exit 1
+    run: exit 1
 `)
 		agent := dag.Agent()
 		agent.RunError(t)
@@ -576,24 +625,30 @@ steps:
 	t.Run("AbortHandler_AllEnvVars", func(t *testing.T) {
 		t.Parallel()
 		th := test.Setup(t)
-		releaseFile := filepath.Join(t.TempDir(), "abort-env.release")
+		h := intgharness.New(t, th)
+		tmpDir := t.TempDir()
+		releaseFile := filepath.Join(tmpDir, "abort-env.release")
+		startedFile := filepath.Join(tmpDir, "abort-env.started")
+		release := h.Marker(releaseFile)
+		started := h.Marker(startedFile)
 		t.Cleanup(func() {
-			_ = os.WriteFile(releaseFile, []byte("ok"), 0600)
+			release.Write("ok")
 		})
 
 		dag := th.DAG(t, `
 handler_on:
   abort:
-    command: |
+    run: |
       echo "name:${DAG_NAME}|status:${DAG_RUN_STATUS}|stepname:${DAG_RUN_STEP_NAME}"
     output: ABORT_ENV_OUTPUT
 
 steps:
   - name: long-running
-    command: |
-`+indentTestScript(waitForFileCommand(releaseFile), 6)+`
+    run: |
+`+indentTestScript(started.WriteCommand("started"), 6)+`
+`+indentTestScript(release.WaitCommand(), 6)+`
 `)
-		dagAgent := dag.Agent()
+		dagAgent := dagAgentWithProc(t, th, dag)
 
 		done := make(chan struct{})
 		go func() {
@@ -601,9 +656,13 @@ steps:
 			close(done)
 		}()
 
-		dag.AssertLatestStatus(t, core.Running)
+		started.RequireExists(intgTestTimeout(10 * time.Second))
 		dagAgent.Abort()
-		<-done
+		select {
+		case <-done:
+		case <-time.After(intgTestTimeout(30 * time.Second)):
+			t.Fatal("timed out waiting for aborted DAG run to finish")
+		}
 
 		status := dagAgent.Status(th.Context)
 		require.NotNil(t, status.OnAbort, "abort handler should have been executed")
@@ -634,13 +693,13 @@ steps:
 		dag := th.DAG(t, `
 handler_on:
   success:
-    command: |
+    run: |
       echo "stdout:${DAG_RUN_STEP_STDOUT_FILE:-UNSET}|stderr:${DAG_RUN_STEP_STDERR_FILE:-UNSET}"
     output: HANDLER_STEP_FILES
 
 steps:
   - name: step1
-    command: "true"
+    run: "true"
 `)
 		agent := dag.Agent()
 		agent.RunSuccess(t)
@@ -669,13 +728,13 @@ steps:
 		dag := th.DAG(t, `
 handler_on:
   success:
-    command: |
+    run: |
       echo "step_output:${STEP_OUTPUT}"
     output: SUCCESS_WITH_STEP_OUTPUT
 
 steps:
   - name: producer
-    command: echo "produced_value"
+    run: echo "produced_value"
     output: STEP_OUTPUT
 `)
 		agent := dag.Agent()
@@ -712,13 +771,13 @@ if ([string]::IsNullOrEmpty($env:STEP_OUTPUT)) {
 		dag := th.DAG(t, `
 handler_on:
   init:
-    command: |
+    run: |
 `+indentTestScript(initCommand, 6)+`
     output: INIT_STEP_ACCESS
 
 steps:
   - name: producer
-    command: echo "produced_value"
+    run: echo "produced_value"
     output: STEP_OUTPUT
 `)
 		agent := dag.Agent()
@@ -746,16 +805,16 @@ steps:
 type: graph
 handler_on:
   wait:
-    command: |
+    run: |
       echo "waiting_steps:${DAG_WAITING_STEPS}"
     output: WAIT_HANDLER_OUTPUT
 
 steps:
   - name: first-step
-    command: "true"
+    run: "true"
 
   - name: wait-step
-    command: "true"
+    run: "true"
     approval: {}
     depends:
       - first-step
@@ -789,16 +848,16 @@ steps:
 type: graph
 handler_on:
   wait:
-    command: |
+    run: |
       echo "waiting_steps:${DAG_WAITING_STEPS}"
     output: WAIT_HANDLER_OUTPUT
 
 steps:
   - name: setup-step
-    command: "true"
+    run: "true"
 
   - name: approval-gate
-    command: "true"
+    run: "true"
     approval: {}
     depends:
       - setup-step
@@ -832,11 +891,11 @@ steps:
 handler_on:
   success:
     stdout: "`+stdoutPathForYAML+`"
-    command: echo "handler ran"
+    run: echo "handler ran"
 
 steps:
   - name: step1
-    command: "true"
+    run: "true"
 `)
 		agent := dag.Agent()
 		agent.RunSuccess(t)
@@ -862,14 +921,14 @@ type: graph
 handler_on:
   wait:
     stdout: "`+stdoutPathForYAML+`"
-    command: echo "waiting handler"
+    run: echo "waiting handler"
 
 steps:
   - name: setup-step
-    command: "true"
+    run: "true"
 
   - name: approval-gate
-    command: "true"
+    run: "true"
     approval: {}
     depends:
       - setup-step

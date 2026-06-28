@@ -1,4 +1,8 @@
+// Copyright (C) 2026 Yota Hamada
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -12,28 +16,49 @@ import {
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
+import { useIsAdmin } from '@/contexts/AuthContext';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/ui/CustomDialog';
+} from '@/components/ui/dialog';
+import type { IChangeEvent } from '@rjsf/core';
+import type RJSFForm from '@rjsf/core';
+import Form from '@rjsf/shadcn';
+import type { RJSFSchema, UiSchema } from '@rjsf/utils';
+import validator from '@rjsf/validator-ajv8';
 import { AlertTriangle, ListPlus, Play, X } from 'lucide-react';
 import React from 'react';
 
-import { components, ParamDefType } from '../../../../api/v1/schema';
+import {
+  components,
+  ParamDefType,
+  RuntimeProfileStatus,
+} from '../../../../api/v1/schema';
 import {
   Parameter,
   parseParams,
   stringifyParams,
 } from '../../../../lib/parseParams';
+import type { JSONSchema } from '../../../../lib/schema-utils';
+import {
+  buildParamSchemaFormData,
+  buildParamSchemaUiSchema,
+  stringifyParamSchemaFormData,
+} from './paramSchemaForm';
+import { schemaFormTemplates } from './schemaFormTemplates';
+import { schemaFormWidgets } from './schemaFormWidgets';
+import { autoGrowTextarea } from './textareaAutoGrow';
 
 type ScalarValue = components['schemas']['ParamScalar'];
 type ParamDef = components['schemas']['ParamDef'];
 type DAGLike =
   | components['schemas']['DAG']
   | components['schemas']['DAGDetails'];
+type SchemaFormData = Record<string, unknown>;
 
 type ParamField = {
   key: string;
@@ -61,18 +86,30 @@ type Props = {
   onSubmit: (
     params: string,
     dagRunId?: string,
-    immediate?: boolean
+    immediate?: boolean,
+    profile?: string
   ) => Promise<void> | void;
   action?: 'start' | 'enqueue';
+  profiles?: components['schemas']['RuntimeProfileResponse'][];
+  profilesLoading?: boolean;
+  defaultProfile?: string;
+  defaultProfileLoading?: boolean;
 };
 
-const maxTextareaHeight = 150;
+const DAG_DEFAULT_PROFILE_VALUE = '__dag_default__';
+const NO_PROFILE_VALUE = '__none__';
 
-function autoGrowTextarea(el: HTMLTextAreaElement) {
-  el.style.height = 'auto';
-  const clamped = Math.min(el.scrollHeight, maxTextareaHeight);
-  el.style.height = `${clamped}px`;
-  el.style.overflowY = el.scrollHeight > maxTextareaHeight ? 'auto' : 'hidden';
+function profileOverrideForSelection(
+  selection: string,
+  hasDefaultProfile: boolean
+): string | undefined {
+  if (selection === DAG_DEFAULT_PROFILE_VALUE) {
+    return undefined;
+  }
+  if (selection === NO_PROFILE_VALUE) {
+    return hasDefaultProfile ? '' : undefined;
+  }
+  return selection;
 }
 
 function createParamFields(paramDefs: ParamDef[] = []): ParamField[] {
@@ -238,16 +275,44 @@ function StartDAGModal({
   dismissModal,
   onSubmit,
   action,
+  profiles = [],
+  profilesLoading = false,
+  defaultProfile = '',
+  defaultProfileLoading = false,
 }: Props) {
+  const canUseProtectedProfiles = useIsAdmin();
   const dagDetails = dag as components['schemas']['DAGDetails'] | undefined;
+  const paramSchema = React.useMemo(() => {
+    const schema = dagDetails?.paramSchema as JSONSchema | undefined;
+    if (!schema || Array.isArray(schema) || typeof schema !== 'object') {
+      return undefined;
+    }
+    if (
+      !schema.properties ||
+      Array.isArray(schema.properties) ||
+      typeof schema.properties !== 'object' ||
+      Object.keys(schema.properties).length === 0
+    ) {
+      return undefined;
+    }
+    return schema;
+  }, [dagDetails]);
   const paramDefs = React.useMemo(
     () => dagDetails?.paramDefs ?? [],
     [dagDetails]
   );
-  const useTypedFields = paramDefs.length > 0;
+  const useSchemaFields = !!paramSchema;
+  const useTypedFields = !useSchemaFields && paramDefs.length > 0;
   const initialTypedFields = React.useMemo(
     () => createParamFields(paramDefs),
     [paramDefs]
+  );
+  const initialSchemaFormData = React.useMemo(
+    () =>
+      paramSchema
+        ? buildParamSchemaFormData(paramSchema, dag?.defaultParams)
+        : {},
+    [dag?.defaultParams, paramSchema]
   );
   const initialRawParams = React.useMemo(() => {
     if (!dag?.defaultParams) {
@@ -256,6 +321,9 @@ function StartDAGModal({
     return parseParams(dag.defaultParams);
   }, [dag?.defaultParams]);
 
+  const [schemaFormData, setSchemaFormData] = React.useState<SchemaFormData>(
+    {}
+  );
   const [typedFields, setTypedFields] = React.useState<ParamField[]>([]);
   const [rawParams, setRawParams] = React.useState<Parameter[]>([]);
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>(
@@ -264,8 +332,48 @@ function StartDAGModal({
   const [submitError, setSubmitError] = React.useState<string | null>(null);
   const [submitting, setSubmitting] = React.useState(false);
   const [dagRunId, setDAGRunId] = React.useState('');
+  const [profileSelection, setProfileSelection] = React.useState(
+    defaultProfile ? DAG_DEFAULT_PROFILE_VALUE : NO_PROFILE_VALUE
+  );
   const forceEnqueue = action === 'enqueue';
   const [enqueue, setEnqueue] = React.useState(forceEnqueue);
+  const activeProfiles = React.useMemo(
+    () =>
+      profiles.filter(
+        (profile) => profile.status === RuntimeProfileStatus.active
+      ),
+    [profiles]
+  );
+  const hasDefaultProfile = defaultProfile !== '';
+  const showProfileSelector =
+    defaultProfileLoading ||
+    profilesLoading ||
+    hasDefaultProfile ||
+    activeProfiles.length > 0;
+
+  React.useEffect(() => {
+    if (
+      canUseProtectedProfiles ||
+      profileSelection === '' ||
+      profileSelection === DAG_DEFAULT_PROFILE_VALUE ||
+      profileSelection === NO_PROFILE_VALUE
+    ) {
+      return;
+    }
+    const selectedProfile = activeProfiles.find(
+      (profile) => profile.name === profileSelection
+    );
+    if (selectedProfile?.protected) {
+      setProfileSelection(
+        hasDefaultProfile ? DAG_DEFAULT_PROFILE_VALUE : NO_PROFILE_VALUE
+      );
+    }
+  }, [
+    activeProfiles,
+    canUseProtectedProfiles,
+    hasDefaultProfile,
+    profileSelection,
+  ]);
 
   const dagWithRunConfig = dag as DAGLike & {
     runConfig?: { disableParamEdit?: boolean; disableRunIdEdit?: boolean };
@@ -273,19 +381,47 @@ function StartDAGModal({
 
   const paramsReadOnly = dagWithRunConfig?.runConfig?.disableParamEdit ?? false;
   const runIdReadOnly = dagWithRunConfig?.runConfig?.disableRunIdEdit ?? false;
+  const schemaFormUiSchema = React.useMemo<
+    UiSchema<SchemaFormData> | undefined
+  >(
+    () =>
+      paramSchema
+        ? ({
+            ...buildParamSchemaUiSchema(paramSchema),
+            'ui:submitButtonOptions': { norender: true },
+          } as UiSchema<SchemaFormData>)
+        : undefined,
+    [paramSchema]
+  );
+  const schemaFormRef = React.useRef<RJSFForm<
+    SchemaFormData,
+    RJSFSchema,
+    any
+  > | null>(null);
 
   React.useEffect(() => {
     if (!visible) {
       return;
     }
+    setSchemaFormData(initialSchemaFormData);
     setTypedFields(initialTypedFields);
     setRawParams(initialRawParams);
     setFieldErrors({});
     setSubmitError(null);
     setSubmitting(false);
     setDAGRunId('');
+    setProfileSelection(
+      defaultProfile ? DAG_DEFAULT_PROFILE_VALUE : NO_PROFILE_VALUE
+    );
     setEnqueue(forceEnqueue);
-  }, [visible, initialTypedFields, initialRawParams, forceEnqueue]);
+  }, [
+    defaultProfile,
+    visible,
+    initialSchemaFormData,
+    initialTypedFields,
+    initialRawParams,
+    forceEnqueue,
+  ]);
 
   const cancelButtonRef = React.useRef<HTMLButtonElement>(null);
 
@@ -320,7 +456,16 @@ function StartDAGModal({
     }
 
     let paramsPayload = '';
-    if (useTypedFields) {
+    if (useSchemaFields) {
+      const isValid = schemaFormRef.current?.validateForm() ?? true;
+      if (!isValid) {
+        setSubmitError(
+          'Fix the highlighted parameter errors before submitting.'
+        );
+        return;
+      }
+      paramsPayload = stringifyParamSchemaFormData(schemaFormData);
+    } else if (useTypedFields) {
       const errors = validateParamFields(typedFields);
       setFieldErrors(errors);
       if (Object.keys(errors).length > 0) {
@@ -337,7 +482,20 @@ function StartDAGModal({
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await onSubmit(paramsPayload, dagRunId || undefined, !enqueue);
+      const profileOverride = profileOverrideForSelection(
+        profileSelection,
+        hasDefaultProfile
+      );
+      if (profileOverride === undefined) {
+        await onSubmit(paramsPayload, dagRunId || undefined, !enqueue);
+      } else {
+        await onSubmit(
+          paramsPayload,
+          dagRunId || undefined,
+          !enqueue,
+          profileOverride
+        );
+      }
       dismissModal();
     } catch (error) {
       setSubmitError(
@@ -351,11 +509,15 @@ function StartDAGModal({
     dagRunId,
     dismissModal,
     enqueue,
+    hasDefaultProfile,
     loadError,
     loading,
     onSubmit,
     rawParams,
+    schemaFormData,
+    useSchemaFields,
     submitting,
+    profileSelection,
     typedFields,
     useTypedFields,
   ]);
@@ -405,6 +567,9 @@ function StartDAGModal({
           <DialogTitle>
             {forceEnqueue ? 'Enqueue the DAG' : 'Start the DAG'}
           </DialogTitle>
+          <DialogDescription className="sr-only">
+            Configure the DAG run before submitting it.
+          </DialogDescription>
         </DialogHeader>
 
         {(paramsReadOnly || runIdReadOnly) && (
@@ -431,7 +596,7 @@ function StartDAGModal({
           </Alert>
         )}
 
-        <div className="py-4 space-y-4 max-h-[60vh] overflow-y-auto">
+        <div className="-mx-1 max-h-[60vh] space-y-4 overflow-y-auto px-1 py-4">
           {!forceEnqueue && (
             <div className="flex items-center space-x-2">
               <Checkbox
@@ -463,10 +628,102 @@ function StartDAGModal({
             />
           </div>
 
+          {showProfileSelector && (
+            <div className="space-y-2">
+              <Label htmlFor="runtime-profile">Profile</Label>
+              <Select
+                value={profileSelection}
+                disabled={
+                  loading ||
+                  submitting ||
+                  profilesLoading ||
+                  defaultProfileLoading
+                }
+                onValueChange={setProfileSelection}
+              >
+                <SelectTrigger id="runtime-profile" className="w-full">
+                  <SelectValue placeholder="No profile" />
+                </SelectTrigger>
+                <SelectContent>
+                  {hasDefaultProfile && (
+                    <SelectItem value={DAG_DEFAULT_PROFILE_VALUE}>
+                      <span className="flex w-full items-center justify-between gap-3">
+                        <span>DAG default</span>
+                        <span className="truncate text-xs text-muted-foreground">
+                          {defaultProfile}
+                        </span>
+                      </span>
+                    </SelectItem>
+                  )}
+                  <SelectItem value={NO_PROFILE_VALUE}>No profile</SelectItem>
+                  {activeProfiles.map((profile) => {
+                    const protectedUnavailable =
+                      profile.protected && !canUseProtectedProfiles;
+                    return (
+                      <SelectItem
+                        key={profile.id}
+                        value={profile.name}
+                        disabled={protectedUnavailable}
+                      >
+                        <span className="flex w-full items-center justify-between gap-3">
+                          <span>{profile.name}</span>
+                          <span className="flex items-center gap-1.5">
+                            {profile.protected && (
+                              <Badge
+                                variant="outline"
+                                className="h-4 px-1.5 text-[10px]"
+                              >
+                                Protected
+                              </Badge>
+                            )}
+                            {protectedUnavailable && (
+                              <Badge
+                                variant="secondary"
+                                className="h-4 px-1.5 text-[10px]"
+                              >
+                                Admin
+                              </Badge>
+                            )}
+                          </span>
+                        </span>
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
           {loading && (
             <div className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
               Loading DAG details...
             </div>
+          )}
+
+          {!loading && dag && paramSchema && (
+            <Form
+              ref={schemaFormRef}
+              tagName="div"
+              schema={paramSchema as RJSFSchema}
+              validator={validator}
+              formData={schemaFormData}
+              uiSchema={schemaFormUiSchema}
+              templates={schemaFormTemplates}
+              widgets={schemaFormWidgets}
+              disabled={paramsReadOnly || submitting}
+              readonly={paramsReadOnly}
+              noHtml5Validate
+              showErrorList={false}
+              onChange={(event: IChangeEvent<SchemaFormData>) => {
+                setSchemaFormData((event.formData ?? {}) as SchemaFormData);
+                setSubmitError(null);
+              }}
+              onError={() =>
+                setSubmitError(
+                  'Fix the highlighted parameter errors before submitting.'
+                )
+              }
+            />
           )}
 
           {!loading && dag && useTypedFields && (
@@ -525,7 +782,7 @@ function StartDAGModal({
             </>
           )}
 
-          {!loading && dag && !useTypedFields && (
+          {!loading && dag && !useSchemaFields && !useTypedFields && (
             <>
               {rawParams.map((param, index) => (
                 <div

@@ -1,13 +1,20 @@
 // Copyright (C) 2026 Yota Hamada
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { getAuthHeaders, getAuthToken } from '@/lib/authHeaders';
+import { getAuthHeaders } from '@/lib/authHeaders';
+import {
+  addAuthSessionListener,
+  getAuthToken,
+  handleAuthResponse,
+  isBuiltinAuthMode,
+} from '@/lib/authSession';
 
 const MAX_RETRY_DELAY_MS = 16000;
 const CONNECT_TIMEOUT_MS = 15000;
 const MUTATION_DEBOUNCE_MS = 200;
 const DRAINING_GRACE_PERIOD_MS = 2000;
 const FALLBACK_AFTER_RETRIES = 5;
+const AUTHENTICATION_REQUIRED_MESSAGE = 'Authentication required';
 
 export interface SSEConnectionState {
   isConnected: boolean;
@@ -165,7 +172,8 @@ export function endpointToTopic(endpoint: string): string {
     return buildTopic('doctree', query);
   }
   if (segments.length >= 3 && segments[1] === 'docs') {
-    return buildTopic('doc', segments.slice(2).join('/'));
+    const identifier = segments.slice(2).join('/');
+    return buildTopic('doc', query ? `${identifier}?${query}` : identifier);
   }
 
   throw new Error(`Unsupported SSE endpoint: ${endpoint}`);
@@ -176,22 +184,18 @@ function buildStreamUrl(
   remoteNode: string,
   topics: string[],
   lastEventId: string
-): string {
+): URL {
   const url = new URL(`${apiURL}/events/stream`, window.location.origin);
   for (const topic of [...topics].sort()) {
     url.searchParams.append('topic', topic);
   }
   url.searchParams.set('remoteNode', remoteNode);
 
-  const token = getAuthToken();
-  if (token) {
-    url.searchParams.set('token', token);
-  }
   if (lastEventId) {
     url.searchParams.set('lastEventId', lastEventId);
   }
 
-  return url.toString();
+  return url;
 }
 
 function buildMutationUrl(apiURL: string, remoteNode: string): string {
@@ -221,6 +225,20 @@ function calculateRetryDelay(retryCount: number): number {
 
 export class SSEManager {
   private connections = new Map<string, ManagedConnection>();
+
+  constructor() {
+    addAuthSessionListener((change) => {
+      if (!change.token) {
+        return;
+      }
+
+      for (const conn of Array.from(this.connections.values())) {
+        if (conn.state.error?.message === AUTHENTICATION_REQUIRED_MESSAGE) {
+          this.ensureConnected(conn);
+        }
+      }
+    });
+  }
 
   subscribe(
     endpoint: string,
@@ -317,9 +335,10 @@ export class SSEManager {
   }
 
   private handleTopicAdded(conn: ManagedConnection, topic: string): void {
+    conn.pendingRemove.delete(topic);
+
     if (conn.sessionId && conn.state.isConnected) {
       if (!conn.serverTopics.has(topic)) {
-        conn.pendingRemove.delete(topic);
         conn.pendingAdd.add(topic);
         this.notifyTopicState(conn, topic);
         this.scheduleMutation(conn);
@@ -328,7 +347,6 @@ export class SSEManager {
     }
 
     if (conn.eventSource && conn.state.isConnecting) {
-      conn.pendingRemove.delete(topic);
       conn.pendingAdd.add(topic);
       this.notifyTopicState(conn, topic);
       return;
@@ -400,6 +418,17 @@ export class SSEManager {
       return;
     }
 
+    const token = getAuthToken();
+    if (isBuiltinAuthMode() && !token) {
+      this.updateState(conn, {
+        isConnected: false,
+        isConnecting: false,
+        shouldUseFallback: false,
+        error: new Error(AUTHENTICATION_REQUIRED_MESSAGE),
+      });
+      return;
+    }
+
     if (conn.eventSource) {
       conn.eventSource.close();
       conn.eventSource = null;
@@ -415,7 +444,10 @@ export class SSEManager {
       Array.from(conn.topics.keys()),
       conn.lastEventId
     );
-    const eventSource = new EventSource(url);
+    if (token) {
+      url.searchParams.set('token', token);
+    }
+    const eventSource = new EventSource(url.toString());
     conn.eventSource = eventSource;
     conn.sessionId = null;
     conn.serverTopics.clear();
@@ -539,19 +571,23 @@ export class SSEManager {
     conn.pendingAdd.clear();
     conn.pendingRemove.clear();
 
+    const hasTopics = conn.topics.size > 0;
+    const nextRetryCount = conn.retryCount + 1;
+    const shouldUseFallback = nextRetryCount >= FALLBACK_AFTER_RETRIES;
+
     this.updateState(conn, {
       isConnected: false,
-      isConnecting: false,
-      shouldUseFallback: conn.retryCount >= FALLBACK_AFTER_RETRIES,
+      isConnecting: hasTopics && !shouldUseFallback,
+      shouldUseFallback,
       error,
     });
 
-    if (conn.topics.size === 0) {
+    if (!hasTopics) {
       return;
     }
 
     const delay = calculateRetryDelay(conn.retryCount);
-    conn.retryCount += 1;
+    conn.retryCount = nextRetryCount;
 
     conn.retryTimeout = setTimeout(() => {
       conn.retryTimeout = null;
@@ -586,10 +622,21 @@ export class SSEManager {
     const add = Array.from(conn.pendingAdd).filter((topic) =>
       conn.topics.has(topic)
     );
-    const remove = Array.from(conn.pendingRemove);
+    const remove: string[] = [];
+    for (const topic of conn.pendingRemove) {
+      if (conn.topics.has(topic)) {
+        conn.pendingRemove.delete(topic);
+        continue;
+      }
+      remove.push(topic);
+    }
     if (add.length === 0 && remove.length === 0) {
       return;
     }
+
+    const isStaleMutation = () =>
+      conn.sessionId !== mutationSessionId ||
+      conn.eventSource !== mutationEventSource;
 
     conn.mutationInFlight = true;
     try {
@@ -605,10 +652,7 @@ export class SSEManager {
           }),
         }
       );
-
-      const isStaleMutation = () =>
-        conn.sessionId !== mutationSessionId ||
-        conn.eventSource !== mutationEventSource;
+      handleAuthResponse(response);
 
       if (isStaleMutation()) {
         return;
@@ -649,6 +693,9 @@ export class SSEManager {
       }
       for (const topic of remove) {
         conn.pendingRemove.delete(topic);
+        if (conn.topics.has(topic) && !conn.serverTopics.has(topic)) {
+          conn.pendingAdd.add(topic);
+        }
       }
 
       if ('errors' in body && body.errors && body.errors.length > 0) {
@@ -656,6 +703,16 @@ export class SSEManager {
       }
       this.notifyAllTopicStates(conn);
     } catch (error) {
+      if (isStaleMutation()) {
+        return;
+      }
+      for (const topic of remove) {
+        if (conn.topics.has(topic)) {
+          conn.pendingRemove.delete(topic);
+          conn.serverTopics.delete(topic);
+          conn.pendingAdd.add(topic);
+        }
+      }
       this.updateState(conn, {
         error:
           error instanceof Error
@@ -734,6 +791,12 @@ export class SSEManager {
     }
 
     this.connections.delete(conn.key);
+  }
+
+  disposeAll(): void {
+    for (const conn of Array.from(this.connections.values())) {
+      this.disposeConnection(conn);
+    }
   }
 }
 

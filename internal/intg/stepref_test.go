@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/dagucloud/dagu/internal/core"
+	exec1 "github.com/dagucloud/dagu/internal/core/exec"
 	"github.com/dagucloud/dagu/internal/test"
 	"github.com/stretchr/testify/require"
 )
@@ -27,13 +28,13 @@ func TestStepIDPropertyAccess(t *testing.T) {
 type: graph
 steps:
   - id: gen
-    command: |
+    run: |
 %s
     output: GEN_OUTPUT
 
   - depends:
       - gen
-    command: |
+    run: |
 %s
     output: FILE_PATHS
 `, indentScript(test.JoinLines(
@@ -59,17 +60,17 @@ steps:
 type: graph
 steps:
   - id: success
-    command: exit 0
+    run: exit 0
 
   - id: failure
-    command: exit 42
+    run: exit 42
     continue_on:
       failure: true
 
   - depends:
       - success
       - failure
-    command: |
+    run: |
       echo "success_code=${success.exitCode}"
       echo "failure_code=${failure.exitCode}"
     output: EXIT_CODES
@@ -85,12 +86,12 @@ steps:
 type: graph
 steps:
   - id: first_step
-    command: echo "Hello"
+    run: echo "Hello"
     output: FIRST_OUT
 
   - depends:
       - first_step
-    command: |
+    run: |
 %s
     output: RESULT
 `, indentScript(test.JoinLines(
@@ -115,12 +116,12 @@ steps:
 type: graph
 steps:
   - id: check
-    command: echo '{"status":"from-step"}'
+    run: echo '{"status":"from-step"}'
     output: check
 
   - depends:
       - check
-    command: |
+    run: |
       echo "variable=${check.status}"
       echo "stdout=${check.stdout}"
     output: PRECEDENCE_TEST
@@ -175,17 +176,17 @@ func TestStepIDComplexScenarios(t *testing.T) {
 type: graph
 steps:
   - id: gen1
-    command: echo "data from gen1"
+    run: echo "data from gen1"
     output: DATA
 
   - id: gen2
-    command: echo "data from gen2"
+    run: echo "data from gen2"
     output: DATA
 
   - depends:
       - gen1
       - gen2
-    command: |
+    run: |
       echo "gen1_output=data from gen1"
       echo "gen2_output=data from gen2"
       echo "current_DATA=${DATA}"
@@ -215,18 +216,18 @@ steps:
 		yaml := `
 steps:
   - id: s1
-    command: echo "10"
+    run: echo "10"
     output: NUM
 
   - id: s2
-    command: echo "15"
+    run: echo "15"
     output: NUM2
 
   - id: s3
-    command: echo "20"
+    run: echo "20"
     output: NUM3
 
-  - command: |
+  - run: |
       echo "s1=10"
       echo "s2=15"
       echo "s3=20"
@@ -250,23 +251,19 @@ steps:
 	t.Run("StepIDInScript", func(t *testing.T) {
 		th := test.Setup(t)
 
-		yaml := `
+		yaml := fmt.Sprintf(`
 type: graph
 steps:
   - id: setup_step
-    command: echo '{"env":"test","timeout":30}'
+    run: echo '{"env":"test","timeout":30}'
     output: CONFIG
 
   - depends:
       - setup_step
-    script: |
-      #!/bin/bash
-      set -e
-
-      # Access file paths
-      echo "Setup logs available at: ${setup_step.stdout}"
+    run: |
+%s
     output: SCRIPT_OUTPUT
-`
+`, indentScript(test.Output("Setup logs available at: ${setup_step.stdout}"), 6))
 		testDAG := th.DAG(t, yaml)
 
 		agent := testDAG.Agent()
@@ -288,10 +285,11 @@ func TestStepScopedOutputAccess(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		yaml           string
-		expectedStatus core.Status
-		expectedOutput map[string]any
+		name               string
+		yaml               string
+		expectedStatus     core.Status
+		expectedOutput     map[string]any
+		expectedStepOutput map[string]string
 	}{
 		{
 			name: "BasicOutputAccess",
@@ -300,17 +298,17 @@ type: graph
 steps:
   - id: extract_title
     output: RESULT
-    script: |
+    run: |
       printf 'Quarterly Revenue'
 
   - id: extract_summary
     output: RESULT
-    script: |
+    run: |
       printf 'Revenue grew 18 percent year over year.'
 
   - id: report
     depends: [extract_title, extract_summary]
-    script: |
+    run: |
       printf 'Title: %s\nSummary: %s' "${extract_title.output}" "${extract_summary.output}"
     output: REPORT
 `,
@@ -326,12 +324,12 @@ type: graph
 steps:
   - id: empty_step
     output: RESULT
-    script: |
+    run: |
       printf ''
 
   - id: consumer
     depends: [empty_step]
-    script: |
+    run: |
       printf 'got:[%s]' "${empty_step.output}"
     output: CONSUMED
 `,
@@ -347,12 +345,12 @@ type: graph
 steps:
   - id: producer
     output: CAPTURED
-    script: |
+    run: |
       printf 'captured value'
 
   - id: consumer
     depends: [producer]
-    script: |
+    run: |
       printf 'output=%s\nstdout=%s' "${producer.output}" "${producer.stdout}"
     output: RESULT
 `,
@@ -372,12 +370,12 @@ steps:
 type: graph
 steps:
   - id: no_output
-    script: |
+    run: |
       printf 'hello'
 
   - id: consumer
     depends: [no_output]
-    command: %q
+    run: %q
     output: RESULT
 `, test.Output("ref=${no_output.output}")),
 			expectedStatus: core.Succeeded,
@@ -392,11 +390,11 @@ type: graph
 steps:
   - id: check
     output: check
-    command: %q
+    run: %q
 
   - id: consumer
     depends: [check]
-    command: %q
+    run: %q
     output: RESULT
 `, test.Output(`{"output":"from-json"}`), test.Output("value=${check.output}")),
 			expectedStatus: core.Succeeded,
@@ -412,12 +410,12 @@ type: graph
 steps:
   - id: producer
     output: DATA
-    script: |
+    run: |
       printf 'hello world'
 
   - id: consumer
     depends: [producer]
-    script: |
+    run: |
       printf 'sliced=%s' "${producer.output:0:5}"
     output: RESULT
 `,
@@ -425,6 +423,132 @@ steps:
 			expectedOutput: map[string]any{
 				"DATA":   "hello world",
 				"RESULT": "sliced=hello",
+			},
+		},
+		{
+			name: "NestedJSONOutputAccess",
+			yaml: `
+type: graph
+steps:
+  - id: build
+    output: BUILD_JSON
+    run: |
+      printf '{"version":"v1.2.3","artifact":{"url":"https://example.test/release.tgz"}}'
+
+  - id: consumer
+    depends: [build]
+    run: |
+      printf 'version=%s\nartifact=%s' "${build.output.version}" "${build.output.artifact.url}"
+    output: RESULT
+`,
+			expectedStatus: core.Succeeded,
+			expectedOutput: map[string]any{
+				"BUILD_JSON": `{"version":"v1.2.3","artifact":{"url":"https://example.test/release.tgz"}}`,
+				"RESULT":     "version=v1.2.3\nartifact=https://example.test/release.tgz",
+			},
+		},
+		{
+			name: "StructuredOutputFromStdout",
+			yaml: `
+type: graph
+steps:
+  - id: analyze
+    run: |
+      printf '{"version":"v1.2.3","artifact":{"url":"https://example.test/release.tgz"}}'
+    output:
+      version:
+        from: stdout
+        decode: json
+        select: .version
+      artifact:
+        from: stdout
+        decode: json
+        select: .artifact
+
+  - id: consumer
+    depends: [analyze]
+    run: |
+      printf 'version=%s\nartifact=%s' "${analyze.output.version}" "${analyze.output.artifact.url}"
+    output: RESULT
+`,
+			expectedStatus: core.Succeeded,
+			expectedOutput: map[string]any{
+				"RESULT": "version=v1.2.3\nartifact=https://example.test/release.tgz",
+			},
+			expectedStepOutput: map[string]string{
+				"analyze": `{"artifact":{"url":"https://example.test/release.tgz"},"version":"v1.2.3"}`,
+			},
+		},
+		{
+			name: "StructuredOutputPublishOnlyNoop",
+			yaml: `
+type: graph
+steps:
+  - id: build
+    run: |
+      printf '{"version":"v1.2.3","artifact":{"url":"https://example.test/release.tgz"}}'
+    output: BUILD_JSON
+
+  - id: publish
+    depends: [build]
+    output:
+      version: "${build.output.version}"
+      versionLabel: "ver - ${build.output.version}"
+      artifact:
+        url: "${build.output.artifact.url}"
+
+  - id: consumer
+    depends: [publish]
+    run: |
+      printf 'version=%s\nlabel=%s\nartifact=%s' "${publish.output.version}" "${publish.output.versionLabel}" "${publish.output.artifact.url}"
+    output: RESULT
+`,
+			expectedStatus: core.Succeeded,
+			expectedOutput: map[string]any{
+				"BUILD_JSON": `{"version":"v1.2.3","artifact":{"url":"https://example.test/release.tgz"}}`,
+				"RESULT":     "version=v1.2.3\nlabel=ver - v1.2.3\nartifact=https://example.test/release.tgz",
+			},
+			expectedStepOutput: map[string]string{
+				"publish": `{"artifact":{"url":"https://example.test/release.tgz"},"version":"v1.2.3","versionLabel":"ver - v1.2.3"}`,
+			},
+		},
+		{
+			name: "StructuredOutputFromFileAndStderr",
+			yaml: fmt.Sprintf(`
+type: graph
+steps:
+  - id: producer
+    run: |
+%s
+    output:
+      artifactPath:
+        from: file
+        path: meta.json
+        decode: json
+        select: .artifact.path
+      warning:
+        from: stderr
+        decode: json
+        select: .warning
+
+  - id: consumer
+    depends: [producer]
+    run: |
+%s
+    output: RESULT
+`, indentScript(test.JoinLines(
+				test.ForOS(
+					`printf '%s' '{"artifact":{"path":"build/report.md"}}' > meta.json`,
+					`Set-Content -Path meta.json -Value '{"artifact":{"path":"build/report.md"}}' -NoNewline`,
+				),
+				test.Stderr(`{"warning":"retry required"}`),
+			), 6), indentScript(test.ForOS(
+				`printf 'artifact=%s\nwarning=%s' "${producer.output.artifactPath}" "${producer.output.warning}"`,
+				`Write-Output ("artifact={0}{1}warning={2}" -f "${producer.output.artifactPath}", [Environment]::NewLine, "${producer.output.warning}")`,
+			), 6)),
+			expectedStatus: core.Succeeded,
+			expectedOutput: map[string]any{
+				"RESULT": "artifact=build/report.md\nwarning=retry required",
 			},
 		},
 	}
@@ -448,8 +572,32 @@ steps:
 			if tc.expectedOutput != nil {
 				testDAG.AssertOutputs(t, tc.expectedOutput)
 			}
+
+			if tc.expectedStepOutput != nil {
+				status, statusErr := th.DAGRunMgr.GetLatestStatus(th.Context, testDAG.DAG)
+				require.NoError(t, statusErr)
+
+				for stepID, expected := range tc.expectedStepOutput {
+					node := findNodeByStepID(t, status.Nodes, stepID)
+					require.NotNil(t, node.OutputValue, "step %s should expose step-scoped output", stepID)
+					require.JSONEq(t, expected, *node.OutputValue)
+				}
+			}
 		})
 	}
+}
+
+func findNodeByStepID(t *testing.T, nodes []*exec1.Node, stepID string) *exec1.Node {
+	t.Helper()
+
+	for _, node := range nodes {
+		if node.Step.ID == stepID {
+			return node
+		}
+	}
+
+	t.Fatalf("step %s not found", stepID)
+	return nil
 }
 
 func TestStepIDErrorCases(t *testing.T) {
@@ -462,12 +610,12 @@ func TestStepIDErrorCases(t *testing.T) {
 type: graph
 steps:
   - id: gen
-    command: echo "not json"
+    run: echo "not json"
     output: DATA
 
   - depends:
       - gen
-    command: |
+    run: |
       echo "data=not json"
     output: RESULT
 `

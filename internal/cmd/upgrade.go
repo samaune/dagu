@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/dagucloud/dagu/internal/persis/fileupgradecheck"
+	"github.com/dagucloud/dagu/internal/persis/file"
 	"github.com/dagucloud/dagu/internal/upgrade"
 	"github.com/spf13/cobra"
 )
@@ -95,7 +95,7 @@ func runUpgrade(ctx *Context, _ []string) error {
 		return fmt.Errorf("%s", reason)
 	}
 
-	upgradeStore, err := fileupgradecheck.New(ctx.Config.Paths.DataDir)
+	upgradeStore, err := file.NewUpgradeCheckStore(ctx.Config)
 	if err != nil {
 		return fmt.Errorf("failed to create upgrade check store: %w", err)
 	}
@@ -138,7 +138,7 @@ func runUpgrade(ctx *Context, _ []string) error {
 
 	if !skipConfirm {
 		fmt.Printf("Current version: %s\n", result.CurrentVersion)
-		fmt.Printf("Target version:  %s\n\n", result.TargetVersion)
+		fmt.Printf("Target version: %s\n\n", result.TargetVersion)
 		fmt.Println("The following changes will be made:")
 		fmt.Printf("  - Download: %s (%s)\n", result.AssetName, upgrade.FormatBytes(result.AssetSize))
 		fmt.Println("  - Verify:   SHA256 checksum")

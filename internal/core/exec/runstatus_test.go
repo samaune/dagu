@@ -39,6 +39,31 @@ func TestInitialStatusSnapshotsDAGRetryMetadata(t *testing.T) {
 	assert.Equal(t, "retry-dag", status.SuspendFlagName)
 }
 
+func TestInitialStatusSnapshotsDisabledDAGRetryPolicy(t *testing.T) {
+	t.Parallel()
+
+	dag := &core.DAG{
+		Name:     "retry-disabled-dag",
+		Queue:    "shared-queue",
+		Location: "/tmp/retry-disabled-dag.yaml",
+		RetryPolicy: &core.DAGRetryPolicy{
+			Limit:       0,
+			Interval:    time.Minute,
+			Backoff:     0,
+			MaxInterval: time.Hour,
+		},
+	}
+
+	status := exec.InitialStatus(dag)
+
+	assert.Equal(t, 0, status.AutoRetryLimit)
+	assert.Equal(t, time.Minute, status.AutoRetryInterval)
+	assert.Equal(t, 0.0, status.AutoRetryBackoff)
+	assert.Equal(t, time.Hour, status.AutoRetryMaxInterval)
+	assert.Equal(t, "shared-queue", status.ProcGroup)
+	assert.Equal(t, "retry-disabled-dag", status.SuspendFlagName)
+}
+
 func TestPendingStepRetriesFromStatus(t *testing.T) {
 	t.Parallel()
 
@@ -167,4 +192,18 @@ func TestPendingStepRetriesFromStatus(t *testing.T) {
 		require.NotNil(t, decoded.PendingStepRetries)
 		assert.Empty(t, exec.PendingStepRetriesFromStatus(&decoded))
 	})
+}
+
+func TestDAGRunStatusUnmarshalJSONDeprecatedTags(t *testing.T) {
+	t.Parallel()
+
+	var status exec.DAGRunStatus
+	err := json.Unmarshal([]byte(`{"name":"legacy","tags":["env=prod","team=platform"]}`), &status)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"env=prod", "team=platform"}, status.Labels)
+
+	var explicitLabels exec.DAGRunStatus
+	err = json.Unmarshal([]byte(`{"name":"canonical","labels":[],"tags":["env=legacy"]}`), &explicitLabels)
+	require.NoError(t, err)
+	assert.Empty(t, explicitLabels.Labels)
 }

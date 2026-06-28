@@ -1,7 +1,10 @@
 import React, { useMemo } from 'react';
 import { components } from '@/api/v1/schema';
 import dayjs from '@/lib/dayjs';
-import { useDateKanbanData } from '../hooks/useDateKanbanData';
+import {
+  KanbanFilters,
+  useDateKanbanData,
+} from '../hooks/useDateKanbanData';
 import { KanbanBoard } from './KanbanBoard';
 
 type DAGRunSummary = components['schemas']['DAGRunSummary'];
@@ -9,8 +12,13 @@ type DAGRunSummary = components['schemas']['DAGRunSummary'];
 interface Props {
   date: string;
   todayStr: string;
-  selectedWorkspace: string;
+  /**
+   * Explicit filters for a saved view. When omitted, the Kanban data falls
+   * back to the global AppBar workspace selection (Cockpit behavior).
+   */
+  filters?: KanbanFilters;
   onCardClick: (run: DAGRunSummary) => void;
+  onArtifactsClick: (run: DAGRunSummary) => void;
 }
 
 function formatDateHeader(date: string): string {
@@ -20,8 +28,9 @@ function formatDateHeader(date: string): string {
 export function DateKanbanSection({
   date,
   todayStr,
-  selectedWorkspace,
+  filters,
   onCardClick,
+  onArtifactsClick,
 }: Props): React.ReactElement {
   const yesterdayStr = useMemo(
     () => dayjs(todayStr).subtract(1, 'day').format('YYYY-MM-DD'),
@@ -31,9 +40,9 @@ export function DateKanbanSection({
   const isLive = isToday || date === yesterdayStr;
   const { columns, error, isLoading, isEmpty, retry } = useDateKanbanData(
     date,
-    selectedWorkspace,
     isToday,
-    isLive
+    isLive,
+    filters
   );
 
   return (
@@ -44,10 +53,14 @@ export function DateKanbanSection({
         </h2>
       </div>
       {isLoading ? (
-        <div className="px-1 py-3 text-xs text-muted-foreground">Loading runs...</div>
+        <div className="px-1 py-3 text-xs text-muted-foreground">
+          Loading runs...
+        </div>
       ) : error ? (
         <div className="px-1 py-3 flex items-center gap-3 text-xs">
-          <span className="text-destructive">{error.message || 'Failed to load runs'}</span>
+          <span className="text-destructive">
+            {error.message || 'Failed to load runs'}
+          </span>
           <button
             type="button"
             onClick={() => void retry()}
@@ -59,7 +72,11 @@ export function DateKanbanSection({
       ) : isEmpty ? (
         <div className="px-1 py-3 text-xs text-muted-foreground">No runs</div>
       ) : (
-        <KanbanBoard columns={columns} onCardClick={onCardClick} />
+        <KanbanBoard
+          columns={columns}
+          onCardClick={onCardClick}
+          onArtifactsClick={onArtifactsClick}
+        />
       )}
     </div>
   );

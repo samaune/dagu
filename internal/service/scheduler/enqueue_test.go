@@ -25,7 +25,7 @@ func TestEnqueueCatchupRun_PersistsQueuedCatchupMetadata(t *testing.T) {
 	dag := th.DAG(t, `name: enqueue-catchup-dag
 steps:
   - name: step1
-    command: echo enqueue
+    run: echo enqueue
 `)
 
 	runID := "catchup-run-1"
@@ -42,6 +42,7 @@ steps:
 		runID,
 		core.TriggerTypeCatchUp,
 		scheduleTime,
+		"prod",
 	)
 	require.NoError(t, err)
 
@@ -54,6 +55,7 @@ steps:
 	require.Equal(t, core.Queued, status.Status)
 	require.Equal(t, core.TriggerTypeCatchUp, status.TriggerType)
 	require.Equal(t, stringutil.FormatTime(scheduleTime), status.ScheduleTime)
+	require.Equal(t, "prod", status.ProfileName)
 	require.NotEmpty(t, status.Log)
 	assert.Contains(t, status.Log, filepath.Join(th.Config.Paths.LogDir, dag.Name))
 
@@ -78,7 +80,7 @@ secrets:
     key: SECRET_SOURCE
 steps:
   - name: step1
-    command: echo enqueue
+    run: echo enqueue
 `)
 
 	metadataOnly, err := spec.Load(
@@ -106,6 +108,7 @@ steps:
 		runID,
 		core.TriggerTypeCatchUp,
 		scheduleTime,
+		"",
 	)
 	require.NoError(t, err)
 

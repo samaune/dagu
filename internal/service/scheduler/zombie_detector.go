@@ -14,6 +14,7 @@ import (
 
 	"github.com/dagucloud/dagu/internal/cmn/logger"
 	"github.com/dagucloud/dagu/internal/cmn/logger/tag"
+	"github.com/dagucloud/dagu/internal/cmn/procutil"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
 	"github.com/dagucloud/dagu/internal/runtime"
@@ -244,6 +245,24 @@ func (z *ZombieDetector) checkAndCleanZombie(ctx context.Context, entry exec.Pro
 		return nil
 	}
 
+	if status.PID > 0 && status.PIDStartedAt > 0 {
+		matched, actualStartedAt, ok := procutil.MatchesStartTime(int(status.PID), status.PIDStartedAt)
+		if matched {
+			logger.Warn(ctx, "Skipping zombie repair because local process identity is still alive despite stale proc heartbeat",
+				tag.PID(int(status.PID)),
+				slog.Int("stale_count", count),
+			)
+			return nil
+		}
+		if ok {
+			logger.Debug(ctx, "Not skipping zombie repair because PID start time does not match persisted run status",
+				tag.PID(int(status.PID)),
+				slog.Int64("expected-pid-started-at", status.PIDStartedAt),
+				slog.Int64("actual-pid-started-at", actualStartedAt),
+			)
+		}
+	}
+
 	dag, err := attempt.ReadDAG(ctx)
 	if err != nil {
 		return fmt.Errorf("read dag: %w", err)
@@ -272,11 +291,19 @@ func (z *ZombieDetector) checkAndCleanZombie(ctx context.Context, entry exec.Pro
 }
 
 func (z *ZombieDetector) cleanupOrphanedStaleEntry(ctx context.Context, entry exec.ProcEntry, attemptKey string, findErr error) error {
-	if !errors.Is(findErr, exec.ErrDAGRunIDNotFound) {
+	if !errors.Is(findErr, exec.ErrDAGRunIDNotFound) &&
+		!errors.Is(findErr, exec.ErrNoStatusData) &&
+		!errors.Is(findErr, exec.ErrCorruptedStatusFile) {
 		return fmt.Errorf("find attempt: %w", findErr)
 	}
 
-	logger.Info(ctx, "Removing orphaned stale proc entry with no persisted DAG run", tag.Error(findErr))
+	if errors.Is(findErr, exec.ErrCorruptedStatusFile) {
+		logger.Warn(ctx, "Removing orphaned stale proc entry with corrupted persisted DAG run state", tag.Error(findErr))
+	} else {
+		logger.Info(ctx, "Removing orphaned stale proc entry with missing persisted DAG run state", tag.Error(findErr))
+	}
+	// A corrupted or missing status snapshot cannot be used for recovery, so the
+	// stale proc entry must be dropped to stop reporting the run as active.
 	z.clearAttemptState(attemptKey)
 	if err := z.procStore.RemoveIfStale(ctx, entry); err != nil {
 		return fmt.Errorf("remove orphaned stale proc: %w", err)

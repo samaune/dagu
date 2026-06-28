@@ -8,10 +8,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/dagucloud/dagu/internal/cmd"
+	"github.com/dagucloud/dagu/internal/cmn/config"
+	"github.com/dagucloud/dagu/internal/cmn/masking"
 	"github.com/dagucloud/dagu/internal/cmn/stringutil"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
@@ -31,7 +35,7 @@ func TestRetryCommand(t *testing.T) {
 		dagFile := th.DAG(t, `params: "p1"
 steps:
   - name: "1"
-    command: echo param is $1
+    run: echo param is $1
 `)
 
 		// Run a DAG.
@@ -66,7 +70,7 @@ steps:
 		dagFile := th.DAG(t, `params: "p1"
 steps:
   - name: "1"
-    command: echo param is $1
+    run: echo param is $1
 `)
 
 		// Run a DAG.
@@ -101,7 +105,7 @@ steps:
 		dagFile := th.DAG(t, `name: queued-catchup-dag
 steps:
   - name: "1"
-    command: echo queued catchup
+    run: echo queued catchup
 `)
 
 		runID := "queued-catchup-run"
@@ -143,7 +147,7 @@ steps:
 		dagFile := th.DAG(t, `name: queued-retry-dag
 steps:
   - name: "1"
-    command: echo queued retry
+    run: echo queued retry
 `)
 
 		runID := "queued-retry-run"
@@ -177,6 +181,67 @@ steps:
 		require.Equal(t, core.TriggerTypeRetry, latestStatus.TriggerType)
 	})
 
+	t.Run("QueuedRetryDoesNotWaitForTerminalSourceProc", func(t *testing.T) {
+		const dagName = "queued-retry-live-source-dag"
+		th := test.SetupCommand(t, test.WithConfigMutator(func(cfg *config.Config) {
+			cfg.Queues = config.Queues{
+				Enabled: true,
+				Config: []config.QueueConfig{{
+					Name:          dagName,
+					MaxActiveRuns: 1,
+				}},
+			}
+		}))
+
+		dagFile := th.DAG(t, `name: queued-retry-live-source-dag
+steps:
+  - name: "1"
+    run: echo queued retry
+`)
+
+		runID := "queued-retry-live-source-run"
+		startedAt := time.Now().Add(-time.Minute)
+		attempt, err := th.DAGRunStore.CreateAttempt(th.Context, dagFile.DAG, startedAt, runID, exec.NewDAGRunAttemptOptions{})
+		require.NoError(t, err)
+		logPath := filepath.Join(th.Config.Paths.LogDir, "queued-retry-live-source-test.log")
+		require.NoError(t, os.MkdirAll(filepath.Dir(logPath), 0o750))
+
+		status := transform.NewStatusBuilder(dagFile.DAG).Create(
+			runID,
+			core.Failed,
+			1,
+			startedAt,
+			transform.WithAttemptID(attempt.ID()),
+			transform.WithLogFilePath(logPath),
+		)
+		writeStatus(t, th.Context, attempt, status)
+
+		proc, err := th.ProcStore.Acquire(th.Context, dagFile.ProcGroup(), exec.ProcMeta{
+			StartedAt:    startedAt.Unix(),
+			Name:         dagFile.Name,
+			DAGRunID:     runID,
+			AttemptID:    attempt.ID(),
+			RootName:     dagFile.Name,
+			RootDAGRunID: runID,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = proc.Stop(th.Context)
+		})
+
+		args := []string{"retry", fmt.Sprintf("--run-id=%s", runID), dagFile.Location}
+		th.RunCommand(t, cmd.Retry(), test.CmdTest{Args: args})
+
+		items, err := th.QueueStore.List(th.Context, dagFile.ProcGroup())
+		require.NoError(t, err)
+		require.Len(t, items, 1)
+
+		queuedStatus, err := attempt.ReadStatus(th.Context)
+		require.NoError(t, err)
+		require.Equal(t, core.Queued, queuedStatus.Status)
+		require.Equal(t, core.TriggerTypeRetry, queuedStatus.TriggerType)
+	})
+
 	t.Run("QueueDispatchRetryTreatsMissingRunAsStaleDispatch", func(t *testing.T) {
 		th := test.SetupCommand(t)
 		t.Setenv(exec.EnvKeyQueueDispatchRetry, "1")
@@ -184,7 +249,7 @@ steps:
 		dagFile := th.DAG(t, `name: queue-dispatch-stale-retry
 steps:
   - name: "1"
-    command: echo stale dispatch
+    run: echo stale dispatch
 `)
 
 		err := th.RunCommandWithError(t, cmd.Retry(), test.CmdTest{
@@ -192,6 +257,88 @@ steps:
 		})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "dag-run is not queued")
+	})
+
+	t.Run("QueueDispatchRetryUsesQueuedAttempt", func(t *testing.T) {
+		th := test.SetupCommand(t)
+		t.Setenv(exec.EnvKeyQueueDispatchRetry, "1")
+
+		dagFile := th.DAG(t, `name: queue-dispatch-existing-attempt
+steps:
+  - name: "1"
+    run: echo queued dispatch
+`)
+
+		runID := "queue-dispatch-run"
+		attempt, err := th.DAGRunStore.CreateAttempt(th.Context, dagFile.DAG, time.Now(), runID, exec.NewDAGRunAttemptOptions{})
+		require.NoError(t, err)
+		logPath := filepath.Join(th.Config.Paths.LogDir, "queue-dispatch-test.log")
+		require.NoError(t, os.MkdirAll(filepath.Dir(logPath), 0o750))
+
+		status := transform.NewStatusBuilder(dagFile.DAG).Create(
+			runID,
+			core.Queued,
+			0,
+			time.Time{},
+			transform.WithAttemptID(attempt.ID()),
+			transform.WithTriggerType(core.TriggerTypeWebhook),
+			transform.WithQueuedAt(stringutil.FormatTime(time.Now())),
+			transform.WithLogFilePath(logPath),
+		)
+		writeStatus(t, th.Context, attempt, status)
+
+		args := []string{"retry", fmt.Sprintf("--run-id=%s", runID), dagFile.Location}
+		th.RunCommand(t, cmd.Retry(), test.CmdTest{Args: args})
+
+		latestAttempt, err := th.DAGRunStore.FindAttempt(th.Context, exec.NewDAGRunRef(dagFile.Name, runID))
+		require.NoError(t, err)
+		require.Equal(t, attempt.ID(), latestAttempt.ID())
+
+		latestStatus, err := latestAttempt.ReadStatus(th.Context)
+		require.NoError(t, err)
+		require.Equal(t, core.Succeeded, latestStatus.Status)
+		require.Equal(t, core.TriggerTypeWebhook, latestStatus.TriggerType)
+	})
+
+	t.Run("QueueDispatchRetryTriggerCreatesNewAttempt", func(t *testing.T) {
+		th := test.SetupCommand(t)
+		t.Setenv(exec.EnvKeyQueueDispatchRetry, "1")
+
+		dagFile := th.DAG(t, `name: queue-dispatch-retry-attempt
+steps:
+  - name: "1"
+    run: echo queued retry dispatch
+`)
+
+		runID := "queue-dispatch-retry-run"
+		attempt, err := th.DAGRunStore.CreateAttempt(th.Context, dagFile.DAG, time.Now(), runID, exec.NewDAGRunAttemptOptions{})
+		require.NoError(t, err)
+		logPath := filepath.Join(th.Config.Paths.LogDir, "queue-dispatch-retry-test.log")
+		require.NoError(t, os.MkdirAll(filepath.Dir(logPath), 0o750))
+
+		status := transform.NewStatusBuilder(dagFile.DAG).Create(
+			runID,
+			core.Queued,
+			0,
+			time.Time{},
+			transform.WithAttemptID(attempt.ID()),
+			transform.WithTriggerType(core.TriggerTypeRetry),
+			transform.WithQueuedAt(stringutil.FormatTime(time.Now())),
+			transform.WithLogFilePath(logPath),
+		)
+		writeStatus(t, th.Context, attempt, status)
+
+		args := []string{"retry", fmt.Sprintf("--run-id=%s", runID), dagFile.Location}
+		th.RunCommand(t, cmd.Retry(), test.CmdTest{Args: args})
+
+		latestAttempt, err := th.DAGRunStore.FindAttempt(th.Context, exec.NewDAGRunRef(dagFile.Name, runID))
+		require.NoError(t, err)
+		require.NotEqual(t, attempt.ID(), latestAttempt.ID())
+
+		latestStatus, err := latestAttempt.ReadStatus(th.Context)
+		require.NoError(t, err)
+		require.Equal(t, core.Succeeded, latestStatus.Status)
+		require.Equal(t, core.TriggerTypeRetry, latestStatus.TriggerType)
 	})
 
 	t.Run("RetryAllowsRootFlagPointingAtSameRun", func(t *testing.T) {
@@ -202,7 +349,7 @@ steps:
 		dagFile := th.DAG(t, `name: retry-root-same-run
 steps:
   - name: "1"
-    command: echo retry root
+    run: echo retry root
 `)
 
 		th.RunCommand(t, cmd.Start(), test.CmdTest{
@@ -229,6 +376,73 @@ steps:
 		require.Equal(t, core.Succeeded, latestStatus.Status)
 	})
 
+	t.Run("StepRetryPreservesExplicitWorkingDir", func(t *testing.T) {
+		t.Parallel()
+
+		th := test.SetupCommand(t)
+		workDir := t.TempDir()
+		shell := test.ForOS("sh", "powershell")
+		command := test.ForOS(`      pwd > observed.txt
+      if [ ! -f marker ]; then
+        touch marker
+        exit 1
+      fi
+      echo retry ok`, `      (Get-Location).Path | Set-Content -Path observed.txt -NoNewline
+      if (-not (Test-Path marker)) {
+        New-Item -ItemType File marker | Out-Null
+        exit 1
+      }
+      Write-Output "retry ok"`)
+
+		dagFile := th.DAG(t, fmt.Sprintf(`name: retry-working-dir
+working_dir: %q
+steps:
+  - name: target
+    run: |
+%s
+    with:
+      shell: %s
+`, workDir, command, shell))
+
+		runID := "retry-working-dir-run"
+		err := th.RunCommandWithError(t, cmd.Start(), test.CmdTest{
+			Args: []string{"start", "--run-id", runID, dagFile.Location},
+		})
+		require.Error(t, err)
+
+		failedAttempt, err := th.DAGRunStore.FindAttempt(th.Context, exec.NewDAGRunRef(dagFile.Name, runID))
+		require.NoError(t, err)
+		failedStatus, err := failedAttempt.ReadStatus(th.Context)
+		require.NoError(t, err)
+		require.Equal(t, filepath.Clean(workDir), filepath.Clean(failedStatus.WorkingDir))
+		require.Len(t, failedStatus.Nodes, 1)
+		require.Equal(t, filepath.Clean(workDir), filepath.Clean(failedStatus.Nodes[0].WorkingDir))
+
+		th.RunCommand(t, cmd.Retry(), test.CmdTest{
+			Args: []string{"retry", "--run-id", runID, "--step", "target", dagFile.Name},
+		})
+
+		latestAttempt, err := th.DAGRunStore.FindAttempt(th.Context, exec.NewDAGRunRef(dagFile.Name, runID))
+		require.NoError(t, err)
+		latestStatus, err := latestAttempt.ReadStatus(th.Context)
+		require.NoError(t, err)
+		require.Equal(t, core.Succeeded, latestStatus.Status)
+
+		observed, err := os.ReadFile(filepath.Join(workDir, "observed.txt"))
+		require.NoError(t, err)
+		expectedDir := filepath.Clean(workDir)
+		observedDir := filepath.Clean(strings.TrimSpace(string(observed)))
+		if runtime.GOOS == "windows" {
+			expectedInfo, err := os.Stat(expectedDir)
+			require.NoError(t, err)
+			observedInfo, err := os.Stat(observedDir)
+			require.NoError(t, err)
+			require.True(t, os.SameFile(expectedInfo, observedInfo), "expected %q, got %q", expectedDir, observedDir)
+		} else {
+			require.Equal(t, expectedDir, observedDir)
+		}
+	})
+
 	t.Run("QueuedCatchupRetryRestoresEnvSecretsFromPersistedFullDAG", func(t *testing.T) {
 		th := test.SetupCommand(t)
 		t.Setenv("QUEUED_CATCHUP_SECRET_SOURCE", "from-host")
@@ -240,7 +454,7 @@ secrets:
     key: QUEUED_CATCHUP_SECRET_SOURCE
 steps:
   - name: "1"
-    command: printf '%s|%s' "$EXPORTED_SECRET" "${QUEUED_CATCHUP_SECRET_SOURCE:-}"
+    run: printf '%s|%s' "$EXPORTED_SECRET" "${QUEUED_CATCHUP_SECRET_SOURCE:-}"
     output: RESULT
 `)
 
@@ -267,6 +481,7 @@ steps:
 			runID,
 			core.TriggerTypeCatchUp,
 			scheduleTime,
+			"",
 		))
 
 		args := []string{"retry", fmt.Sprintf("--run-id=%s", runID), dagFile.Location}
@@ -279,7 +494,7 @@ steps:
 		require.NoError(t, err)
 		require.Equal(t, core.Succeeded, latestStatus.Status)
 		require.Equal(t, core.TriggerTypeCatchUp, latestStatus.TriggerType)
-		require.Equal(t, "from-host|", test.StatusOutputValue(t, latestStatus, "RESULT"))
+		require.Equal(t, masking.DefaultMaskString+"|", test.StatusOutputValue(t, latestStatus, "RESULT"))
 	})
 
 	t.Run("TrueRetryKeepsRetryTriggerType", func(t *testing.T) {
@@ -290,7 +505,7 @@ steps:
 		dagFile := th.DAG(t, `name: retry-trigger-dag
 steps:
   - name: "1"
-    command: echo retry trigger
+    run: echo retry trigger
 `)
 
 		th.RunCommand(t, cmd.Start(), test.CmdTest{Args: []string{"start", dagFile.Location}})
@@ -322,14 +537,15 @@ env:
   - EXPORTED_SECRET: ${CMD_RETRY_EXPLICIT_ENV}
 steps:
   - name: "capture"
-    shell: bash
-    command: |
+    run: |
       if [ ! -f %[1]q ]; then
         touch %[1]q
         printf '%%s|%%s' "$EXPORTED_SECRET" "${CMD_RETRY_EXPLICIT_ENV:-}"
         exit 1
       fi
       printf '%%s|%%s' "$EXPORTED_SECRET" "${CMD_RETRY_EXPLICIT_ENV:-}"
+    with:
+      shell: bash
     output: RESULT
 `, markerPath))
 

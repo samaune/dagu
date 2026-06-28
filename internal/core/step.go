@@ -6,10 +6,9 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
-
-	"github.com/google/jsonschema-go/jsonschema"
 )
 
 // Step contains the runtime information for a step in a DAG.
@@ -54,21 +53,25 @@ type Step struct {
 	Commands []CommandEntry `json:"commands,omitempty"`
 	// Stdout is the file to store the standard output.
 	Stdout string `json:"stdout,omitempty"`
+	// StdoutArtifact is the artifact-relative file path to store standard output.
+	StdoutArtifact string `json:"stdoutArtifact,omitempty"`
+	// StdoutOutputs maps standard output into the DAG/action outputs object.
+	StdoutOutputs *StepOutputsConfig `json:"stdoutOutputs,omitempty"`
 	// Stderr is the file to store the standard error.
 	Stderr string `json:"stderr,omitempty"`
+	// StderrArtifact is the artifact-relative file path to store standard error.
+	StderrArtifact string `json:"stderrArtifact,omitempty"`
 	// LogOutput specifies how stdout and stderr are handled in log files for this step.
 	// Overrides the DAG-level LogOutput setting. Empty string means inherit from DAG.
 	LogOutput LogOutputMode `json:"logOutput,omitempty"`
-	// Output is the variable name to store the output.
+	// Output is the variable name to store captured stdout.
 	Output string `json:"output,omitempty"`
-	// OutputKey is the custom key for the output in outputs.json.
-	// If empty, the Output name is converted from UPPER_CASE to camelCase.
-	OutputKey string `json:"outputKey,omitempty"`
-	// OutputOmit excludes this output from outputs.json when true.
-	OutputOmit bool `json:"outputOmit,omitempty"`
-	// OutputSchema is the compiled JSON schema for validating step output.
-	// Not serialized - re-compiled from YAML on each load.
-	OutputSchema *jsonschema.Resolved `json:"-"`
+	// StructuredOutput publishes post-processed step-scoped outputs for ${step.output.*} access.
+	StructuredOutput map[string]StepOutputEntry `json:"structuredOutput,omitempty"`
+	// OutputSchema validates stdout JSON before publishing step-scoped output.
+	OutputSchema map[string]any `json:"outputSchema,omitzero"`
+	// Outputs declares file-based step outputs published through DAGU_OUTPUT_FILE.
+	Outputs []StepOutputDeclaration `json:"outputs,omitempty"`
 	// Depends contains the list of step names to depend on.
 	Depends []string `json:"depends,omitempty"`
 	// ExplicitlyNoDeps indicates the depends field was explicitly set to empty
@@ -91,6 +94,8 @@ type Step struct {
 	WorkerSelector map[string]string `json:"workerSelector,omitempty"`
 	// Parallel contains the configuration for parallel execution.
 	Parallel *ParallelConfig `json:"parallel,omitempty"`
+	// Foreach contains the configuration for inline item-body iteration.
+	Foreach *ForeachConfig `json:"foreach,omitempty"`
 	// Env contains environment variables for the step.
 	Env []string `json:"env,omitempty"`
 	// Params contains parameters/inputs for the step.
@@ -119,25 +124,62 @@ type Step struct {
 	Approval *ApprovalConfig `json:"approval,omitempty"`
 }
 
+const (
+	StepOutputSourceStdout = "stdout"
+	StepOutputSourceStderr = "stderr"
+	StepOutputSourceFile   = "file"
+
+	StepOutputDecodeText = "text"
+	StepOutputDecodeJSON = "json"
+	StepOutputDecodeYAML = "yaml"
+
+	StepDeclaredOutputTypeString = "string"
+	StepDeclaredOutputTypeJSON   = "json"
+)
+
+// StepOutputEntry defines one structured object-form output entry.
+type StepOutputEntry struct {
+	// HasValue distinguishes literal/null values from source-based outputs.
+	HasValue bool `json:"hasValue,omitempty"`
+	// Value is the literal value to publish when HasValue is true.
+	Value any `json:"value"`
+	// From selects a runtime source to read from: stdout, stderr, or file.
+	From string `json:"from,omitempty"`
+	// Path is the file path used when From is file.
+	Path string `json:"path,omitempty"`
+	// Decode controls how the source content is decoded before selection.
+	Decode string `json:"decode,omitempty"`
+	// Select is an optional jq/gojq path applied after decode.
+	Select string `json:"select,omitempty"`
+}
+
+// StepOutputsConfig defines how stdout is mapped into the DAG/action outputs object.
+type StepOutputsConfig struct {
+	// Field writes the decoded stdout value to a single outputs field.
+	Field string `json:"field,omitempty"`
+	// Decode controls how stdout is decoded before writing outputs.
+	Decode string `json:"decode,omitempty"`
+	// Select is an optional jq/gojq path applied after decode.
+	Select string `json:"select,omitempty"`
+	// Fields maps individual outputs fields from stdout or literal values.
+	Fields map[string]StepOutputEntry `json:"fields,omitempty"`
+}
+
+// StepOutputDeclaration defines one top-level file-based step output.
+type StepOutputDeclaration struct {
+	Name string `json:"name"`
+	Type string `json:"type,omitempty"`
+}
+
 // String returns a formatted string representation of the step
 func (s *Step) String() string {
-	fields := []struct {
-		name  string
-		value string
-	}{
-		{"Name", s.Name},
-		{"Dir", s.Dir},
-		{"Command", s.Command},
-		{"Args", fmt.Sprintf("%v", s.Args)},
-		{"Depends", fmt.Sprintf("[%s]", strings.Join(s.Depends, ", "))},
-	}
-
-	var parts []string
-	for _, field := range fields {
-		parts = append(parts, fmt.Sprintf("%s: %s", field.name, field.value))
-	}
-
-	return strings.Join(parts, "\t")
+	return strings.Join([]string{
+		fmt.Sprintf("Name: %s", s.Name),
+		fmt.Sprintf("Dir: %s", s.Dir),
+		fmt.Sprintf("Command: %s", s.Command),
+		fmt.Sprintf("Args: %v", s.Args),
+		fmt.Sprintf("Depends: [%s]", strings.Join(s.Depends, ", ")),
+	}, "\t")
 }
 
 // SubDAG contains information about a sub DAG to be executed.
@@ -176,36 +218,64 @@ func (s *Step) HasMultipleCommands() bool {
 	return len(s.Commands) > 1
 }
 
+// HasStructuredOutput reports whether the step publishes object-form output.
+func (s Step) HasStructuredOutput() bool {
+	return len(s.StructuredOutput) > 0
+}
+
+// HasStdoutOutputs reports whether stdout should publish DAG/action outputs.
+func (s Step) HasStdoutOutputs() bool {
+	return s.StdoutOutputs != nil
+}
+
+// HasDeclaredOutputs reports whether the step declares file-based outputs.
+func (s Step) HasDeclaredOutputs() bool {
+	return len(s.Outputs) > 0
+}
+
+// HasOutputSchema reports whether the step validates stdout JSON with an output schema.
+func (s Step) HasOutputSchema() bool {
+	return s.OutputSchema != nil
+}
+
+// UsesStructuredOutputSource reports whether any structured output entry reads from source.
+func (s Step) UsesStructuredOutputSource(source string) bool {
+	for _, entry := range s.StructuredOutput {
+		if entry.From == source {
+			return true
+		}
+	}
+	return false
+}
+
 // UnmarshalJSON implements json.Unmarshaler for backward compatibility.
 // It handles old JSON format where command/args fields were used instead of commands.
 func (s *Step) UnmarshalJSON(data []byte) error {
-	// Use type alias to avoid infinite recursion
-	type Alias Step
+	type alias Step
 	aux := &struct {
-		*Alias
+		*alias
 	}{
-		Alias: (*Alias)(s),
+		alias: (*alias)(s),
 	}
 
 	if err := json.Unmarshal(data, aux); err != nil {
 		return err
 	}
 
-	// If Commands is already populated, we're done (new format)
-	if len(s.Commands) > 0 {
+	if len(s.Commands) > 0 || (s.Command == "" && len(s.Args) == 0 && s.CmdWithArgs == "") {
 		return nil
 	}
 
-	// Migrate legacy fields to Commands only when legacy command data exists.
-	if s.Command != "" || len(s.Args) > 0 || s.CmdWithArgs != "" {
-		s.Commands = []CommandEntry{{
-			Command:     s.Command,
-			Args:        s.Args,
-			CmdWithArgs: s.CmdWithArgs,
-		}}
-	}
-
+	s.Commands = []CommandEntry{s.legacyCommandEntry()}
 	return nil
+}
+
+func (s *Step) legacyCommandEntry() CommandEntry {
+	return CommandEntry{
+		Command:     s.Command,
+		Args:        slices.Clone(s.Args),
+		CmdWithArgs: s.CmdWithArgs,
+	}
 }
 
 // ExecutorConfig contains the configuration for the executor.
@@ -355,20 +425,32 @@ type ApprovalConfig struct {
 	Input []string `json:"input,omitempty"`
 	// Required is the subset of Input fields that must be provided.
 	Required []string `json:"required,omitempty"`
+	// RewindTo is the step name or ID to restart from on push-back.
+	// When empty, push-back re-executes the approval step itself.
+	RewindTo string `json:"rewindTo,omitempty"`
 }
 
 const (
 	// ExecutorTypeDAG is the executor type for a sub DAG.
 	ExecutorTypeDAG = "dag"
 
+	// ExecutorTypeDAGEnqueue is the executor type for asynchronously queueing a sub DAG.
+	ExecutorTypeDAGEnqueue = "dag_enqueue"
+
 	// ExecutorTypeParallel is the executor type for parallel steps.
 	ExecutorTypeParallel = "parallel"
+
+	// ExecutorTypeForeach is the executor type for foreach steps.
+	ExecutorTypeForeach = "foreach"
 
 	// ExecutorTypeRouter is the executor type for router steps.
 	ExecutorTypeRouter = "router"
 
 	// ExecutorTypeAgent is the executor type for agent steps.
 	ExecutorTypeAgent = "agent"
+
+	// ExecutorTypeAction is the executor type for external Dagu actions.
+	ExecutorTypeAction = "action"
 )
 
 // AgentStepConfig contains the configuration for an agent step.

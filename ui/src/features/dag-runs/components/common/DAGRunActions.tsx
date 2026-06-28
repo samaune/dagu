@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Yota Hamada
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /**
  * DAGRunActions component provides action buttons for DAGRun operations (stop, retry).
  *
@@ -15,24 +18,24 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import dayjs from '@/lib/dayjs';
-import ActionButton from '@/ui/ActionButton';
+import ActionButton from '@/components/ui/action-button';
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/ui/CustomDialog';
+} from '@/components/ui/dialog';
 import { Ban, RefreshCw, Square, X } from 'lucide-react';
 import React from 'react';
 import { Button } from '@/components/ui/button';
 import { components, NodeStatus, Status } from '../../../../api/v1/schema';
-import { AppBarContext } from '../../../../contexts/AppBarContext';
 import { useConfig } from '../../../../contexts/ConfigContext';
+import { useRemoteNode } from '../../../../contexts/RemoteNodeContext';
 import { useClient } from '../../../../hooks/api';
-import ConfirmModal from '../../../../ui/ConfirmModal';
-import LabeledItem from '../../../../ui/LabeledItem';
-import StatusChip from '../../../../ui/StatusChip';
+import ConfirmModal from '@/components/ui/confirm-dialog';
+import LabeledItem from '@/components/ui/labeled-item';
+import StatusChip from '@/components/ui/status-chip';
 import { getDAGRunTerminateActionDetails } from './terminateAction';
 
 /**
@@ -65,7 +68,7 @@ function DAGRunActions({
   displayMode = 'compact',
   isRootLevel = true,
 }: Props) {
-  const appBarContext = React.useContext(AppBarContext);
+  const remoteNode = useRemoteNode();
   const config = useConfig();
   const { showError } = useErrorModal();
   const { showToast } = useSimpleToast();
@@ -95,6 +98,14 @@ function DAGRunActions({
     }
   };
 
+  const resetRetryModalState = React.useCallback(() => {
+    setRetryAsNew(false);
+    setNewRunId('');
+    setDagNameOverride('');
+    setSpecFromFile(false);
+    setUseCurrentDagFile(false);
+  }, []);
+
   React.useEffect(() => {
     if (!isRetryModal || !dagRun?.dagRunId) {
       return;
@@ -112,7 +123,7 @@ function DAGRunActions({
               dagRunId: dagRun.dagRunId,
             },
             query: {
-              remoteNode: appBarContext.selectedRemoteNode || 'local',
+              remoteNode,
             },
           },
         });
@@ -142,13 +153,7 @@ function DAGRunActions({
     return () => {
       cancelled = true;
     };
-  }, [
-    appBarContext.selectedRemoteNode,
-    client,
-    dagRun?.dagRunId,
-    isRetryModal,
-    name,
-  ]);
+  }, [client, dagRun?.dagRunId, isRetryModal, name, remoteNode]);
 
   const isWaiting = dagRun?.status === Status.Waiting;
   const hasNodes =
@@ -289,7 +294,7 @@ function DAGRunActions({
               {
                 params: {
                   query: {
-                    remoteNode: appBarContext.selectedRemoteNode || 'local',
+                    remoteNode,
                   },
                   path: {
                     name: name,
@@ -319,11 +324,7 @@ function DAGRunActions({
           visible={isRetryModal}
           dismissModal={() => {
             setIsRetryModal(false);
-            setRetryAsNew(false);
-            setNewRunId('');
-            setDagNameOverride('');
-            setSpecFromFile(false);
-            setUseCurrentDagFile(false);
+            resetRetryModalState();
           }}
           onSubmit={async () => {
             setIsRetryModal(false);
@@ -339,7 +340,7 @@ function DAGRunActions({
                       dagRunId: dagRun.dagRunId,
                     },
                     query: {
-                      remoteNode: appBarContext.selectedRemoteNode || 'local',
+                      remoteNode,
                     },
                   },
                   body: {
@@ -354,24 +355,14 @@ function DAGRunActions({
                   error.message || 'Failed to reschedule DAG run',
                   'Check if the worker is running and the DAG definition is valid.'
                 );
-                // Reset state on error
-                setRetryAsNew(false);
-                setNewRunId('');
-                setDagNameOverride('');
-                setSpecFromFile(false);
-                setUseCurrentDagFile(false);
+                resetRetryModalState();
                 return;
               }
               // Show success message with new run ID
               if (data?.dagRunId) {
                 showToast(`New DAG run created: ${data.dagRunId}`);
               }
-              // Reset state after success
-              setRetryAsNew(false);
-              setNewRunId('');
-              setDagNameOverride('');
-              setSpecFromFile(false);
-              setUseCurrentDagFile(false);
+              resetRetryModalState();
             } else {
               // Use retry endpoint for regular retry
               const { error } = await client.POST(
@@ -383,7 +374,7 @@ function DAGRunActions({
                       dagRunId: dagRun.dagRunId,
                     },
                     query: {
-                      remoteNode: appBarContext.selectedRemoteNode || 'local',
+                      remoteNode,
                     },
                   },
                   body: {
@@ -523,7 +514,15 @@ function DAGRunActions({
         </ConfirmModal>
 
         {/* Reject Modal */}
-        <Dialog open={isRejectModal} onOpenChange={(open) => { if (!open) { setIsRejectModal(false); setRejectReason(''); } }}>
+        <Dialog
+          open={isRejectModal}
+          onOpenChange={(open) => {
+            if (!open) {
+              setIsRejectModal(false);
+              setRejectReason('');
+            }
+          }}
+        >
           <DialogContent className="sm:max-w-[450px]">
             <DialogHeader>
               <DialogTitle>Reject DAG Run</DialogTitle>
@@ -538,7 +537,14 @@ function DAGRunActions({
               />
             </div>
             <DialogFooter>
-              <Button variant="ghost" size="sm" onClick={() => { setIsRejectModal(false); setRejectReason(''); }}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setIsRejectModal(false);
+                  setRejectReason('');
+                }}
+              >
                 <X className="h-4 w-4" /> Cancel
               </Button>
               <Button
@@ -546,16 +552,25 @@ function DAGRunActions({
                 size="sm"
                 onClick={async () => {
                   setIsRejectModal(false);
-                  const details = dagRun as components['schemas']['DAGRunDetails'];
-                  const waitingNodes = details.nodes.filter(n => n.status === NodeStatus.Waiting);
+                  const details =
+                    dagRun as components['schemas']['DAGRunDetails'];
+                  const waitingNodes = details.nodes.filter(
+                    (n) => n.status === NodeStatus.Waiting
+                  );
                   const errors: string[] = [];
                   for (const node of waitingNodes) {
                     const { error } = await client.POST(
                       '/dag-runs/{name}/{dagRunId}/steps/{stepName}/reject',
                       {
                         params: {
-                          path: { name, dagRunId: dagRun!.dagRunId, stepName: node.step.name },
-                          query: { remoteNode: appBarContext.selectedRemoteNode || 'local' },
+                          path: {
+                            name,
+                            dagRunId: dagRun!.dagRunId,
+                            stepName: node.step.name,
+                          },
+                          query: {
+                            remoteNode,
+                          },
                         },
                         body: { reason: rejectReason || undefined },
                       }
@@ -598,7 +613,7 @@ function DAGRunActions({
                     dagRunId: dagRun.dagRunId,
                   },
                   query: {
-                    remoteNode: appBarContext.selectedRemoteNode || 'local',
+                    remoteNode,
                   },
                 },
               }

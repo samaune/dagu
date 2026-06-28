@@ -14,7 +14,7 @@ import {
 import { Label } from '@/components/ui/label';
 import { AppBarContext } from '@/contexts/AppBarContext';
 import { useClient } from '@/hooks/api';
-import { CheckCircle2, RefreshCw } from 'lucide-react';
+import { CheckCircle2, RefreshCw, Trash2 } from 'lucide-react';
 import React from 'react';
 import { DAGRunSelectionItem } from '../../hooks/useBulkDAGRunSelection';
 import {
@@ -33,11 +33,13 @@ interface DAGRunBatchActionsProps {
 }
 
 const actionLabels: Record<BatchActionType, string> = {
+  delete: 'Delete selected',
   retry: 'Retry selected',
   reschedule: 'Reschedule selected',
 };
 
 const actionVerbs: Record<BatchActionType, string> = {
+  delete: 'delete',
   retry: 'retry',
   reschedule: 'reschedule',
 };
@@ -142,6 +144,14 @@ function DAGRunBatchActions({
       return <div className="mt-2 text-sm text-error">{result.error}</div>;
     }
 
+    if (action === 'delete') {
+      return (
+        <div className="mt-2 text-sm text-muted-foreground">
+          Delete request accepted
+        </div>
+      );
+    }
+
     if (action === 'retry') {
       return (
         <div className="mt-2 text-sm text-muted-foreground">
@@ -170,13 +180,26 @@ function DAGRunBatchActions({
     );
   };
 
+  const getSubmitButtonText = (
+    action: BatchActionType,
+    count: number
+  ): string => {
+    const suffix = count === 1 ? 'Run' : 'Runs';
+    if (action === 'delete') {
+      return `Delete ${count} ${suffix}`;
+    }
+    if (action === 'retry') {
+      return `Retry ${count} ${suffix}`;
+    }
+    return `Reschedule ${count} ${suffix}`;
+  };
+
   return (
     <>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-card px-3 py-2">
         <div className="text-sm text-muted-foreground">{summaryText}</div>
         <div className="flex flex-wrap items-center gap-2">
           <Button
-            size="sm"
             variant="outline"
             onClick={onSelectAllLoaded}
             disabled={loadedCount === 0 || isRunning}
@@ -184,7 +207,6 @@ function DAGRunBatchActions({
             Select all loaded
           </Button>
           <Button
-            size="sm"
             variant="outline"
             onClick={onClearSelection}
             disabled={selectedCount === 0 || isRunning}
@@ -192,7 +214,6 @@ function DAGRunBatchActions({
             Clear selection
           </Button>
           <Button
-            size="sm"
             variant="outline"
             onClick={() => openBatchDialog('retry')}
             disabled={selectedCount === 0 || isRunning}
@@ -200,11 +221,19 @@ function DAGRunBatchActions({
             Retry selected
           </Button>
           <Button
-            size="sm"
+            variant="outline"
             onClick={() => openBatchDialog('reschedule')}
             disabled={selectedCount === 0 || isRunning}
           >
             Reschedule selected
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() => openBatchDialog('delete')}
+            disabled={selectedCount === 0 || isRunning}
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete selected
           </Button>
         </div>
       </div>
@@ -251,6 +280,12 @@ function DAGRunBatchActions({
                 {activeBatch.snapshot.length} selected DAG run
                 {activeBatch.snapshot.length === 1 ? '' : 's'}?
               </p>
+              {activeBatch.action === 'delete' && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                  This permanently removes run records, logs, artifacts, and
+                  related run data.
+                </div>
+              )}
               <div className="max-h-56 space-y-2 overflow-y-auto rounded-md border bg-muted/20 p-3">
                 {activeBatch.snapshot.map((dagRun) => (
                   <div
@@ -426,10 +461,17 @@ function DAGRunBatchActions({
                         : undefined
                     )
                   }
+                  variant={
+                    activeBatch.action === 'delete' ? 'destructive' : 'default'
+                  }
                 >
-                  {activeBatch.action === 'retry'
-                    ? `Retry ${activeBatch.snapshot.length} Run${activeBatch.snapshot.length === 1 ? '' : 's'}`
-                    : `Reschedule ${activeBatch.snapshot.length} Run${activeBatch.snapshot.length === 1 ? '' : 's'}`}
+                  {activeBatch.action === 'delete' && (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                  {getSubmitButtonText(
+                    activeBatch.action,
+                    activeBatch.snapshot.length
+                  )}
                 </Button>
               </>
             )}

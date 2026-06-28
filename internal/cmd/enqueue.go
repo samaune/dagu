@@ -6,17 +6,16 @@ package cmd
 import (
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/dagucloud/dagu/internal/cmn/logger"
 	"github.com/dagucloud/dagu/internal/cmn/logger/tag"
-	"github.com/dagucloud/dagu/internal/cmn/stringutil"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
-	"github.com/dagucloud/dagu/internal/runtime/transform"
+	"github.com/dagucloud/dagu/internal/dagrun/intake"
 	"github.com/spf13/cobra"
 )
 
+// Enqueue returns the cobra command for queueing a DAG-run.
 func Enqueue() *cobra.Command {
 	return NewCommand(
 		&cobra.Command{
@@ -28,11 +27,12 @@ Examples:
 	dagu enqueue --run-id=run_id my_dag -- P1=foo P2=bar
 	dagu enqueue --name my_custom_name my_dag.yaml -- P1=foo P2=bar
 `,
+			Args: cobra.MinimumNArgs(1),
 		}, enqueueFlags, runEnqueue,
 	)
 }
 
-var enqueueFlags = []commandLineFlag{paramsFlag, nameFlag, dagRunIDFlag, queueFlag, tagsFlag, defaultWorkingDirFlag, triggerTypeFlag, scheduleTimeFlag}
+var enqueueFlags = []commandLineFlag{paramsFlag, nameFlag, dagRunIDFlag, queueFlag, labelsFlag, tagsFlag, defaultWorkingDirFlag, profileFlag, triggerTypeFlag, scheduleTimeFlag}
 
 func runEnqueue(ctx *Context, args []string) error {
 	if ctx.IsRemote() {
@@ -66,7 +66,7 @@ func runEnqueue(ctx *Context, args []string) error {
 		dag.Queue = queueOverride
 	}
 
-	if err := parseAndAppendTags(ctx, dag); err != nil {
+	if err := parseAndAppendLabels(ctx, dag); err != nil {
 		return err
 	}
 
@@ -79,72 +79,48 @@ func runEnqueue(ctx *Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	profileName, err := runtimeProfileNameParam(ctx)
+	if err != nil {
+		return err
+	}
 
-	return enqueueDAGRun(ctx, dag, runID, triggerType, scheduleTime)
+	return enqueueDAGRun(ctx, dag, runID, triggerType, scheduleTime, profileName)
 }
 
 // enqueueDAGRun enqueues a dag-run to the queue.
 // The DAG location is cleared to allow concurrent queued runs (location is used
 // for unix pipe generation which would prevent parallel execution).
-func enqueueDAGRun(ctx *Context, dag *core.DAG, dagRunID string, triggerType core.TriggerType, scheduleTime string) error {
+func enqueueDAGRun(ctx *Context, dag *core.DAG, dagRunID string, triggerType core.TriggerType, scheduleTime, profileName string) error {
 	dag.Location = ""
 
 	if !ctx.Config.Queues.Enabled {
 		return fmt.Errorf("queues are disabled in configuration")
 	}
 
-	logFile, err := ctx.GenLogFileName(dag, dagRunID)
-	if err != nil {
-		return fmt.Errorf("failed to generate log file name: %w", err)
-	}
-
 	dagRun := exec.NewDAGRunRef(dag.Name, dagRunID)
 
-	if _, err = ctx.DAGRunStore.FindAttempt(ctx, dagRun); err == nil {
+	if _, err := ctx.DAGRunStore.FindAttempt(ctx, dagRun); err == nil {
 		return fmt.Errorf("DAG %q with ID %q already exists", dag.Name, dagRunID)
 	}
-	artifactDir, err := ctx.GenArtifactDir(dag, dagRunID)
+
+	queued, err := intake.EnqueueRun(ctx.Context, intake.QueueRequest{
+		DAGRunStore:             ctx.DAGRunStore,
+		QueueStore:              ctx.QueueStore,
+		DAG:                     dag,
+		DAGRunID:                dagRunID,
+		LogBaseDir:              ctx.Config.Paths.LogDir,
+		ArtifactBaseDir:         ctx.Config.Paths.ArtifactDir,
+		TriggerType:             triggerType,
+		ScheduleTime:            scheduleTime,
+		ProfileName:             profileName,
+		ProceedOnStatusCloseErr: true,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to generate artifact directory: %w", err)
+		return err
 	}
-
-	att, err := ctx.DAGRunStore.CreateAttempt(ctx.Context, dag, time.Now(), dagRunID, exec.NewDAGRunAttemptOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to create run: %w", err)
-	}
-
-	opts := []transform.StatusOption{
-		transform.WithLogFilePath(logFile),
-		transform.WithArchiveDir(artifactDir),
-		transform.WithAttemptID(att.ID()),
-		transform.WithPreconditions(dag.Preconditions),
-		transform.WithQueuedAt(stringutil.FormatTime(time.Now())),
-		transform.WithHierarchyRefs(
-			exec.NewDAGRunRef(dag.Name, dagRunID),
-			exec.DAGRunRef{},
-		),
-		transform.WithTriggerType(triggerType),
-	}
-
-	if scheduleTime != "" {
-		opts = append(opts, transform.WithScheduleTime(scheduleTime))
-	}
-
-	dagStatus := transform.NewStatusBuilder(dag).Create(dagRunID, core.Queued, 0, time.Time{}, opts...)
-
-	if err := att.Open(ctx.Context); err != nil {
-		return fmt.Errorf("failed to open run: %w", err)
-	}
-	defer func() {
-		_ = att.Close(ctx.Context)
-	}()
-
-	if err := att.Write(ctx.Context, dagStatus); err != nil {
-		return fmt.Errorf("failed to save status: %w", err)
-	}
-
-	if err := ctx.QueueStore.Enqueue(ctx.Context, dag.ProcGroup(), exec.QueuePriorityLow, dagRun); err != nil {
-		return fmt.Errorf("failed to enqueue dag-run: %w", err)
+	if queued.StatusCloseErr != nil {
+		logger.Warn(ctx.Context, "Failed to close queued status before enqueue",
+			tag.Error(queued.StatusCloseErr))
 	}
 
 	logger.Info(ctx.Context, "Enqueued dag-run",

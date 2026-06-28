@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -28,7 +29,7 @@ func TestRebuildDAGFromYAML_PreservesJSONSerializedFields(t *testing.T) {
 		MaxActiveRuns:  5,
 		MaxActiveSteps: 3,
 		LogDir:         "/custom/logs",
-		Tags:           core.NewTags([]string{"important", "production"}),
+		Labels:         core.NewLabels([]string{"important", "production"}),
 		Location:       "/path/to/dag.yaml",
 		YamlData:       []byte("steps:\n  - name: test\n    command: echo hello"),
 	}
@@ -42,7 +43,7 @@ func TestRebuildDAGFromYAML_PreservesJSONSerializedFields(t *testing.T) {
 	assert.Equal(t, 5, result.MaxActiveRuns)
 	assert.Equal(t, 3, result.MaxActiveSteps)
 	assert.Equal(t, "/custom/logs", result.LogDir)
-	assert.Equal(t, []string{"important", "production"}, result.Tags.Strings())
+	assert.Equal(t, []string{"important", "production"}, result.Labels.Strings())
 	assert.Equal(t, "/path/to/dag.yaml", result.Location)
 
 	// Verify the original DAG pointer is returned (not a new DAG)
@@ -172,6 +173,72 @@ func TestRestoreDAGFromStatus_PositionalParamsRemainOverrides(t *testing.T) {
 	assert.Equal(t, []string{"1=override"}, result.Params)
 }
 
+func TestRestoreDAGFromStatus_PreservesExplicitWorkingDirFromYAML(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	dag := &core.DAG{
+		Name:       "test-dag",
+		WorkingDir: workDir,
+		YamlData: fmt.Appendf(nil, `
+working_dir: %q
+steps:
+  - name: test
+    run: pwd
+`, workDir),
+	}
+	status := &exec.DAGRunStatus{}
+
+	result, err := restoreDAGFromStatus(context.Background(), dag, status)
+	require.NoError(t, err)
+	assert.Equal(t, workDir, result.WorkingDir)
+	assert.True(t, result.WorkingDirExplicit)
+}
+
+func TestRestoreDAGFromStatus_PreservesBaseConfigWorkingDirAsExplicit(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	dag := &core.DAG{
+		Name:       "test-dag",
+		WorkingDir: workDir,
+		YamlData: []byte(`
+steps:
+  - name: test
+    run: pwd
+`),
+		BaseConfigData: fmt.Appendf(nil, "working_dir: %q\n", workDir),
+	}
+	status := &exec.DAGRunStatus{}
+
+	result, err := restoreDAGFromStatus(context.Background(), dag, status)
+	require.NoError(t, err)
+	assert.Equal(t, workDir, result.WorkingDir)
+	assert.True(t, result.WorkingDirExplicit)
+}
+
+func TestRestoreDAGFromStatus_PrefersPersistedRunWorkingDir(t *testing.T) {
+	t.Parallel()
+
+	persistedWorkDir := t.TempDir()
+	dag := &core.DAG{
+		Name:       "test-dag",
+		WorkingDir: "/changed-work-dir",
+		YamlData: []byte(`
+working_dir: /changed-work-dir
+steps:
+  - name: test
+    run: pwd
+`),
+	}
+	status := &exec.DAGRunStatus{WorkingDir: persistedWorkDir}
+
+	result, err := restoreDAGFromStatus(context.Background(), dag, status)
+	require.NoError(t, err)
+	assert.Equal(t, persistedWorkDir, result.WorkingDir)
+	assert.True(t, result.WorkingDirExplicit)
+}
+
 func TestRebuildDAGFromYAML_RebuildEnvFromYAML(t *testing.T) {
 	t.Parallel()
 
@@ -197,7 +264,7 @@ func TestRebuildDAGFromYAML_ReappliesBaseConfigContent(t *testing.T) {
 		YamlData: []byte(`
 steps:
   - name: test
-    command: echo hello
+    run: echo hello
 `),
 		BaseConfigData: []byte(`
 env:
@@ -232,7 +299,7 @@ env:
   - BACKTICK_VALUE: "` + "`command_that_does_not_exist_12345`" + `"
 steps:
   - name: test
-    command: echo hello
+    run: echo hello
 `),
 	}
 
@@ -252,7 +319,7 @@ registry_auths:
     password: ${REGISTRY_PASSWORD}
 steps:
   - name: test
-    command: echo hello
+    run: echo hello
 `),
 	}
 	status := &exec.DAGRunStatus{}
@@ -270,7 +337,7 @@ func TestRestoreDAGFromStatus_RestoresRegistryAuthsFromBaseConfig(t *testing.T) 
 		YamlData: []byte(`
 steps:
   - name: test
-    command: echo hello
+    run: echo hello
 `),
 		BaseConfigData: []byte(`
 registry_auths:
@@ -293,7 +360,7 @@ func TestRestoreDAGFromStatus_RestoresHarnessConfigFromBaseConfig(t *testing.T) 
 		Name: "test-dag",
 		YamlData: []byte(`
 steps:
-  - command: Review the repository
+  - run: Review the repository
 `),
 		BaseConfigData: []byte(`
 harnesses:

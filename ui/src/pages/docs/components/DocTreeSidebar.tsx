@@ -37,6 +37,13 @@ import React, {
 import { Tree, TreeApi, NodeApi } from 'react-arborist';
 import DocArboristNode, { type ContextAction } from './DocArboristNode';
 import DocOutlinePanel from './DocOutlinePanel';
+import { workspaceSelectionQuery } from '@/lib/workspace';
+import {
+  docMutationTargetForTreeNode,
+  isWorkspaceRootTreeNode,
+  resolveDocTreeMove,
+  type DocMutationTarget,
+} from '../lib/doc-mutation';
 
 type DocTreeNodeResponse = components['schemas']['DocTreeNodeResponse'];
 
@@ -47,10 +54,22 @@ type Props = {
   onRetry?: () => void;
   onContextAction: (action: ContextAction) => void;
   onCreateNew: () => void;
-  onSelectFile: (docPath: string, title: string) => void;
-  onRename: (oldPath: string, newPath: string) => Promise<void>;
-  onMove: (oldPath: string, newPath: string) => Promise<void>;
-  onBatchDelete: (paths: string[]) => void;
+  onSelectFile: (
+    docPath: string,
+    title: string,
+    workspace?: string | null
+  ) => void;
+  onRename: (
+    oldPath: string,
+    newPath: string,
+    workspace?: string | null
+  ) => Promise<void>;
+  onMove: (
+    oldPath: string,
+    newPath: string,
+    workspace?: string | null
+  ) => Promise<void>;
+  onBatchDelete: (targets: DocMutationTarget[]) => void;
   onSelectionChange?: (ids: string[]) => void;
   activeDocContent?: string | null;
   onHeadingClick?: (anchor: string) => void;
@@ -58,6 +77,18 @@ type Props = {
   sortOrder: DocSortOrder;
   onSortChange: (field: DocSortField, order: DocSortOrder) => void;
 };
+
+function buildWorkspaceById(
+  nodes: DocTreeNodeResponse[] | undefined
+): Map<string, string | null> {
+  const byId = new Map<string, string | null>();
+  const walk = (node: DocTreeNodeResponse) => {
+    byId.set(node.id, node.workspace ?? null);
+    node.children?.forEach(walk);
+  };
+  nodes?.forEach(walk);
+  return byId;
+}
 
 function collectAncestors(path: string): string[] {
   const parts = path.split('/');
@@ -138,9 +169,14 @@ function DocTreeSidebar({
   onSortChange,
 }: Props) {
   const canWrite = useCanWrite();
+  const canEdit = canWrite;
   const client = useClient();
   const appBarContext = useContext(AppBarContext);
   const remoteNode = appBarContext.selectedRemoteNode || 'local';
+  const workspaceQuery = useMemo(
+    () => workspaceSelectionQuery(appBarContext.workspaceSelection),
+    [appBarContext.workspaceSelection]
+  );
   const { activeTabId, tabs } = useDocTabContext();
   const activeDocPath = activeTabId
     ? tabs.find((t) => t.id === activeTabId)?.docPath || null
@@ -152,6 +188,14 @@ function DocTreeSidebar({
 
   // Selection state for multi-select
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const workspaceById = useMemo(() => buildWorkspaceById(tree), [tree]);
+  const selectedTargets = useMemo(
+    () =>
+      selectedIds
+        .filter((id) => !isWorkspaceRootTreeNode(id, workspaceById.get(id)))
+        .map((id) => docMutationTargetForTreeNode(id, workspaceById.get(id))),
+    [selectedIds, workspaceById]
+  );
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -214,7 +258,7 @@ function DocTreeSidebar({
       try {
         setSearchError(null);
         const { data, error } = await client.GET('/docs/search', {
-          params: { query: { remoteNode, q: searchQuery } },
+          params: { query: { remoteNode, q: searchQuery, ...workspaceQuery } },
         });
         if (cancelled) return;
         if (error) {
@@ -237,7 +281,7 @@ function DocTreeSidebar({
       cancelled = true;
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     };
-  }, [searchQuery, client, remoteNode]);
+  }, [searchQuery, client, remoteNode, workspaceQuery]);
 
   // Compute filtered tree data
   const treeData = useMemo(() => {
@@ -293,7 +337,7 @@ function DocTreeSidebar({
     (node: NodeApi<DocTreeNodeResponse>) => {
       if (node.data.type !== DocTreeNodeResponseType.directory) {
         const displayTitle = node.data.title || node.data.name;
-        onSelectFile(node.id, displayTitle);
+        onSelectFile(node.id, displayTitle, node.data.workspace ?? null);
       }
     },
     [onSelectFile]
@@ -304,6 +348,7 @@ function DocTreeSidebar({
     async ({
       id,
       name,
+      node,
     }: {
       id: string;
       name: string;
@@ -311,9 +356,14 @@ function DocTreeSidebar({
     }) => {
       const parts = id.split('/');
       parts[parts.length - 1] = name;
-      const newPath = parts.join('/');
-      if (newPath !== id) {
-        await onRename(id, newPath);
+      const newTreePath = parts.join('/');
+      if (newTreePath !== id) {
+        const workspace = node.data.workspace ?? null;
+        const oldTarget = docMutationTargetForTreeNode(id, workspace);
+        const newTarget = docMutationTargetForTreeNode(newTreePath, workspace);
+        if (oldTarget.path && newTarget.path) {
+          await onRename(oldTarget.path, newTarget.path, oldTarget.workspace);
+        }
       }
     },
     [onRename]
@@ -324,6 +374,7 @@ function DocTreeSidebar({
     async ({
       dragIds,
       parentId,
+      dragNodes,
       parentNode,
     }: {
       dragIds: string[];
@@ -332,11 +383,16 @@ function DocTreeSidebar({
       parentNode: NodeApi<DocTreeNodeResponse> | null;
       index: number;
     }) => {
-      for (const dragId of dragIds) {
-        const nodeName = dragId.split('/').pop() || dragId;
-        const newPath = parentId ? `${parentId}/${nodeName}` : nodeName;
-        if (newPath !== dragId) {
-          await onMove(dragId, newPath);
+      for (const [idx, dragId] of dragIds.entries()) {
+        const dragNode = dragNodes[idx];
+        const resolved = resolveDocTreeMove({
+          dragId,
+          dragWorkspace: dragNode?.data.workspace ?? null,
+          parentId,
+          parentWorkspace: parentNode?.data.workspace ?? null,
+        });
+        if (resolved) {
+          await onMove(resolved.oldPath, resolved.newPath, resolved.workspace);
         }
       }
     },
@@ -354,11 +410,18 @@ function DocTreeSidebar({
       index: number;
     }) => {
       // Cannot drop on a file node
-      if (parentNode.isLeaf) return true;
+      if (parentNode?.isLeaf) return true;
       // Cannot drop into own subtree
       for (const dn of dragNodes) {
-        if (dn.isAncestorOf(parentNode)) return true;
-        if (dn.id === parentNode.id) return true;
+        if (parentNode && dn.isAncestorOf(parentNode)) return true;
+        if (parentNode && dn.id === parentNode.id) return true;
+        const resolved = resolveDocTreeMove({
+          dragId: dn.id,
+          dragWorkspace: dn.data.workspace ?? null,
+          parentId: parentNode?.id ?? null,
+          parentWorkspace: parentNode?.data.workspace ?? null,
+        });
+        if (!resolved) return true;
       }
       return false;
     },
@@ -367,51 +430,64 @@ function DocTreeSidebar({
 
   // Disable drag when user has no write permission
   const disableDrag = useCallback(
-    (_data: DocTreeNodeResponse) => {
-      return !canWrite;
+    () => {
+      return !canEdit;
     },
-    [canWrite]
+    [canEdit]
   );
 
   // Keyboard shortcuts: Delete and F2
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (!canWrite) return;
+      if (!canEdit) return;
       const api = treeRef.current;
       if (!api) return;
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedIds.length > 1) {
+          if (selectedTargets.length === 0) return;
           e.preventDefault();
-          onBatchDelete(selectedIds);
+          onBatchDelete(selectedTargets);
         } else if (selectedIds.length === 1) {
           const node = api.get(selectedIds[0] ?? null);
           if (node && !node.isEditing) {
+            if (isWorkspaceRootTreeNode(node.id, node.data.workspace ?? null)) {
+              return;
+            }
             e.preventDefault();
             const isDir = node.data.type === DocTreeNodeResponseType.directory;
             const hasChildren = !!(
               node.data.children && node.data.children.length > 0
             );
+            const target = docMutationTargetForTreeNode(
+              node.id,
+              node.data.workspace ?? null
+            );
             onContextAction({
               type: 'delete',
-              docPath: node.id,
+              docPath: target.path,
               title: node.data.title || node.data.name,
               isDir,
               hasChildren,
+              workspace: target.workspace,
             });
           }
         }
       } else if (e.key === 'F2') {
         if (selectedIds.length === 1) {
           const node = api.get(selectedIds[0] ?? null);
-          if (node && !node.isEditing) {
+          if (
+            node &&
+            !node.isEditing &&
+            !isWorkspaceRootTreeNode(node.id, node.data.workspace ?? null)
+          ) {
             e.preventDefault();
             node.edit();
           }
         }
       }
     },
-    [canWrite, selectedIds, onBatchDelete, onContextAction]
+    [canEdit, selectedIds, selectedTargets, onBatchDelete, onContextAction]
   );
 
   const hasDocuments = treeData && treeData.length > 0;
@@ -424,12 +500,13 @@ function DocTreeSidebar({
       <DocArboristNode
         {...props}
         onContextAction={onContextAction}
-        canWrite={canWrite}
+        canWrite={canEdit}
         activeDocPath={activeDocPath}
         selectedIds={selectedIds}
+        selectedTargets={selectedTargets}
       />
     ),
-    [onContextAction, canWrite, activeDocPath, selectedIds]
+    [onContextAction, canEdit, activeDocPath, selectedIds, selectedTargets]
   );
 
   return (
@@ -499,7 +576,7 @@ function DocTreeSidebar({
               </DropdownMenuRadioGroup>
             </DropdownMenuContent>
           </DropdownMenu>
-          {canWrite && (
+          {canEdit && (
             <button
               type="button"
               onClick={onCreateNew}
@@ -517,7 +594,7 @@ function DocTreeSidebar({
         {/* Search input — always rendered to define the container height */}
         <div
           className={
-            selectedIds.length > 1 && canWrite ? 'invisible' : undefined
+            selectedIds.length > 1 && canEdit ? 'invisible' : undefined
           }
         >
           <div className="relative">
@@ -528,7 +605,7 @@ function DocTreeSidebar({
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search docs..."
               className="w-full text-xs bg-muted/50 border border-border rounded px-2 py-1 pl-6 pr-6 outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground/60"
-              tabIndex={selectedIds.length > 1 && canWrite ? -1 : undefined}
+              tabIndex={selectedIds.length > 1 && canEdit ? -1 : undefined}
             />
             {searchQuery && (
               <button
@@ -558,7 +635,7 @@ function DocTreeSidebar({
             )}
         </div>
         {/* Selection bar — overlaid on top when multi-select is active */}
-        {selectedIds.length > 1 && canWrite && (
+        {selectedIds.length > 1 && canEdit && (
           <div className="absolute inset-0 flex items-center justify-between px-3">
             <span className="text-xs text-muted-foreground">
               {selectedIds.length} selected
@@ -566,10 +643,11 @@ function DocTreeSidebar({
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                onClick={() => onBatchDelete(selectedIds)}
+                onClick={() => onBatchDelete(selectedTargets)}
+                disabled={selectedTargets.length === 0}
                 className="flex items-center gap-0.5 text-xs text-destructive hover:text-destructive/80 px-1 py-0.5 rounded-sm hover:bg-destructive/10"
               >
-                <Trash2 className="h-3 w-3" /> Delete
+                <Trash2 className="h-3 w-3" /> Delete {selectedTargets.length}
               </button>
               <button
                 type="button"
@@ -645,7 +723,7 @@ function DocTreeSidebar({
               rowHeight={28}
               openByDefault={false}
               initialOpenState={initialOpenState}
-              disableEdit={!canWrite}
+              disableEdit={!canEdit}
               disableDrag={disableDrag}
               disableDrop={disableDrop}
               onActivate={handleActivate}
@@ -673,7 +751,7 @@ function DocTreeSidebar({
                 <p className="text-sm text-muted-foreground">
                   No documents yet.
                 </p>
-                {canWrite && (
+                {canEdit && (
                   <button
                     type="button"
                     onClick={onCreateNew}

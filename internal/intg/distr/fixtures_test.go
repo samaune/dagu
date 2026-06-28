@@ -17,28 +17,20 @@ import (
 	"github.com/dagucloud/dagu/internal/cmn/config"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
-	"github.com/dagucloud/dagu/internal/persis/filedagrun"
-	"github.com/dagucloud/dagu/internal/persis/filewatermark"
-	"github.com/dagucloud/dagu/internal/runtime"
+	"github.com/dagucloud/dagu/internal/launcher"
+	"github.com/dagucloud/dagu/internal/persis/file"
 	"github.com/dagucloud/dagu/internal/runtime/transform"
 	"github.com/dagucloud/dagu/internal/service/coordinator"
 	"github.com/dagucloud/dagu/internal/service/scheduler"
 	"github.com/dagucloud/dagu/internal/service/worker"
 	"github.com/dagucloud/dagu/internal/test"
+	"github.com/dagucloud/dagu/internal/test/intgharness"
 	coordinatorv1 "github.com/dagucloud/dagu/proto/coordinator/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-type workerMode int
-
-const (
-	sharedNothingMode workerMode = iota
-	sharedFSMode
-)
-
 type fixtureConfig struct {
-	workerMode              workerMode
 	workerCount             int
 	workerMaxActiveRuns     int
 	workerLabels            map[string]string
@@ -73,10 +65,6 @@ func distrTestTimeout(timeout time.Duration) time.Duration {
 	default:
 		return timeout
 	}
-}
-
-func withWorkerMode(mode workerMode) fixtureOption {
-	return func(c *fixtureConfig) { c.workerMode = mode }
 }
 
 func withWorkerCount(n int) fixtureOption {
@@ -143,6 +131,7 @@ func withZombieDetectionInterval(interval time.Duration) fixtureOption {
 type testFixture struct {
 	t                   *testing.T
 	coord               *test.Coordinator
+	h                   intgharness.Harness
 	dagWrapper          *test.DAG
 	coordinatorClient   coordinator.Client
 	workerMaxActiveRuns int
@@ -159,7 +148,6 @@ func newTestFixture(t *testing.T, yaml string, opts ...fixtureOption) *testFixtu
 	t.Helper()
 
 	cfg := &fixtureConfig{
-		workerMode:          sharedNothingMode,
 		workerCount:         1,
 		workerMaxActiveRuns: 10,
 		workerLabels:        map[string]string{"test": "true"},
@@ -188,9 +176,6 @@ func newTestFixture(t *testing.T, yaml string, opts ...fixtureOption) *testFixtu
 	if cfg.artifactPersistence {
 		coordOpts = append(coordOpts, test.WithArtifactPersistence())
 	}
-	if cfg.workerMode == sharedFSMode {
-		coordOpts = append(coordOpts, test.WithBuiltExecutable())
-	}
 	if cfg.dagsDir != "" {
 		coordOpts = append(coordOpts, test.WithDAGsDir(cfg.dagsDir))
 	}
@@ -212,19 +197,14 @@ func newTestFixture(t *testing.T, yaml string, opts ...fixtureOption) *testFixtu
 	f := &testFixture{
 		t:                   t,
 		coord:               coord,
+		h:                   intgharness.New(t, coord.Helper),
 		coordinatorClient:   coord.GetCoordinatorClient(t),
 		workerMaxActiveRuns: cfg.workerMaxActiveRuns,
 	}
 
 	for i := range cfg.workerCount {
 		workerID := fmt.Sprintf("worker-%d", i+1)
-		var w *worker.Worker
-		switch cfg.workerMode {
-		case sharedNothingMode:
-			w = f.setupSharedNothingWorker(workerID, cfg.workerLabels, cfg.workerBaseConfigPath)
-		case sharedFSMode:
-			w = f.setupSharedFSWorker(workerID, cfg.workerLabels)
-		}
+		w := f.setupWorker(workerID, cfg.workerLabels, cfg.workerBaseConfigPath)
 		f.workers = append(f.workers, w)
 	}
 
@@ -233,11 +213,11 @@ func newTestFixture(t *testing.T, yaml string, opts ...fixtureOption) *testFixtu
 	return f
 }
 
-func (f *testFixture) setupSharedNothingWorker(workerID string, labels map[string]string, workerBaseConfigPath string) *worker.Worker {
-	return f.setupSharedNothingWorkerWithAfterAckHook(workerID, labels, workerBaseConfigPath, nil)
+func (f *testFixture) setupWorker(workerID string, labels map[string]string, workerBaseConfigPath string) *worker.Worker {
+	return f.setupWorkerWithAfterAckHook(workerID, labels, workerBaseConfigPath, nil)
 }
 
-func (f *testFixture) setupSharedNothingWorkerWithAfterAckHook(
+func (f *testFixture) setupWorkerWithAfterAckHook(
 	workerID string,
 	labels map[string]string,
 	workerBaseConfigPath string,
@@ -259,7 +239,6 @@ func (f *testFixture) setupSharedNothingWorkerWithAfterAckHook(
 	handlerCfg := worker.RemoteTaskHandlerConfig{
 		WorkerID:          workerID,
 		CoordinatorClient: f.coordinatorClient,
-		DAGRunStore:       nil,
 		DAGStore:          f.coord.DAGStore,
 		DAGRunMgr:         f.coord.DAGRunMgr,
 		ServiceRegistry:   f.coord.ServiceRegistry,
@@ -269,26 +248,6 @@ func (f *testFixture) setupSharedNothingWorkerWithAfterAckHook(
 
 	w := worker.NewWorker(workerID, f.workerMaxActiveRuns, f.coordinatorClient, labels, f.coord.Config)
 	w.SetHandler(worker.NewRemoteTaskHandler(handlerCfg))
-	if afterAckHook != nil {
-		w.SetAfterTaskAckHook(afterAckHook)
-	}
-
-	return f.startWorker(w, workerID)
-}
-
-func (f *testFixture) setupSharedFSWorker(workerID string, labels map[string]string) *worker.Worker {
-	return f.setupSharedFSWorkerWithAfterAckHook(workerID, labels, nil)
-}
-
-func (f *testFixture) setupSharedFSWorkerWithAfterAckHook(
-	workerID string,
-	labels map[string]string,
-	afterAckHook func(context.Context, *coordinatorv1.Task) bool,
-) *worker.Worker {
-	f.t.Helper()
-
-	w := worker.NewWorker(workerID, f.workerMaxActiveRuns, f.coordinatorClient, labels, f.coord.Config)
-	w.SetHandler(worker.NewTaskHandler(f.coord.Config))
 	if afterAckHook != nil {
 		w.SetAfterTaskAckHook(afterAckHook)
 	}
@@ -318,8 +277,7 @@ func (f *testFixture) startWorker(w *worker.Worker, workerID string) *worker.Wor
 
 func (f *testFixture) waitForWorkerRegistration(workerID string, timeout time.Duration) {
 	f.t.Helper()
-	timeout = distrTestTimeout(timeout)
-	require.Eventually(f.t, func() bool {
+	f.h.Wait.EventuallyEveryWithin(fmt.Sprintf("worker %s should register with coordinator", workerID), distrTestTimeout(timeout), 50*time.Millisecond, func() bool {
 		workers, err := f.coordinatorClient.GetWorkers(f.coord.Context)
 		if err != nil {
 			return false
@@ -330,7 +288,7 @@ func (f *testFixture) waitForWorkerRegistration(workerID string, timeout time.Du
 			}
 		}
 		return false
-	}, timeout, 50*time.Millisecond, "worker %s should register with coordinator", workerID)
+	})
 }
 
 func (f *testFixture) startScheduler(timeout time.Duration) {
@@ -341,7 +299,11 @@ func (f *testFixture) startSchedulerWithClock(timeout time.Duration, clock sched
 	f.startSchedulerWithOptions(
 		timeout,
 		clock,
-		filewatermark.New(filepath.Join(f.coord.Config.Paths.DataDir, "scheduler")),
+		func() scheduler.WatermarkStore {
+			wmBackend, err := file.New(f.coord.Config.Paths.DataDir)
+			require.NoError(f.t, err)
+			return scheduler.NewWatermarkStore(wmBackend.Collection("scheduler"))
+		}(),
 	)
 }
 
@@ -414,10 +376,10 @@ func (f *testFixture) startSchedulerWithOptions(
 		case <-startTimer.C:
 			if ownsSchedulerCtx && schedulerCancel != nil {
 				schedulerCancel()
-				require.Eventually(f.t, func() bool {
+				f.h.Wait.EventuallyEveryWithin("scheduler startup did not stop after cancellation", distrTestTimeout(time.Second), 25*time.Millisecond, func() bool {
 					startErr = f.pollSchedulerErr()
 					return startErr != nil
-				}, distrTestTimeout(time.Second), 25*time.Millisecond, "scheduler startup did not stop after cancellation")
+				})
 			}
 
 			if startErr != nil {
@@ -431,9 +393,17 @@ func (f *testFixture) startSchedulerWithOptions(
 
 func (f *testFixture) enqueue() error {
 	f.t.Helper()
-	subCmdBuilder := runtime.NewSubCmdBuilder(f.coord.Config)
-	enqueueSpec := subCmdBuilder.Enqueue(f.dagWrapper.DAG, runtime.EnqueueOptions{Quiet: true})
-	return runtime.Run(f.coord.Context, enqueueSpec)
+	return f.enqueueWithParams("")
+}
+
+func (f *testFixture) enqueueWithParams(params string) error {
+	f.t.Helper()
+	subCmdBuilder := launcher.NewSubCmdBuilder(f.coord.Config)
+	enqueueSpec := subCmdBuilder.Enqueue(f.dagWrapper.DAG, launcher.EnqueueOptions{
+		Quiet:  true,
+		Params: params,
+	})
+	return launcher.Run(f.coord.Context, enqueueSpec)
 }
 
 func (f *testFixture) enqueueDirect() error {
@@ -506,6 +476,7 @@ func (f *testFixture) enqueueCatchup(scheduleTime time.Time) (string, error) {
 		runID,
 		core.TriggerTypeCatchUp,
 		scheduleTime,
+		"",
 	)
 	if err != nil {
 		return "", err
@@ -516,78 +487,88 @@ func (f *testFixture) enqueueCatchup(scheduleTime time.Time) (string, error) {
 
 func (f *testFixture) start() error {
 	f.t.Helper()
-	return f.startWithTags("")
+	return f.startWithLabels("")
 }
 
-func (f *testFixture) startWithTags(tags string) error {
+func (f *testFixture) startWithLabels(labels string) error {
 	f.t.Helper()
-	subCmdBuilder := runtime.NewSubCmdBuilder(f.coord.Config)
-	startSpec := subCmdBuilder.Start(f.dagWrapper.DAG, runtime.StartOptions{Quiet: true, Tags: tags})
-	return runtime.Start(f.coord.Context, startSpec)
+	subCmdBuilder := launcher.NewSubCmdBuilder(f.coord.Config)
+	startSpec := subCmdBuilder.Start(f.dagWrapper.DAG, launcher.StartOptions{Quiet: true, Labels: labels})
+	return launcher.Start(f.coord.Context, startSpec)
 }
 
 func (f *testFixture) retry(dagRunID string) error {
 	f.t.Helper()
-	subCmdBuilder := runtime.NewSubCmdBuilder(f.coord.Config)
+	subCmdBuilder := launcher.NewSubCmdBuilder(f.coord.Config)
 	retrySpec := subCmdBuilder.Retry(f.dagWrapper.DAG, dagRunID, "")
-	return runtime.Start(f.coord.Context, retrySpec)
+	return launcher.Start(f.coord.Context, retrySpec)
 }
 
 func (f *testFixture) waitForQueued() {
 	f.t.Helper()
-	var schedulerErr error
-	timeout := distrTestTimeout(5 * time.Second)
-	require.Eventually(f.t, func() bool {
-		schedulerErr = f.pollSchedulerErr()
-		if schedulerErr != nil {
-			return true
-		}
+	f.requireEventuallyNoSchedulerError("DAG should be enqueued", 5*time.Second, 100*time.Millisecond, func() bool {
 		items, err := f.coord.QueueStore.ListByDAGName(f.coord.Context, f.dagWrapper.ProcGroup(), f.dagWrapper.Name)
 		return err == nil && len(items) == 1
-	}, timeout, 100*time.Millisecond, "DAG should be enqueued")
-	require.NoError(f.t, schedulerErr)
+	})
 }
 
 func (f *testFixture) waitForStatus(expected core.Status, timeout time.Duration) exec.DAGRunStatus {
 	f.t.Helper()
-	timeout = distrTestTimeout(timeout)
 	var status exec.DAGRunStatus
-	var schedulerErr error
-	require.Eventually(f.t, func() bool {
-		schedulerErr = f.pollSchedulerErr()
-		if schedulerErr != nil {
-			return true
-		}
+	f.requireEventuallyNoSchedulerError(fmt.Sprintf("timeout waiting for status %s", expected), timeout, 100*time.Millisecond, func() bool {
 		var err error
 		status, err = f.latestStoredStatus()
 		if err != nil {
 			return false
 		}
 		return status.Status == expected
-	}, timeout, 100*time.Millisecond, "timeout waiting for status %s", expected)
-	require.NoError(f.t, schedulerErr)
+	})
 	return status
 }
 
 func (f *testFixture) waitForStatusIn(expected []core.Status, timeout time.Duration) exec.DAGRunStatus {
 	f.t.Helper()
-	timeout = distrTestTimeout(timeout)
 	var status exec.DAGRunStatus
-	var schedulerErr error
-	require.Eventually(f.t, func() bool {
-		schedulerErr = f.pollSchedulerErr()
-		if schedulerErr != nil {
-			return true
-		}
+	f.requireEventuallyNoSchedulerError(fmt.Sprintf("timeout waiting for status in %v", expected), timeout, 100*time.Millisecond, func() bool {
 		var err error
 		status, err = f.latestStoredStatus()
 		if err != nil {
 			return false
 		}
 		return slices.Contains(expected, status.Status)
-	}, timeout, 100*time.Millisecond, "timeout waiting for status in %v", expected)
-	require.NoError(f.t, schedulerErr)
+	})
 	return status
+}
+
+func (f *testFixture) waitForRunReleasedFromWorkers(dagRunID string, timeout time.Duration) {
+	f.t.Helper()
+	f.requireEventuallyNoSchedulerError(fmt.Sprintf("DAG run %s should be released from workers", dagRunID), timeout, 100*time.Millisecond, func() bool {
+		workers, err := f.coordinatorClient.GetWorkers(f.coord.Context)
+		if err != nil {
+			return false
+		}
+		for _, worker := range workers {
+			for _, task := range worker.RunningTasks {
+				if task != nil && task.DagRunId == dagRunID {
+					return false
+				}
+			}
+		}
+		return true
+	})
+}
+
+func (f *testFixture) requireEventuallyNoSchedulerError(label string, timeout, interval time.Duration, condition func() bool) {
+	f.t.Helper()
+	var schedulerErr error
+	f.h.Wait.EventuallyEveryWithin(label, distrTestTimeout(timeout), interval, func() bool {
+		schedulerErr = f.pollSchedulerErr()
+		if schedulerErr != nil {
+			return true
+		}
+		return condition()
+	})
+	require.NoError(f.t, schedulerErr)
 }
 
 func (f *testFixture) pollSchedulerErr() error {
@@ -617,11 +598,7 @@ func (f *testFixture) latestStatus() (exec.DAGRunStatus, error) {
 }
 
 func (f *testFixture) latestStoredStatus() (exec.DAGRunStatus, error) {
-	store := filedagrun.New(
-		f.coord.Config.Paths.DAGRunsDir,
-		filedagrun.WithLatestStatusToday(f.coord.Config.Server.LatestStatusToday),
-		filedagrun.WithLocation(f.coord.Config.Core.Location),
-	)
+	store := file.NewDAGRunStore(f.coord.Config)
 
 	attempt, err := store.LatestAttempt(f.coord.Context, f.dagWrapper.Name)
 	if err != nil {

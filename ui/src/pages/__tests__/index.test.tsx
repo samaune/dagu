@@ -9,6 +9,7 @@ import { Status } from '@/api/v1/schema';
 import { AppBarContext } from '@/contexts/AppBarContext';
 import { ConfigContext, type Config } from '@/contexts/ConfigContext';
 import { SearchStateProvider } from '@/contexts/SearchStateContext';
+import { WorkspaceKind } from '@/lib/workspace';
 import { usePaginatedDAGRuns } from '../../features/dag-runs/hooks/dagRunPagination';
 import { useClient } from '../../hooks/api';
 import DashboardPage from '../index';
@@ -85,7 +86,9 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
   };
 }
 
-function renderPage() {
+function renderPage({
+  selectedWorkspace = '',
+}: { selectedWorkspace?: string } = {}) {
   return render(
     <MemoryRouter initialEntries={['/dashboard']}>
       <ConfigContext.Provider value={makeConfig()}>
@@ -98,6 +101,16 @@ function renderPage() {
               setRemoteNodes: () => undefined,
               selectedRemoteNode: 'remote-a',
               selectRemoteNode: () => undefined,
+              workspaces: selectedWorkspace
+                ? [{ id: 'workspace-1', name: selectedWorkspace }]
+                : [],
+              workspaceSelection: selectedWorkspace
+                ? {
+                    kind: WorkspaceKind.workspace,
+                    workspace: selectedWorkspace,
+                  }
+                : { kind: WorkspaceKind.all },
+              selectWorkspace: () => undefined,
             }}
           >
             <DashboardPage />
@@ -180,5 +193,37 @@ describe('DashboardPage', () => {
       })
     );
     expect(latestQuery.status).not.toContain(Status.Queued);
+  });
+
+  it('scopes dashboard DAG and DAG-run requests by selected workspace', async () => {
+    renderPage({ selectedWorkspace: 'ops' });
+
+    await waitFor(() => {
+      expect(usePaginatedDAGRunsMock).toHaveBeenCalled();
+      expect(clientGetMock).toHaveBeenCalled();
+    });
+
+    const latestCall =
+      usePaginatedDAGRunsMock.mock.calls[
+        usePaginatedDAGRunsMock.mock.calls.length - 1
+      ]?.[0];
+    expect(latestCall?.query).toEqual(
+      expect.objectContaining({
+        remoteNode: 'remote-a',
+        workspace: 'ops',
+      })
+    );
+
+    expect(clientGetMock).toHaveBeenCalledWith(
+      '/dags',
+      expect.objectContaining({
+        params: {
+          query: expect.objectContaining({
+            remoteNode: 'remote-a',
+            workspace: 'ops',
+          }),
+        },
+      })
+    );
   });
 });

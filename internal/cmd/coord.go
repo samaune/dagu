@@ -11,10 +11,13 @@ import (
 	"net"
 	"os"
 
+	cmdprocess "github.com/dagucloud/dagu/internal/cmd/process"
 	"github.com/dagucloud/dagu/internal/cmn/config"
 	"github.com/dagucloud/dagu/internal/cmn/logger"
 	"github.com/dagucloud/dagu/internal/cmn/logger/tag"
 	"github.com/dagucloud/dagu/internal/core/exec"
+	"github.com/dagucloud/dagu/internal/dagstate"
+	"github.com/dagucloud/dagu/internal/runtime/workspacebundle"
 	"github.com/dagucloud/dagu/internal/service/coordinator"
 	"github.com/dagucloud/dagu/internal/service/eventstore"
 	"github.com/dagucloud/dagu/internal/service/healthcheck"
@@ -27,7 +30,7 @@ import (
 
 // grpcMaxMsgSize is the maximum message size for gRPC calls.
 // Default gRPC limit is 4 MB; we increase to 16 MB to handle large status
-// payloads that include LLM session messages in shared-nothing mode.
+// payloads that include LLM session messages from workers.
 const grpcMaxMsgSize = 16 * 1024 * 1024
 
 func CmdCoordinator() *cobra.Command {
@@ -39,9 +42,9 @@ func CmdCoordinator() *cobra.Command {
 
 The coordinator server provides a central point for distributed workers to:
 - Poll for tasks to execute
-- Fetch DAG definitions (To be implemented)
-- Report task execution status (To be implemented)
-- Register themselves with the system (to be implemented)
+- Fetch DAG definitions and workspace bundles
+- Report task execution status, logs, artifacts, and persistent state
+- Send heartbeats, task-claim acknowledgements, and cancellation requests
 
 This server uses gRPC for efficient communication with remote workers and
 supports authentication via signing keys and TLS encryption.
@@ -99,10 +102,12 @@ func runCoordinator(ctx *Context, _ []string) error {
 		coordCtx.Config,
 		coordCtx.ServiceRegistry,
 		coordCtx.DAGRunStore,
+		coordCtx.StateStore,
 		coordCtx.DispatchTaskStore,
 		coordCtx.WorkerHeartbeatStore,
 		coordCtx.DAGRunLeaseStore,
 		coordCtx.ActiveDistributedRunStore,
+		coordCtx.DAGStore,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to initialize coordinator: %w", err)
@@ -137,10 +142,12 @@ func newCoordinator(
 	cfg *config.Config,
 	registry exec.ServiceRegistry,
 	dagRunStore exec.DAGRunStore,
+	stateStore dagstate.Store,
 	dispatchTaskStore exec.DispatchTaskStore,
 	workerHeartbeatStore exec.WorkerHeartbeatStore,
 	dagRunLeaseStore exec.DAGRunLeaseStore,
 	activeDistributedRunStore exec.ActiveDistributedRunStore,
+	dagStore exec.DAGStore,
 ) (*coordinator.Service, *coordinator.Handler, error) {
 	// Generate instance ID
 	hostname, err := os.Hostname()
@@ -219,15 +226,20 @@ func newCoordinator(
 	}
 
 	// Create handler with DAGRunStore for status persistence and LogDir for log streaming
+	agentStores := cmdprocess.NewRuntimeAgentStores(ctx.Context, cfg)
 	handler := coordinator.NewHandler(coordinator.HandlerConfig{
 		DAGRunStore:               dagRunStore,
+		StateStore:                stateStore,
 		LogDir:                    cfg.Paths.LogDir,
 		ArtifactDir:               cfg.Paths.ArtifactDir,
+		WorkspaceBundleDir:        workspacebundle.StoreDir(cfg.Paths.DataDir),
 		Owner:                     exec.CoordinatorEndpoint{ID: instanceID, Host: advertiseAddr, Port: cfg.Coordinator.Port},
 		DispatchTaskStore:         dispatchTaskStore,
 		WorkerHeartbeatStore:      workerHeartbeatStore,
 		DAGRunLeaseStore:          dagRunLeaseStore,
 		ActiveDistributedRunStore: activeDistributedRunStore,
+		DAGStore:                  dagStore,
+		SecretStore:               agentStores.SecretStore,
 		EventService:              ctx.EventService,
 		EventSourceInstance:       ctx.EventSourceInstance,
 	})

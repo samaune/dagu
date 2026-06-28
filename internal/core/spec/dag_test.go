@@ -51,6 +51,233 @@ func TestBuildContextWithOpts_InvalidatesParamsState(t *testing.T) {
 	require.Same(t, cached, ctx.paramsState)
 }
 
+func TestLoadDAGToolsAqua(t *testing.T) {
+	t.Parallel()
+
+	dag, err := LoadYAML(context.Background(), []byte(`
+tools:
+  packages:
+    - name: jq
+      package: jqlang/jq
+      version: jq-1.7.1
+      commands: [jq]
+steps:
+  - id: check
+    run: jq --version
+`))
+
+	require.NoError(t, err)
+	require.NotNil(t, dag.Tools)
+	assert.Equal(t, "aqua", dag.Tools.Provider)
+	require.NotNil(t, dag.Tools.Registry)
+	assert.Equal(t, "standard", dag.Tools.Registry.Name)
+	assert.Equal(t, "standard", dag.Tools.Registry.Type)
+	assert.Equal(t, core.DefaultAquaStandardRegistryRef, dag.Tools.Registry.Ref)
+	assert.Regexp(t, `^[0-9a-f]{40}$`, dag.Tools.Registry.Ref)
+	require.Len(t, dag.Tools.Packages, 1)
+	assert.Equal(t, "jq", dag.Tools.Packages[0].Name)
+	assert.Equal(t, "jqlang/jq", dag.Tools.Packages[0].Package)
+	assert.Equal(t, "jq-1.7.1", dag.Tools.Packages[0].Version)
+	assert.Equal(t, []string{"jq"}, dag.Tools.Packages[0].Commands)
+}
+
+func TestLoadDAGToolsShorthandList(t *testing.T) {
+	t.Parallel()
+
+	dag, err := LoadYAML(context.Background(), []byte(`
+tools:
+  - jqlang/jq@jq-1.7.1
+  - google/pprof@d04f2422c8a17569c14e84da0fae252d9529826b
+steps:
+  - id: check
+    run: jq --version
+`))
+
+	require.NoError(t, err)
+	require.NotNil(t, dag.Tools)
+	assert.Equal(t, "aqua", dag.Tools.Provider)
+	require.NotNil(t, dag.Tools.Registry)
+	assert.Equal(t, core.DefaultAquaStandardRegistryRef, dag.Tools.Registry.Ref)
+	require.Len(t, dag.Tools.Packages, 2)
+	assert.Equal(t, "jq", dag.Tools.Packages[0].Name)
+	assert.Equal(t, "jqlang/jq", dag.Tools.Packages[0].Package)
+	assert.Equal(t, "jq-1.7.1", dag.Tools.Packages[0].Version)
+	assert.Empty(t, dag.Tools.Packages[0].Commands)
+	assert.Equal(t, "pprof", dag.Tools.Packages[1].Name)
+	assert.Equal(t, "google/pprof", dag.Tools.Packages[1].Package)
+	assert.Equal(t, "d04f2422c8a17569c14e84da0fae252d9529826b", dag.Tools.Packages[1].Version)
+	assert.Empty(t, dag.Tools.Packages[1].Commands)
+}
+
+func TestLoadDAGToolsPackagesAcceptMixedShorthandAndObject(t *testing.T) {
+	t.Parallel()
+
+	dag, err := LoadYAML(context.Background(), []byte(`
+tools:
+  packages:
+    - jqlang/jq@jq-1.7.1
+    - package: google/pprof
+      version: d04f2422c8a17569c14e84da0fae252d9529826b
+steps:
+  - id: check
+    run: jq --version
+`))
+
+	require.NoError(t, err)
+	require.NotNil(t, dag.Tools)
+	require.Len(t, dag.Tools.Packages, 2)
+	assert.Equal(t, "jqlang/jq", dag.Tools.Packages[0].Package)
+	assert.Equal(t, "jq-1.7.1", dag.Tools.Packages[0].Version)
+	assert.Equal(t, "google/pprof", dag.Tools.Packages[1].Package)
+	assert.Equal(t, "d04f2422c8a17569c14e84da0fae252d9529826b", dag.Tools.Packages[1].Version)
+}
+
+func TestLoadDAGToolsRejectsInvalidShorthand(t *testing.T) {
+	t.Parallel()
+
+	_, err := LoadYAML(context.Background(), []byte(`
+tools:
+  - jqlang/jq
+steps:
+  - id: check
+    run: jq --version
+`))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `tool package shorthand must be "package@version"`)
+}
+
+func TestLoadDAGToolsAcceptsPackageCommitSHA(t *testing.T) {
+	t.Parallel()
+
+	dag, err := LoadYAML(context.Background(), []byte(`
+tools:
+  packages:
+    - package: google/pprof
+      version: d04f2422c8a17569c14e84da0fae252d9529826b
+steps:
+  - id: check
+    run: pprof --help
+`))
+
+	require.NoError(t, err)
+	require.NotNil(t, dag.Tools)
+	require.Len(t, dag.Tools.Packages, 1)
+	assert.Equal(t, "aqua", dag.Tools.Provider)
+	assert.Equal(t, "d04f2422c8a17569c14e84da0fae252d9529826b", dag.Tools.Packages[0].Version)
+	assert.Empty(t, dag.Tools.Packages[0].Commands)
+}
+
+func TestLoadDAGToolsAcceptsOmittedCommands(t *testing.T) {
+	t.Parallel()
+
+	dag, err := LoadYAML(context.Background(), []byte(`
+tools:
+  provider: aqua
+  registry:
+    type: standard
+    ref: v4.233.0
+  packages:
+    - name: jq
+      package: jqlang/jq
+      version: jq-1.7.1
+steps:
+  - id: check
+    run: jq
+`))
+
+	require.NoError(t, err)
+	require.NotNil(t, dag.Tools)
+	require.Len(t, dag.Tools.Packages, 1)
+	assert.Equal(t, "jq", dag.Tools.Packages[0].Name)
+	assert.Empty(t, dag.Tools.Packages[0].Commands)
+}
+
+func TestLoadDAGToolsRejectsMissingGitHubContentRegistryRef(t *testing.T) {
+	t.Parallel()
+
+	_, err := LoadYAML(context.Background(), []byte(`
+tools:
+  provider: aqua
+  registry:
+    type: github_content
+    repo_owner: example
+    repo_name: aqua-registry
+    path: registry.yaml
+  packages:
+    - name: jq
+      package: jqlang/jq
+      version: jq-1.7.1
+      commands: [jq]
+steps:
+  - id: check
+    run: jq
+`))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "registry.ref is required")
+}
+
+func TestLoadDAGToolsRejectsFloatingLatestVersion(t *testing.T) {
+	t.Parallel()
+
+	_, err := LoadYAML(context.Background(), []byte(`
+tools:
+  provider: aqua
+  registry:
+    ref: v4.233.0
+  packages:
+    - package: jqlang/jq
+      version: LATEST
+      commands: [jq]
+steps:
+  - id: check
+    run: jq
+`))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `version must be pinned, got "LATEST"`)
+}
+
+func TestLoadDAGToolsRejectsCommandPath(t *testing.T) {
+	t.Parallel()
+
+	_, err := LoadYAML(context.Background(), []byte(`
+tools:
+  provider: aqua
+  registry:
+    ref: v4.233.0
+  packages:
+    - package: jqlang/jq
+      version: jq-1.7.1
+      commands: [bin/jq]
+steps:
+  - id: check
+    run: jq
+`))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `command "bin/jq" must be an executable name`)
+}
+
+func TestLoadDAGToolsRejectsShellFragmentCommand(t *testing.T) {
+	t.Parallel()
+
+	_, err := LoadYAML(context.Background(), []byte(`
+tools:
+  packages:
+    - package: jqlang/jq
+      version: jq-1.7.1
+      commands: ["jq;echo"]
+steps:
+  - id: check
+    run: jq
+`))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `command "jq;echo" must be an executable name`)
+}
+
 // Helper to create PortValue from string
 func portValue(s string) types.PortValue {
 	var p types.PortValue
@@ -73,9 +300,9 @@ func stringOrArrayList(ss []string) types.StringOrArray {
 	return v
 }
 
-// Helper to create TagsValue from single string
-func tagsValue(s string) types.TagsValue {
-	var v types.TagsValue
+// Helper to create LabelsValue from single string
+func labelsValue(s string) types.LabelsValue {
+	var v types.LabelsValue
 	_ = yaml.Unmarshal([]byte(`"`+s+`"`), &v)
 	return v
 }
@@ -158,14 +385,14 @@ func TestBuildType(t *testing.T) {
 		wantErr  bool
 	}{
 		{
-			name:     "EmptyDefaultsToChain",
+			name:     "EmptyDefaultsToGraph",
 			input:    "",
-			expected: core.TypeChain,
+			expected: core.TypeGraph,
 		},
 		{
-			name:     "WhitespaceDefaultsToChain",
+			name:     "WhitespaceDefaultsToGraph",
 			input:    "  ",
-			expected: core.TypeChain,
+			expected: core.TypeGraph,
 		},
 		{
 			name:     "GraphType",
@@ -366,54 +593,100 @@ func TestBuildRestartWait(t *testing.T) {
 	}
 }
 
-func TestBuildTags(t *testing.T) {
+func TestBuildLabels(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name     string
-		tags     types.TagsValue
-		expected core.Tags
+		labels   types.LabelsValue
+		expected core.Labels
 	}{
 		{
-			name:     "NilTags",
-			tags:     types.TagsValue{},
+			name:     "NilLabels",
+			labels:   types.LabelsValue{},
 			expected: nil,
 		},
 		{
 			name:     "CommaSeparated",
-			tags:     tagsValue("daily,weekly"),
-			expected: core.Tags{{Key: "daily"}, {Key: "weekly"}},
+			labels:   labelsValue("daily,weekly"),
+			expected: core.Labels{{Key: "daily"}, {Key: "weekly"}},
 		},
 		{
 			name:     "NormalizedToLowercase",
-			tags:     tagsValue("Daily,WEEKLY"),
-			expected: core.Tags{{Key: "daily"}, {Key: "weekly"}},
+			labels:   labelsValue("Daily,WEEKLY"),
+			expected: core.Labels{{Key: "daily"}, {Key: "weekly"}},
 		},
 		{
 			name:     "TrimmedWhitespace",
-			tags:     tagsValue(" tag1 , tag2 "),
-			expected: core.Tags{{Key: "tag1"}, {Key: "tag2"}},
+			labels:   labelsValue("label1, label2"),
+			expected: core.Labels{{Key: "label1"}, {Key: "label2"}},
 		},
 		{
-			name:     "KeyValueTags",
-			tags:     tagsValue("env=prod team=platform"),
-			expected: core.Tags{{Key: "env", Value: "prod"}, {Key: "team", Value: "platform"}},
+			name:     "KeyValueLabels",
+			labels:   labelsValue("env=prod team=platform"),
+			expected: core.Labels{{Key: "env", Value: "prod"}, {Key: "team", Value: "platform"}},
 		},
 		{
-			name:     "MixedTags",
-			tags:     tagsValue("env=prod,critical"),
-			expected: core.Tags{{Key: "env", Value: "prod"}, {Key: "critical"}},
+			name:     "MixedLabels",
+			labels:   labelsValue("env=prod,critical"),
+			expected: core.Labels{{Key: "env", Value: "prod"}, {Key: "critical"}},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d := &dag{Tags: tt.tags}
-			result, err := buildTags(testBuildContext(), d)
+			d := &dag{Labels: tt.labels}
+			result, err := buildLabels(testBuildContext(), d)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestLoadYAMLLabels(t *testing.T) {
+	t.Parallel()
+
+	d, err := LoadYAML(context.Background(), []byte(`
+labels:
+  env: prod
+  team: platform
+steps:
+  - name: step
+    run: echo ok
+`), WithoutEval())
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"env=prod", "team=platform"}, d.Labels.Strings())
+}
+
+func TestLoadYAMLDeprecatedTags(t *testing.T) {
+	t.Parallel()
+
+	d, err := LoadYAML(context.Background(), []byte(`
+tags:
+  - env=prod
+  - team=platform
+steps:
+  - name: step
+    run: echo ok
+`), WithoutEval())
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"env=prod", "team=platform"}, d.Labels.Strings())
+}
+
+func TestLoadYAMLLabelsAndDeprecatedTagsRejected(t *testing.T) {
+	t.Parallel()
+
+	_, err := LoadYAML(context.Background(), []byte(`
+labels:
+  - env=prod
+tags:
+  - team=platform
+steps:
+  - name: step
+    run: echo ok
+`), WithoutEval())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "labels and deprecated tags cannot both be set")
 }
 
 func TestBuildMaxActiveRuns(t *testing.T) {
@@ -585,6 +858,89 @@ func TestBuildRunConfig(t *testing.T) {
 	}
 }
 
+func TestLoadYAMLResourcesRejectsInvalidLimits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "InvalidCPU",
+			yaml: `
+name: resource-limits
+resources:
+  limits:
+    cpu: nope
+steps:
+  - run: echo ok
+`,
+		},
+		{
+			name: "InvalidMemory",
+			yaml: `
+name: resource-limits
+resources:
+  limits:
+    memory: nope
+steps:
+  - run: echo ok
+`,
+		},
+		{
+			name: "RejectsFractionalMillicores",
+			yaml: `
+name: resource-limits
+resources:
+  limits:
+    cpu: "0.5m"
+steps:
+  - run: echo ok
+`,
+		},
+		{
+			name: "RejectsSubMilliCPU",
+			yaml: `
+name: resource-limits
+resources:
+  limits:
+    cpu: "0.0005"
+steps:
+  - run: echo ok
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := LoadYAML(context.Background(), []byte(tt.yaml))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "resources")
+		})
+	}
+}
+
+func TestLoadYAMLResourcesLimits(t *testing.T) {
+	t.Parallel()
+
+	dag, err := LoadYAML(context.Background(), []byte(`
+name: resource-limits
+resources:
+  limits:
+    cpu: "500m"
+    memory: "1Gi"
+steps:
+  - run: echo ok
+`))
+	require.NoError(t, err)
+	require.NotNil(t, dag.Resources)
+	require.NotNil(t, dag.Resources.Limits)
+	assert.Equal(t, "500m", dag.Resources.Limits.CPU)
+	assert.Equal(t, int64(500), dag.Resources.Limits.CPUMillis)
+	assert.Equal(t, "1Gi", dag.Resources.Limits.Memory)
+	assert.Equal(t, int64(1024*1024*1024), dag.Resources.Limits.MemoryBytes)
+}
+
 func TestBuildHistRetentionDays(t *testing.T) {
 	t.Parallel()
 
@@ -601,6 +957,39 @@ func TestBuildHistRetentionDays(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			d := &dag{HistRetentionDays: tt.input}
 			result, err := buildHistRetentionDays(testBuildContext(), d)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestBuildHistRetentionRuns(t *testing.T) {
+	t.Parallel()
+
+	runs := 3
+	zero := 0
+	neg := -1
+	tests := []struct {
+		name        string
+		input       *int
+		expected    int
+		errContains string
+	}{
+		{name: "NilDefaultsTo0", input: nil, expected: 0},
+		{name: "CustomValue", input: &runs, expected: 3},
+		{name: "ZeroValueInvalid", input: &zero, errContains: "hist_retention_runs must be > 0"},
+		{name: "NegativeValueInvalid", input: &neg, errContains: "hist_retention_runs must be > 0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := &dag{HistRetentionRuns: tt.input}
+			result, err := buildHistRetentionRuns(testBuildContext(), d)
+			if tt.errContains != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
@@ -715,6 +1104,71 @@ func TestBuildWorkerSelector(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 			assert.Equal(t, tt.forceLocal, forceLocal)
+		})
+	}
+}
+
+func TestBuildWebhookConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    *webhookConfig
+		expected *core.WebhookConfig
+		wantErr  string
+	}{
+		{
+			name:     "NilReturnsNil",
+			input:    nil,
+			expected: nil,
+		},
+		{
+			name: "NormalizesAndTrimsHeaderNames",
+			input: &webhookConfig{
+				ForwardHeaders: []string{" X-GitHub-Event ", "Stripe-Idempotency-Key"},
+			},
+			expected: &core.WebhookConfig{
+				ForwardHeaders: []string{"x-github-event", "stripe-idempotency-key"},
+			},
+		},
+		{
+			name: "RejectsBlankHeaderName",
+			input: &webhookConfig{
+				ForwardHeaders: []string{"x-github-event", "  "},
+			},
+			wantErr: "forward_headers[1]",
+		},
+		{
+			name: "RejectsAuthorizationHeader",
+			input: &webhookConfig{
+				ForwardHeaders: []string{"Authorization"},
+			},
+			wantErr: "authorization",
+		},
+		{
+			name: "RejectsInvalidHeaderToken",
+			input: &webhookConfig{
+				ForwardHeaders: []string{"my header"},
+			},
+			wantErr: "invalid HTTP header name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			d := &dag{Webhook: tt.input}
+			result, err := buildWebhookConfig(testBuildContext(), d)
+
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
@@ -1845,6 +2299,15 @@ func TestBuildSecrets(t *testing.T) {
 					},
 				},
 			},
+			{
+				name: "RegistryRef",
+				input: []secretRef{
+					{Name: "DB_PASSWORD", Ref: "prod/db-password"},
+				},
+				expected: []core.SecretRef{
+					{Name: "DB_PASSWORD", Ref: "prod/db-password"},
+				},
+			},
 		}
 
 		for _, tt := range tests {
@@ -1877,14 +2340,42 @@ func TestBuildSecrets(t *testing.T) {
 				input: []secretRef{
 					{Name: "MY_SECRET", Key: "secret/data/test"},
 				},
-				errContains: "'provider' field is required",
+				errContains: "exactly one of 'ref' or 'provider' plus 'key' is required",
 			},
 			{
 				name: "MissingKey",
 				input: []secretRef{
 					{Name: "MY_SECRET", Provider: "vault"},
 				},
-				errContains: "'key' field is required",
+				errContains: "exactly one of 'ref' or 'provider' plus 'key' is required",
+			},
+			{
+				name: "RefWithProviderAndKey",
+				input: []secretRef{
+					{Name: "MY_SECRET", Ref: "db-password", Provider: "vault", Key: "secret/data/test"},
+				},
+				errContains: "exactly one of 'ref' or 'provider' plus 'key' is required",
+			},
+			{
+				name: "RefWithProvider",
+				input: []secretRef{
+					{Name: "MY_SECRET", Ref: "db-password", Provider: "vault"},
+				},
+				errContains: "exactly one of 'ref' or 'provider' plus 'key' is required",
+			},
+			{
+				name: "RefWithKey",
+				input: []secretRef{
+					{Name: "MY_SECRET", Ref: "db-password", Key: "secret/data/test"},
+				},
+				errContains: "exactly one of 'ref' or 'provider' plus 'key' is required",
+			},
+			{
+				name: "InvalidRegistryRef",
+				input: []secretRef{
+					{Name: "MY_SECRET", Ref: "../db-password"},
+				},
+				errContains: "registry ref must be a slash-separated lowercase slug path",
 			},
 			{
 				name: "DuplicateNames",
@@ -1894,12 +2385,85 @@ func TestBuildSecrets(t *testing.T) {
 				},
 				errContains: "duplicate secret name",
 			},
+			{
+				name: "InvalidEnvName",
+				input: []secretRef{
+					{Name: "1API_KEY", Provider: "env", Key: "API_KEY"},
+				},
+				errContains: "must be a valid environment variable name",
+			},
+			{
+				name: "ReservedDaguPrefix",
+				input: []secretRef{
+					{Name: "DAGU_API_KEY", Provider: "env", Key: "API_KEY"},
+				},
+				errContains: "must not start with DAGU_",
+			},
 		}
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				d := &dag{Secrets: tt.input}
 				_, err := buildSecrets(testBuildContext(), d)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+			})
+		}
+	})
+
+	t.Run("secret names can overlap DAG env and params", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name string
+			dag  *dag
+		}{
+			{
+				name: "DAGEnv",
+				dag: &dag{
+					Env:     envValueFromYAML(t, "API_KEY: from-env"),
+					Secrets: []secretRef{{Name: "API_KEY", Provider: "env", Key: "API_KEY"}},
+				},
+			},
+			{
+				name: "DAGParam",
+				dag: &dag{
+					Params:  map[string]any{"API_KEY": "from-param"},
+					Secrets: []secretRef{{Name: "API_KEY", Provider: "env", Key: "API_KEY"}},
+				},
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				secrets, err := buildSecrets(testBuildContext(), tt.dag)
+				require.NoError(t, err)
+				require.Len(t, secrets, 1)
+				assert.Equal(t, "API_KEY", secrets[0].Name)
+			})
+		}
+	})
+
+	t.Run("secret names cannot overlap managed runtime env", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name        string
+			dag         *dag
+			errContains string
+		}{
+			{
+				name: "ManagedRuntimeEnv",
+				dag: &dag{
+					Secrets: []secretRef{{Name: "DAG_RUN_ID", Provider: "env", Key: "API_KEY"}},
+				},
+				errContains: "collides with Dagu-managed runtime environment variable",
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := buildSecrets(testBuildContext(), tt.dag)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errContains)
 			})
@@ -2213,6 +2777,102 @@ artifacts:
 				Dir:     "/var/lib/dagu/artifacts",
 			},
 		},
+		{
+			name: "AutoEnableWhenCommandReferencesArtifactsDir",
+			yaml: `
+steps:
+  - name: write
+    run: printf 'artifact' > "$DAG_RUN_ARTIFACTS_DIR/out.txt"
+`,
+			expected: &core.ArtifactsConfig{Enabled: true},
+		},
+		{
+			name: "AutoEnableWhenNestedExecutorConfigReferencesArtifactsDir",
+			yaml: `
+steps:
+  - name: render
+    action: template.render
+    with:
+      output: ${DAG_RUN_ARTIFACTS_DIR}/greeting.txt
+      data:
+        name: tom
+      template: |
+        Hello, {{ .name }}!
+`,
+			expected: &core.ArtifactsConfig{Enabled: true},
+		},
+		{
+			name: "AutoEnableWhenStdoutArtifactIsUsed",
+			yaml: `
+steps:
+  - name: report
+    run: ./generate-report
+    stdout:
+      artifact: reports/report.md
+`,
+			expected: &core.ArtifactsConfig{Enabled: true},
+		},
+		{
+			name: "ParamsArtifactShapeDoesNotAutoEnable",
+			yaml: `
+params:
+  stdout:
+    artifact: reports/report.md
+`,
+			expected: nil,
+		},
+		{
+			name: "ExplicitDisableWithParamsArtifactShapeDoesNotError",
+			yaml: `
+artifacts:
+  enabled: false
+params:
+  stdout:
+    artifact: reports/report.md
+`,
+			expected: &core.ArtifactsConfig{Enabled: false},
+		},
+		{
+			name: "AutoEnableWhenPowerShellEnvReferenceArtifactsDir",
+			yaml: `
+steps:
+  - name: write
+    run: Write-Output $env:DAG_RUN_ARTIFACTS_DIR
+`,
+			expected: &core.ArtifactsConfig{Enabled: true},
+		},
+		{
+			name: "AutoEnableWhenArtifactActionIsUsed",
+			yaml: `
+steps:
+  - name: write
+    action: artifact.write
+    with:
+      path: out.txt
+      content: artifact
+`,
+			expected: &core.ArtifactsConfig{Enabled: true},
+		},
+		{
+			name: "LiteralMentionWithoutEnvReferenceDoesNotAutoEnable",
+			yaml: `
+steps:
+  - name: write
+    run: printf 'DAG_RUN_ARTIFACTS_DIR'
+`,
+			expected: nil,
+		},
+		{
+			name: "ExplicitDisableWinsOverAutoEnable",
+			yaml: `
+artifacts:
+  enabled: false
+steps:
+  - name: write
+    run: printf 'artifact' > "$DAG_RUN_ARTIFACTS_DIR/out.txt"
+`,
+			expected: &core.ArtifactsConfig{Enabled: false},
+		},
 	}
 
 	for _, tt := range tests {
@@ -2228,6 +2888,77 @@ artifacts:
 			result, err := buildArtifacts(testBuildContext(), &d)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestBuildArtifactsRejectsDisabledArtifactsForArtifactAction(t *testing.T) {
+	t.Parallel()
+
+	var d dag
+	err := yaml.Unmarshal([]byte(`
+artifacts:
+  enabled: false
+steps:
+  - name: write
+    action: artifact.write
+    with:
+      path: out.txt
+      content: artifact
+`), &d)
+	require.NoError(t, err)
+
+	result, err := buildArtifacts(testBuildContext(), &d)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "artifact actions require artifacts.enabled to be true")
+}
+
+func TestBuildArtifactsRejectsDisabledArtifactsForArtifactOutput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "StdoutArtifact",
+			yaml: `
+artifacts:
+  enabled: false
+steps:
+  - name: report
+    run: echo ok
+    stdout:
+      artifact: reports/report.md
+`,
+		},
+		{
+			name: "StderrArtifact",
+			yaml: `
+artifacts:
+  enabled: false
+steps:
+  - name: report
+    run: echo ok
+    stderr:
+      artifact: reports/report.err
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var d dag
+			err := yaml.Unmarshal([]byte(tt.yaml), &d)
+			require.NoError(t, err)
+
+			result, err := buildArtifacts(testBuildContext(), &d)
+			require.Error(t, err)
+			assert.Nil(t, result)
+			assert.Contains(t, err.Error(), "artifact outputs require artifacts.enabled to be true")
 		})
 	}
 }
@@ -2565,16 +3296,14 @@ func TestChainTypeDependsValidation(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name: "DefaultTypeWithDependsShouldError",
+			name: "DefaultTypeWithDependsShouldWork",
 			dag: &dag{
-				// Default type is chain, so depends should not be allowed
 				Steps: []any{
 					map[string]any{"name": "step1", "command": "echo 1"},
 					map[string]any{"name": "step2", "command": "echo 2", "depends": []string{"step1"}},
 				},
 			},
-			expectErr:   true,
-			errContains: "depends field is not allowed for DAGs with type 'chain'",
+			expectErr: false,
 		},
 		{
 			name: "ChainTypeNestedParallelWithDependsShouldError",
@@ -2641,7 +3370,7 @@ params:
 env:
   - FULL_PATH: "${data_dir}/output"
 steps:
-  - command: echo test
+  - run: echo test
 `
 	d, err := LoadYAML(context.Background(), []byte(yamlData))
 	require.NoError(t, err)
@@ -2665,7 +3394,7 @@ params:
 env:
   - FULL_PATH: "${data_dir}/output"
 steps:
-  - command: echo test
+  - run: echo test
 `
 	d, err := LoadYAML(context.Background(), []byte(yamlData), WithoutEval())
 	require.NoError(t, err)
@@ -2689,7 +3418,7 @@ params:
 env:
   - FULL_PATH: "${data_dir}/output"
 steps:
-  - command: echo test
+  - run: echo test
 `
 	d, err := LoadYAML(context.Background(), []byte(yamlData), OnlyMetadata())
 	require.NoError(t, err)
@@ -2733,9 +3462,8 @@ func TestRouterNotAllowedInChainType(t *testing.T) {
 			errContains: "router steps require type 'graph'",
 		},
 		{
-			name: "DefaultTypeWithRouterShouldError",
+			name: "DefaultTypeWithRouterShouldWork",
 			dag: &dag{
-				// Default type is chain, so router should not be allowed
 				Steps: []any{
 					map[string]any{
 						"name":  "router",
@@ -2748,8 +3476,7 @@ func TestRouterNotAllowedInChainType(t *testing.T) {
 					map[string]any{"name": "step_a", "command": "echo A"},
 				},
 			},
-			expectErr:   true,
-			errContains: "router steps require type 'graph'",
+			expectErr: false,
 		},
 		{
 			name: "GraphTypeWithRouterShouldWork",

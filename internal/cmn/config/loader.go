@@ -244,6 +244,9 @@ func (l *ConfigLoader) buildConfig(def Definition) (*Config, error) {
 				MaxSessions: 5,
 			},
 		},
+		Webhooks: WebhooksConfig{
+			MaxPayloadSize: DefaultWebhookMaxPayloadSize,
+		},
 	}
 
 	if err := l.loadCoreConfig(&cfg, def); err != nil {
@@ -281,6 +284,7 @@ func (l *ConfigLoader) buildConfig(def Definition) (*Config, error) {
 	}
 
 	l.loadCacheConfig(&cfg, def)
+	l.loadWebhooksConfig(&cfg, def)
 	l.loadExecutionModeConfig(&cfg, def)
 
 	if err := l.LoadLegacyFields(&cfg, def); err != nil {
@@ -376,8 +380,10 @@ func (l *ConfigLoader) loadPathsConfig(cfg *Config, def Definition) error {
 		{"AltDAGsDir", &cfg.Paths.AltDAGsDir, def.Paths.AltDagsDir},
 		{"SuspendFlagsDir", &cfg.Paths.SuspendFlagsDir, def.Paths.SuspendFlagsDir},
 		{"DataDir", &cfg.Paths.DataDir, def.Paths.DataDir},
+		{"ToolsDir", &cfg.Paths.ToolsDir, def.Paths.ToolsDir},
 		{"LogDir", &cfg.Paths.LogDir, def.Paths.LogDir},
 		{"ArtifactDir", &cfg.Paths.ArtifactDir, def.Paths.ArtifactDir},
+		{"DAGStateDir", &cfg.Paths.DAGStateDir, def.Paths.DAGStateDir},
 		{"AdminLogsDir", &cfg.Paths.AdminLogsDir, def.Paths.AdminLogsDir},
 		{"EventStoreDir", &cfg.Paths.EventStoreDir, def.Paths.EventStoreDir},
 		{"BaseConfig", &cfg.Paths.BaseConfig, def.Paths.BaseConfig},
@@ -393,6 +399,7 @@ func (l *ConfigLoader) loadPathsConfig(cfg *Config, def Definition) error {
 		{"ContextsDir", &cfg.Paths.ContextsDir, def.Paths.ContextsDir},
 		{"RemoteNodesDir", &cfg.Paths.RemoteNodesDir, def.Paths.RemoteNodesDir},
 		{"WorkspacesDir", &cfg.Paths.WorkspacesDir, def.Paths.WorkspacesDir},
+		{"ViewsDir", &cfg.Paths.ViewsDir, def.Paths.ViewsDir},
 	}
 
 	for _, m := range pathMappings {
@@ -450,6 +457,7 @@ func (l *ConfigLoader) loadServerConfig(cfg *Config, def Definition) {
 	cfg.Server = Server{
 		Host:        def.Host,
 		Port:        def.Port,
+		PublicURL:   def.PublicURL,
 		BasePath:    def.BasePath,
 		APIBasePath: def.APIBasePath,
 		Permissions: map[Permission]bool{
@@ -654,6 +662,7 @@ func (l *ConfigLoader) warnIfWeakValue(value string, weakList []string, msg stri
 func (l *ConfigLoader) loadServerDefaults(cfg *Config, def Definition) {
 	cfg.Server.BasePath = cleanServerBasePath(cfg.Server.BasePath)
 	cfg.Server.CheckUpdates = l.v.GetBool("check_updates")
+	cfg.Server.CORSAllowedOrigins = parseStringList(l.v.Get("cors_allowed_origins"))
 
 	cfg.Server.Metrics = MetricsAccessPrivate
 	if def.Metrics != nil {
@@ -715,6 +724,13 @@ func (l *ConfigLoader) loadServerDefaults(cfg *Config, def Definition) {
 		} else {
 			l.warnings = append(l.warnings, fmt.Sprintf("Invalid sse.slow_client_timeout value: %q", *def.SSE.SlowClientTimeout))
 		}
+	}
+}
+
+func (l *ConfigLoader) loadWebhooksConfig(cfg *Config, def Definition) {
+	cfg.Webhooks.MaxPayloadSize = l.v.GetInt("webhooks.max_payload_size")
+	if def.Webhooks != nil && def.Webhooks.MaxPayloadSize != nil {
+		cfg.Webhooks.MaxPayloadSize = *def.Webhooks.MaxPayloadSize
 	}
 }
 
@@ -1186,8 +1202,10 @@ func (l *ConfigLoader) loadBotsConfig(cfg *Config, def Definition) {
 	cfg.Bots.Telegram.InterestedEventTypes = append([]string(nil), DefaultBotInterestedEventTypes...)
 	cfg.Bots.Slack.InterestedEventTypes = append([]string(nil), DefaultBotInterestedEventTypes...)
 	cfg.Bots.Discord.InterestedEventTypes = append([]string(nil), DefaultBotInterestedEventTypes...)
+	cfg.Bots.Line.InterestedEventTypes = append([]string(nil), DefaultBotInterestedEventTypes...)
 	cfg.Bots.Slack.RespondToAll = true
 	cfg.Bots.Discord.RespondToAll = true
+	cfg.Bots.Line.RespondToAll = true
 
 	botsDef := def.Bots
 	if botsDef == nil {
@@ -1287,6 +1305,49 @@ func (l *ConfigLoader) loadBotsConfig(cfg *Config, def Definition) {
 			cfg.Bots.Discord.RespondToAll = *botsDef.Discord.RespondToAll
 		}
 	}
+
+	// Check env var override for LINE credentials
+	if token := l.v.GetString("bots.line.channel_access_token"); token != "" {
+		cfg.Bots.Line.ChannelAccessToken = token
+	}
+	if secret := l.v.GetString("bots.line.channel_secret"); secret != "" {
+		cfg.Bots.Line.ChannelSecret = secret
+	}
+	if _, ok := os.LookupEnv(strings.ToUpper(AppSlug) + "_BOTS_LINE_ALLOWED_SOURCE_IDS"); ok {
+		cfg.Bots.Line.AllowedSourceIDs = parseStringList(l.v.Get("bots.line.allowed_source_ids"))
+	}
+	if raw, ok := lookupInterestedEventTypesEnv("BOTS_LINE_INTERESTED_EVENT_TYPES"); ok {
+		cfg.Bots.Line.InterestedEventTypes = parseInterestedEventTypes(raw)
+	}
+	if _, ok := os.LookupEnv(strings.ToUpper(AppSlug) + "_BOTS_LINE_RESPOND_TO_ALL"); ok {
+		cfg.Bots.Line.RespondToAll = l.v.GetBool("bots.line.respond_to_all")
+	}
+
+	if botsDef.Line != nil {
+		if cfg.Bots.Line.ChannelAccessToken == "" {
+			cfg.Bots.Line.ChannelAccessToken = botsDef.Line.ChannelAccessToken
+		}
+		if cfg.Bots.Line.ChannelSecret == "" {
+			cfg.Bots.Line.ChannelSecret = botsDef.Line.ChannelSecret
+		}
+		if len(botsDef.Line.AllowedSourceIDs) > 0 &&
+			!hasEnv("BOTS_LINE_ALLOWED_SOURCE_IDS") {
+			cfg.Bots.Line.AllowedSourceIDs = botsDef.Line.AllowedSourceIDs
+		}
+		if botsDef.Line.InterestedEventTypes != nil &&
+			!hasInterestedEventTypesEnv("BOTS_LINE_INTERESTED_EVENT_TYPES") {
+			cfg.Bots.Line.InterestedEventTypes = parseInterestedEventTypesSlice(botsDef.Line.InterestedEventTypes)
+		}
+		if botsDef.Line.RespondToAll != nil &&
+			!hasEnv("BOTS_LINE_RESPOND_TO_ALL") {
+			cfg.Bots.Line.RespondToAll = *botsDef.Line.RespondToAll
+		}
+	}
+}
+
+func hasEnv(name string) bool {
+	_, ok := os.LookupEnv(strings.ToUpper(AppSlug) + "_" + name)
+	return ok
 }
 
 func parseInterestedEventTypes(raw string) []string {
@@ -1354,6 +1415,7 @@ func (l *ConfigLoader) finalizePaths(cfg *Config) {
 		defaultPath string
 	}{
 		{&cfg.Paths.DAGRunsDir, "dag-runs"},
+		{&cfg.Paths.DAGStateDir, "dag-state"},
 		{&cfg.Paths.ProcDir, "proc"},
 		{&cfg.Paths.QueueDir, "queue"},
 		{&cfg.Paths.ServiceRegistryDir, "service-registry"},
@@ -1363,6 +1425,7 @@ func (l *ConfigLoader) finalizePaths(cfg *Config) {
 		{&cfg.Paths.ContextsDir, "contexts"},
 		{&cfg.Paths.RemoteNodesDir, "remote-nodes"},
 		{&cfg.Paths.WorkspacesDir, "workspaces"},
+		{&cfg.Paths.ViewsDir, "views"},
 	}
 
 	for _, dp := range derivedPaths {
@@ -1373,6 +1436,9 @@ func (l *ConfigLoader) finalizePaths(cfg *Config) {
 
 	if cfg.Paths.SessionsDir == "" {
 		cfg.Paths.SessionsDir = filepath.Join(cfg.Paths.DataDir, "agent", "sessions")
+	}
+	if cfg.Paths.ToolsDir == "" {
+		cfg.Paths.ToolsDir = filepath.Join(cfg.Paths.DataDir, "tools")
 	}
 
 	if cfg.Paths.EventStoreDir == "" {
@@ -1599,6 +1665,9 @@ func (l *ConfigLoader) setViperDefaultValues(paths Paths) {
 	l.v.SetDefault("event_store.enabled", true)
 	l.v.SetDefault("event_store.retention_days", 1)
 
+	// Webhooks
+	l.v.SetDefault("webhooks.max_payload_size", DefaultWebhookMaxPayloadSize)
+
 	// Terminal
 	l.v.SetDefault("terminal.max_sessions", 5)
 
@@ -1627,6 +1696,7 @@ var envBindings = []envBinding{
 	// Server
 	{key: "log_format", env: "LOG_FORMAT"},
 	{key: "access_log_mode", env: "ACCESS_LOG_MODE"},
+	{key: "public_url", env: "PUBLIC_URL"},
 	{key: "base_path", env: "BASE_PATH"},
 	{key: "api_base_url", env: "API_BASE_URL"},
 	{key: "tz", env: "TZ"},
@@ -1635,6 +1705,7 @@ var envBindings = []envBinding{
 	{key: "debug", env: "DEBUG"},
 	{key: "headless", env: "HEADLESS"},
 	{key: "check_updates", env: "CHECK_UPDATES"},
+	{key: "cors_allowed_origins", env: "CORS_ALLOWED_ORIGINS"},
 	{key: "latest_status_today", env: "LATEST_STATUS_TODAY"},
 	{key: "metrics", env: "SERVER_METRICS"},
 	{key: "cache", env: "CACHE"},
@@ -1645,6 +1716,7 @@ var envBindings = []envBinding{
 	{key: "audit.retention_days", env: "AUDIT_RETENTION_DAYS"},
 	{key: "event_store.enabled", env: "EVENT_STORE_ENABLED"},
 	{key: "event_store.retention_days", env: "EVENT_STORE_RETENTION_DAYS"},
+	{key: "webhooks.max_payload_size", env: "WEBHOOKS_MAX_PAYLOAD_SIZE"},
 	{key: "session.max_per_user", env: "SESSION_MAX_PER_USER"},
 	{key: "sse.max_topics_per_connection", env: "SSE_MAX_TOPICS_PER_CONNECTION"},
 	{key: "sse.max_clients", env: "SSE_MAX_CLIENTS"},
@@ -1734,7 +1806,9 @@ var envBindings = []envBinding{
 	{key: "paths.executable", env: "EXECUTABLE", isPath: true},
 	{key: "paths.log_dir", env: "LOG_DIR", isPath: true},
 	{key: "paths.artifact_dir", env: "ARTIFACT_DIR", isPath: true},
+	{key: "paths.dag_state_dir", env: "DAG_STATE_DIR", isPath: true},
 	{key: "paths.data_dir", env: "DATA_DIR", isPath: true},
+	{key: "paths.tools_dir", env: "TOOLS_DIR", isPath: true},
 	{key: "paths.suspend_flags_dir", env: "SUSPEND_FLAGS_DIR", isPath: true},
 	{key: "paths.admin_logs_dir", env: "ADMIN_LOG_DIR", isPath: true},
 	{key: "paths.event_store_dir", env: "EVENT_STORE_DIR", isPath: true},
@@ -1814,6 +1888,11 @@ var envBindings = []envBinding{
 	{key: "bots.discord.allowed_channel_ids", env: "BOTS_DISCORD_ALLOWED_CHANNEL_IDS"},
 	{key: "bots.discord.interested_event_types", env: "BOTS_DISCORD_INTERESTED_EVENT_TYPES"},
 	{key: "bots.discord.respond_to_all", env: "BOTS_DISCORD_RESPOND_TO_ALL"},
+	{key: "bots.line.channel_access_token", env: "BOTS_LINE_CHANNEL_ACCESS_TOKEN"},
+	{key: "bots.line.channel_secret", env: "BOTS_LINE_CHANNEL_SECRET"},
+	{key: "bots.line.allowed_source_ids", env: "BOTS_LINE_ALLOWED_SOURCE_IDS"},
+	{key: "bots.line.interested_event_types", env: "BOTS_LINE_INTERESTED_EVENT_TYPES"},
+	{key: "bots.line.respond_to_all", env: "BOTS_LINE_RESPOND_TO_ALL"},
 
 	// License
 	{key: "license.key", env: "LICENSE_KEY"},

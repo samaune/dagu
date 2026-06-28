@@ -10,13 +10,16 @@ import (
 	"time"
 
 	"github.com/dagucloud/dagu/internal/core"
-	coordinatorv1 "github.com/dagucloud/dagu/proto/coordinator/v1"
 )
 
 var (
-	ErrDispatchTaskNotFound = errors.New("dispatch task claim not found")
-	ErrDAGRunLeaseNotFound  = errors.New("dag-run lease not found")
-	ErrActiveRunNotFound    = errors.New("active distributed run not found")
+	ErrDispatchTaskNotFound                   = errors.New("dispatch task claim not found")
+	ErrDispatchAdmissionNotFound              = errors.New("dispatch admission not found")
+	ErrDispatchAdmissionConflict              = errors.New("dispatch admission conflict")
+	ErrDispatchAdmissionLivenessNotConfigured = errors.New("dispatch admission liveness not configured")
+	ErrDAGRunLeaseNotFound                    = errors.New("dag-run lease not found")
+	ErrActiveRunNotFound                      = errors.New("active distributed run not found")
+	ErrWorkerHeartbeatNotFound                = errors.New("worker heartbeat not found")
 )
 
 // CoordinatorEndpoint identifies a coordinator instance that owns a
@@ -58,7 +61,7 @@ type DispatchTaskClaim struct {
 // ClaimedDispatchTask is a shared pending task that has been claimed by a
 // specific worker poller and must be acknowledged before execution begins.
 type ClaimedDispatchTask struct {
-	Task       *coordinatorv1.Task
+	Task       *DispatchTask
 	ClaimToken string
 	ClaimedAt  time.Time
 	WorkerID   string
@@ -66,11 +69,53 @@ type ClaimedDispatchTask struct {
 	Owner      CoordinatorEndpoint
 }
 
+// DispatchAdmissionRequest describes a queue admission reservation request.
+type DispatchAdmissionRequest struct {
+	QueueName             string
+	MaxConcurrency        int
+	NonAdmissionOccupancy int
+	AttemptKey            string
+	AttemptID             string
+	DAGRun                DAGRunRef
+	StaleThreshold        time.Duration
+}
+
+// DispatchAdmissionRejectReason identifies why a reservation was not granted.
+type DispatchAdmissionRejectReason string
+
+const (
+	DispatchAdmissionRejectedDuplicate  DispatchAdmissionRejectReason = "duplicate"
+	DispatchAdmissionRejectedNoCapacity DispatchAdmissionRejectReason = "no_capacity"
+)
+
+// DispatchAdmissionDecision is the durable queue admission result.
+type DispatchAdmissionDecision struct {
+	Reserved         bool
+	Reason           DispatchAdmissionRejectReason
+	ReservationToken string
+}
+
+// DispatchAdmissionBindRequest describes a coordinator bind for a reservation.
+type DispatchAdmissionBindRequest struct {
+	ReservationToken string
+	Task             *DispatchTask
+}
+
+// DispatchAdmissionStore reserves queue capacity and binds reservations to tasks.
+type DispatchAdmissionStore interface {
+	ReserveAdmission(ctx context.Context, req DispatchAdmissionRequest) (*DispatchAdmissionDecision, error)
+	BindAdmission(ctx context.Context, req DispatchAdmissionBindRequest) error
+	ReleaseAdmissionToken(ctx context.Context, reservationToken string) error
+	FinalizeAdmissionAttempt(ctx context.Context, attemptKey string) error
+	CleanupAdmissions(ctx context.Context, staleThreshold time.Duration) error
+}
+
 // DispatchTaskStore manages the shared distributed dispatch queue.
 type DispatchTaskStore interface {
-	Enqueue(ctx context.Context, task *coordinatorv1.Task) error
+	Enqueue(ctx context.Context, task *DispatchTask) error
 	ClaimNext(ctx context.Context, claim DispatchTaskClaim) (*ClaimedDispatchTask, error)
 	GetClaim(ctx context.Context, claimToken string) (*ClaimedDispatchTask, error)
+	ReleaseClaim(ctx context.Context, claimToken string) error
 	DeleteClaim(ctx context.Context, claimToken string) error
 	CountOutstandingByQueue(ctx context.Context, queueName string, claimTimeout time.Duration) (int, error)
 	HasOutstandingAttempt(ctx context.Context, attemptKey string, claimTimeout time.Duration) (bool, error)
@@ -78,10 +123,29 @@ type DispatchTaskStore interface {
 
 // WorkerHeartbeatRecord is the shared presence record for a worker.
 type WorkerHeartbeatRecord struct {
-	WorkerID        string                     `json:"workerId"`
-	Labels          map[string]string          `json:"labels,omitempty"`
-	Stats           *coordinatorv1.WorkerStats `json:"stats,omitempty"`
-	LastHeartbeatAt int64                      `json:"lastHeartbeatAt"`
+	WorkerID        string            `json:"workerId"`
+	Labels          map[string]string `json:"labels,omitempty"`
+	Stats           *WorkerStats      `json:"stats,omitempty"`
+	LastHeartbeatAt int64             `json:"lastHeartbeatAt"`
+}
+
+// WorkerStats describes worker poller capacity and running distributed tasks.
+type WorkerStats struct {
+	TotalPollers int32          `json:"totalPollers,omitempty"`
+	BusyPollers  int32          `json:"busyPollers,omitempty"`
+	RunningTasks []*RunningTask `json:"runningTasks,omitempty"`
+}
+
+// RunningTask describes one task currently executing on a worker.
+type RunningTask struct {
+	DAGRunID         string `json:"dagRunId,omitempty"`
+	DAGName          string `json:"dagName,omitempty"`
+	StartedAt        int64  `json:"startedAt,omitempty"`
+	RootDAGRunName   string `json:"rootDagRunName,omitempty"`
+	RootDAGRunID     string `json:"rootDagRunId,omitempty"`
+	ParentDAGRunName string `json:"parentDagRunName,omitempty"`
+	ParentDAGRunID   string `json:"parentDagRunId,omitempty"`
+	AttemptKey       string `json:"attemptKey,omitempty"`
 }
 
 // LastHeartbeatTime returns the last heartbeat as a time.
@@ -95,6 +159,7 @@ func (r WorkerHeartbeatRecord) LastHeartbeatTime() time.Time {
 // WorkerHeartbeatStore persists shared worker presence across coordinators.
 type WorkerHeartbeatStore interface {
 	Upsert(ctx context.Context, record WorkerHeartbeatRecord) error
+	Get(ctx context.Context, workerID string) (*WorkerHeartbeatRecord, error)
 	List(ctx context.Context) ([]WorkerHeartbeatRecord, error)
 	DeleteStale(ctx context.Context, before time.Time) (int, error)
 }
@@ -221,7 +286,19 @@ func LeaseMatchesStatus(
 	if !lease.IsFresh(now, staleThreshold) {
 		return false
 	}
+	return LeaseIdentityMatchesStatus(lease, status, fallbackAttemptID)
+}
 
+// LeaseIdentityMatchesStatus reports whether the lease belongs to the same
+// persisted distributed attempt as status, independent of freshness.
+func LeaseIdentityMatchesStatus(
+	lease *DAGRunLease,
+	status *DAGRunStatus,
+	fallbackAttemptID string,
+) bool {
+	if lease == nil || status == nil {
+		return false
+	}
 	attemptKey := AttemptKeyForStatus(status, fallbackAttemptID)
 	if attemptKey != "" && lease.AttemptKey != attemptKey {
 		return false

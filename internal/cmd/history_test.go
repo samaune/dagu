@@ -308,7 +308,60 @@ func TestParseStatus(t *testing.T) {
 	}
 }
 
-func TestParseTags(t *testing.T) {
+func TestParseStatuses(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected []core.Status
+		wantErr  bool
+	}{
+		{
+			name:     "comma-separated statuses",
+			input:    "running,queued",
+			expected: []core.Status{core.Running, core.Queued},
+		},
+		{
+			name:     "trims spaces",
+			input:    " running, succeeded ",
+			expected: []core.Status{core.Running, core.Succeeded},
+		},
+		{
+			name:     "ignores empty entries",
+			input:    "running,,queued,",
+			expected: []core.Status{core.Running, core.Queued},
+		},
+		{
+			name:    "rejects empty list",
+			input:   ",,",
+			wantErr: true,
+		},
+		{
+			name:    "rejects mixed invalid status",
+			input:   "running,unknown",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseStatuses(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "invalid status")
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestParseLabels(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -317,22 +370,22 @@ func TestParseTags(t *testing.T) {
 		expected []string
 	}{
 		{
-			name:     "single tag",
+			name:     "single label",
 			input:    "prod",
 			expected: []string{"prod"},
 		},
 		{
-			name:     "multiple tags",
+			name:     "multiple labels",
 			input:    "prod,critical",
 			expected: []string{"prod", "critical"},
 		},
 		{
-			name:     "tags with spaces",
+			name:     "labels with spaces",
 			input:    "prod, critical, backend",
 			expected: []string{"prod", "critical", "backend"},
 		},
 		{
-			name:     "tags with extra whitespace",
+			name:     "labels with extra whitespace",
 			input:    "  prod  ,  critical  ",
 			expected: []string{"prod", "critical"},
 		},
@@ -347,12 +400,12 @@ func TestParseTags(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name:     "empty tags between commas",
+			name:     "empty labels between commas",
 			input:    "prod,,critical",
 			expected: []string{"prod", "critical"},
 		},
 		{
-			name:     "single tag with trailing comma",
+			name:     "single label with trailing comma",
 			input:    "prod,",
 			expected: []string{"prod"},
 		},
@@ -362,7 +415,7 @@ func TestParseTags(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := parseTags(tt.input)
+			got := parseLabels(tt.input)
 			assert.Equal(t, tt.expected, got)
 		})
 	}

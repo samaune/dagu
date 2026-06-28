@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dagucloud/dagu/internal/core"
 	exec1 "github.com/dagucloud/dagu/internal/core/exec"
@@ -18,8 +19,10 @@ func TestParams_DistributedSubDAGInlineDefsSuccess(t *testing.T) {
 	f := newTestFixture(t, `
 steps:
   - name: invoke-child
-    call: worker-inline-child
-    params: "region=us-west-2 count=5 debug=true"
+    action: dag.run
+    with:
+      dag: worker-inline-child
+      params: "region=us-west-2 count=5 debug=true"
 
 ---
 name: worker-inline-child
@@ -40,10 +43,10 @@ params:
     required: true
 steps:
   - name: shell-values
-    command: echo "region=$region count=$count debug=$debug"
+    run: echo "region=$region count=$count debug=$debug"
     output: SHELL_VALUES
   - name: params-json
-    command: printenv DAGU_PARAMS_JSON
+    run: printenv DAGU_PARAMS_JSON
     output: PARAMS_JSON
 `, withLabels(map[string]string{"type": "test-worker"}))
 
@@ -71,8 +74,10 @@ func TestParams_DistributedSubDAGInlineDefsFailure(t *testing.T) {
 	f := newTestFixture(t, `
 steps:
   - name: invoke-child
-    call: worker-inline-child
-    params: "region=us-west-2 count=abc"
+    action: dag.run
+    with:
+      dag: worker-inline-child
+      params: "region=us-west-2 count=abc"
 
 ---
 name: worker-inline-child
@@ -90,7 +95,7 @@ params:
     required: true
 steps:
   - name: shell-values
-    command: echo "region=$region count=$count"
+    run: echo "region=$region count=$count"
     output: SHELL_VALUES
 `, withLabels(map[string]string{"type": "test-worker"}))
 
@@ -112,6 +117,42 @@ steps:
 	subStatus := readDistributedSubAttemptStatus(t, f, rootRef, subRunID)
 	require.NotEqual(t, core.Succeeded, subStatus.Status)
 	require.True(t, statusErrorsContain(subStatus.Errors(), "count"), "expected child status errors to mention count")
+}
+
+func TestParams_DistributedQueuedRunRuntimeParams(t *testing.T) {
+	f := newTestFixture(t, `
+name: queued-runtime-params
+worker_selector:
+  test: "true"
+params:
+  - name: content_hash
+    type: string
+    required: true
+steps:
+  - name: shell-value
+    run: echo "content_hash=$content_hash"
+    output: SHELL_VALUE
+  - name: params-json
+    run: printenv DAGU_PARAMS_JSON
+    output: PARAMS_JSON
+`)
+	defer f.cleanup()
+
+	require.NoError(t, f.enqueueWithParams("content_hash=sha256:abc123"))
+	f.waitForQueued()
+
+	queuedStatus, err := f.latestStatus()
+	require.NoError(t, err)
+	require.Equal(t, core.Queued, queuedStatus.Status)
+	require.Equal(t, []string{"content_hash=sha256:abc123"}, queuedStatus.ParamsList)
+
+	f.startScheduler(30 * time.Second)
+	status := f.waitForStatus(core.Succeeded, executionStatusTimeout())
+
+	require.Equal(t, []string{"content_hash=sha256:abc123"}, status.ParamsList)
+	require.Len(t, status.Nodes, 2)
+	assert.Equal(t, "content_hash=sha256:abc123", nodeOutputValue(t, status.Nodes[0], "SHELL_VALUE"))
+	assert.JSONEq(t, `{"content_hash":"sha256:abc123"}`, nodeOutputValue(t, status.Nodes[1], "PARAMS_JSON"))
 }
 
 func readDistributedSubAttemptStatus(t *testing.T, f *testFixture, rootRef exec1.DAGRunRef, subRunID string) *exec1.DAGRunStatus {

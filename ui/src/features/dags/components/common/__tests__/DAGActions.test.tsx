@@ -23,6 +23,14 @@ vi.mock('../../../../../hooks/api', () => ({
     POST: vi.fn(),
     GET: vi.fn(),
   }),
+  useQuery: () => ({
+    data: undefined,
+    isLoading: false,
+  }),
+}));
+
+vi.mock('../../../../../contexts/AuthContext', () => ({
+  useCanManageProfiles: () => false,
 }));
 
 vi.mock('@/components/ui/error-modal', () => ({
@@ -46,6 +54,7 @@ describe('DAGActions', () => {
           dagRunId: 'run-1',
           status: Status.Failed,
           statusLabel: StatusLabel.failed,
+          artifactsAvailable: false,
           autoRetryCount: 1,
           autoRetryLimit: 3,
           startedAt: '',
@@ -68,6 +77,7 @@ describe('DAGActions', () => {
           dagRunId: 'run-1',
           status: Status.Running,
           statusLabel: StatusLabel.running,
+          artifactsAvailable: false,
           autoRetryCount: 0,
           startedAt: '',
           finishedAt: '',

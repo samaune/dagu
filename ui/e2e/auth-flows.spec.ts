@@ -5,15 +5,22 @@ import { expect, test } from '@playwright/test';
 import {
   clearSession,
   createUser,
+  hasRBACLicenseSourceConfigured,
   loadStack,
   loginViaAPI,
   loginViaUI,
   uniqueName,
+  useDefaultWorkspaceScope,
   waitForDAGAvailable,
   writeLocalDAG,
 } from './helpers/e2e';
 
 test.describe('auth flows', () => {
+  test.skip(
+    !hasRBACLicenseSourceConfigured(),
+    'requires a Dagu Pro license source for RBAC user management'
+  );
+
   test('user changes own password', async ({ page, request }) => {
     const stack = await loadStack();
     const adminToken = await loginViaAPI(
@@ -79,6 +86,7 @@ test.describe('auth flows', () => {
 
     // Manager can create DAG via UI
     const dagName = uniqueName('e2e-mgr-dag');
+    await useDefaultWorkspaceScope(page);
     await page.goto('/dags/');
     await page.getByRole('button', { name: 'Create new DAG' }).click();
 
@@ -119,7 +127,7 @@ test.describe('auth flows', () => {
 name: ${dagName}
 steps:
   - name: echo
-    command: echo "operator test"
+    run: echo "operator test"
 `
     );
     await waitForDAGAvailable(request, adminToken, fileName);
@@ -127,6 +135,7 @@ steps:
     await loginViaUI(page, operatorUser, operatorPass);
 
     // Operator should not see Create button
+    await useDefaultWorkspaceScope(page);
     await page.goto('/dags/');
     await expect(page.getByRole('button', { name: 'Create new DAG' })).toBeHidden();
 

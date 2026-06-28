@@ -16,15 +16,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dagucloud/dagu/internal/agentsnapshot"
 	"github.com/dagucloud/dagu/internal/cmn/config"
 	"github.com/dagucloud/dagu/internal/cmn/dirlock"
 	"github.com/dagucloud/dagu/internal/cmn/logger"
 	"github.com/dagucloud/dagu/internal/cmn/logger/tag"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
-	"github.com/dagucloud/dagu/internal/persis/fileeventstore"
+	"github.com/dagucloud/dagu/internal/launcher"
 	"github.com/dagucloud/dagu/internal/runtime"
-	coordinatorv1 "github.com/dagucloud/dagu/proto/coordinator/v1"
 )
 
 // Clock is a function that returns the current time.
@@ -56,11 +56,41 @@ type Scheduler struct {
 	startupCancel       context.CancelFunc
 	lockHeld            atomic.Bool
 	clock               Clock // Clock function for getting current time
-	eventCollector      *fileeventstore.Collector
+	eventCollector      eventCollector
+	githubDispatch      githubDispatchRunner
+	notificationMonitor backgroundRunner
+	incidentMonitor     backgroundRunner
 }
 
 type schedulerHooks struct {
 	onLockWait func()
+}
+
+type schedulerOptions struct {
+	snapshotStoreFactory agentsnapshot.StoreFactory
+	profileResolver      DAGProfileResolver
+}
+
+type Option func(*schedulerOptions)
+
+func WithSnapshotStoreFactory(factory agentsnapshot.StoreFactory) Option {
+	return func(opts *schedulerOptions) {
+		opts.snapshotStoreFactory = factory
+	}
+}
+
+func WithDAGProfileResolver(resolver DAGProfileResolver) Option {
+	return func(opts *schedulerOptions) {
+		opts.profileResolver = resolver
+	}
+}
+
+type backgroundRunner interface {
+	Run(ctx context.Context)
+}
+
+type eventCollector interface {
+	Start(context.Context)
 }
 
 type startupState struct {
@@ -85,8 +115,15 @@ func New(
 	reg exec.ServiceRegistry,
 	coordinatorCli exec.Dispatcher,
 	watermarkStore WatermarkStore,
+	opts ...Option,
 ) (*Scheduler, error) {
-	return newScheduler(cfg, er, drm, dagRunStore, queueStore, procStore, reg, coordinatorCli, watermarkStore, schedulerHooks{})
+	var options schedulerOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+	return newScheduler(cfg, er, drm, dagRunStore, queueStore, procStore, reg, coordinatorCli, watermarkStore, schedulerHooks{}, options)
 }
 
 func newScheduler(
@@ -100,6 +137,7 @@ func newScheduler(
 	coordinatorCli exec.Dispatcher,
 	watermarkStore WatermarkStore,
 	hooks schedulerHooks,
+	options schedulerOptions,
 ) (*Scheduler, error) {
 	timeLoc := cfg.Core.Location
 	if timeLoc == nil {
@@ -112,14 +150,15 @@ func newScheduler(
 	}
 	lockDir := filepath.Join(cfg.Paths.DataDir, "scheduler", "locks")
 	dirLock := dirlock.New(lockDir, lockOpts)
-	subCmdBuilder := runtime.NewSubCmdBuilder(cfg)
+	subCmdBuilder := launcher.NewSubCmdBuilder(cfg)
 	dagStore := er.DAGStore()
 	dagExecutor := NewDAGExecutor(
 		coordinatorCli,
 		subCmdBuilder,
 		cfg.DefaultExecMode,
 		cfg.Paths.BaseConfig,
-		buildSnapshotBuilder(cfg.Paths, dagStore),
+		buildSnapshotBuilder(cfg.Paths, dagStore, options.snapshotStoreFactory),
+		WithDAGExecutorProfileResolver(options.profileResolver),
 	)
 	healthServer := NewHealthServer(cfg.Scheduler.Port)
 
@@ -155,7 +194,11 @@ func newScheduler(
 			return len(items) > 0, nil
 		}
 		enqueueFunc = func(ctx context.Context, dag *core.DAG, runID string, triggerType core.TriggerType, scheduleTime time.Time) error {
-			return EnqueueCatchupRun(ctx, dagRunStore, queueStore, cfg.Paths.LogDir, cfg.Paths.ArtifactDir, cfg.Paths.BaseConfig, dag, runID, triggerType, scheduleTime)
+			profileName, err := dagExecutor.defaultProfileName(ctx, dag)
+			if err != nil {
+				return fmt.Errorf("failed to resolve DAG profile: %w", err)
+			}
+			return EnqueueCatchupRun(ctx, dagRunStore, queueStore, cfg.Paths.LogDir, cfg.Paths.ArtifactDir, cfg.Paths.BaseConfig, dag, runID, triggerType, scheduleTime, profileName)
 		}
 	}
 
@@ -174,7 +217,7 @@ func newScheduler(
 		Dispatch: func(ctx context.Context, dag *core.DAG, runID string, triggerType core.TriggerType, scheduleTime time.Time) error {
 			return dagExecutor.HandleJob(
 				ctx, dag,
-				coordinatorv1.Operation_OPERATION_START,
+				exec.DispatchOperationStart,
 				runID, triggerType, scheduleTime,
 			)
 		},
@@ -246,11 +289,29 @@ func (s *Scheduler) SetClock(clock Clock) {
 
 // SetEventCollector configures the scheduler-owned collector loop.
 // This must be called before Start().
-func (s *Scheduler) SetEventCollector(collector *fileeventstore.Collector) {
+func (s *Scheduler) SetEventCollector(collector eventCollector) {
 	if s == nil {
 		return
 	}
 	s.eventCollector = collector
+}
+
+// SetNotificationMonitor configures the scheduler-owned notification monitor.
+// This must be called before Start().
+func (s *Scheduler) SetNotificationMonitor(monitor backgroundRunner) {
+	if s == nil {
+		return
+	}
+	s.notificationMonitor = monitor
+}
+
+// SetIncidentMonitor configures the scheduler-owned incident monitor.
+// This must be called before Start().
+func (s *Scheduler) SetIncidentMonitor(monitor backgroundRunner) {
+	if s == nil {
+		return
+	}
+	s.incidentMonitor = monitor
 }
 
 // SetDAGRunLeaseStore configures the shared distributed lease store used for
@@ -269,6 +330,7 @@ func (s *Scheduler) SetDispatchTaskStore(store exec.DispatchTaskStore) {
 		return
 	}
 	s.queueProcessor.dispatchTaskStore = store
+	s.queueProcessor.dispatchAdmissionStore = dispatchAdmissionStoreFromTaskStore(store)
 }
 
 // SetRestartFunc overrides the planner's restart function for testing purposes.
@@ -553,6 +615,18 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	})
 
 	wg.Go(func() {
+		s.startNotificationMonitor(ctx)
+	})
+
+	wg.Go(func() {
+		s.startIncidentMonitor(ctx)
+	})
+
+	wg.Go(func() {
+		s.startGitHubDispatch(ctx)
+	})
+
+	wg.Go(func() {
 		s.entryReader.Start(ctx)
 	})
 
@@ -612,6 +686,20 @@ func (s *Scheduler) startEventCollector(ctx context.Context) {
 	s.eventCollector.Start(ctx)
 }
 
+func (s *Scheduler) startNotificationMonitor(ctx context.Context) {
+	if s.notificationMonitor == nil {
+		return
+	}
+	s.notificationMonitor.Run(ctx)
+}
+
+func (s *Scheduler) startIncidentMonitor(ctx context.Context) {
+	if s.incidentMonitor == nil {
+		return
+	}
+	s.incidentMonitor.Run(ctx)
+}
+
 func (s *Scheduler) startHeartbeat(ctx context.Context) {
 	ticker := time.NewTicker(time.Second * 7)
 	defer ticker.Stop()
@@ -666,39 +754,56 @@ func (s *Scheduler) startRetryScanner(ctx context.Context) {
 // cronLoop runs the main scheduler loop to invoke jobs at scheduled times.
 func (s *Scheduler) cronLoop(ctx context.Context, sig chan os.Signal) {
 	tickTime := s.clock().Truncate(time.Minute)
-
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 
 	s.running.Store(true)
 	defer s.running.Store(false)
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-sig:
-			return
-		case <-s.quit:
-			return
-		case <-timer.C:
-			_ = timer.Stop()
-
-			// Plan and dispatch all schedules (start, stop, restart)
-			for _, run := range s.planner.Plan(ctx, tickTime) {
-				s.dispatchRun(ctx, run)
-			}
-			s.planner.Advance(tickTime)
-
-			tickTime = s.NextTick(tickTime)
-			timer.Reset(tickTime.Sub(s.clock()))
-		}
+	for s.waitForTick(ctx, sig, timer) {
+		s.runTickSafely(ctx, tickTime)
+		tickTime = s.NextTick(tickTime)
+		timer.Reset(tickTime.Sub(s.clock()))
 	}
+}
+
+func (s *Scheduler) waitForTick(ctx context.Context, sig chan os.Signal, timer *time.Timer) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-sig:
+		s.Stop(ctx)
+		return false
+	case <-s.quit:
+		return false
+	case <-timer.C:
+		_ = timer.Stop()
+		return true
+	}
+}
+
+func (s *Scheduler) runTickSafely(ctx context.Context, tickTime time.Time) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error(ctx, "Scheduler tick panicked",
+				slog.Time("tick_time", tickTime),
+				tag.Error(panicToError(r)),
+			)
+		}
+	}()
+	s.runTick(ctx, tickTime)
+}
+
+func (s *Scheduler) runTick(ctx context.Context, tickTime time.Time) {
+	for _, run := range s.planner.Plan(ctx, tickTime) {
+		s.dispatchRun(ctx, run)
+	}
+	s.planner.Advance(tickTime)
 }
 
 // NextTick returns the next tick time for the scheduler.
 func (*Scheduler) NextTick(now time.Time) time.Time {
-	return now.Add(time.Minute).Truncate(time.Second * 60)
+	return now.Truncate(time.Minute).Add(time.Minute)
 }
 
 // IsRunning returns whether the scheduler is currently running.
@@ -772,20 +877,21 @@ func (s *Scheduler) stopCron(ctx context.Context) {
 // we need the result to decide whether to advance the watermark).
 // Non-catchup runs are dispatched in a goroutine (process spawn can be slow).
 func (s *Scheduler) dispatchRun(ctx context.Context, run PlannedRun) {
-	dispatch := func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Error(ctx, "Run dispatch panicked",
-					tag.DAG(run.DAG.Name),
-					tag.Error(panicToError(r)),
-				)
-			}
-		}()
-		s.planner.DispatchRun(ctx, run)
-	}
 	if run.TriggerType == core.TriggerTypeCatchUp {
-		dispatch()
+		s.dispatchPlannedRun(ctx, run)
 		return
 	}
-	go dispatch()
+	go s.dispatchPlannedRun(ctx, run)
+}
+
+func (s *Scheduler) dispatchPlannedRun(ctx context.Context, run PlannedRun) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error(ctx, "Run dispatch panicked",
+				tag.DAG(run.DAG.Name),
+				tag.Error(panicToError(r)),
+			)
+		}
+	}()
+	s.planner.DispatchRun(ctx, run)
 }

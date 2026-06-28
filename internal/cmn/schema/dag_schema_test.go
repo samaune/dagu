@@ -30,7 +30,7 @@ func TestDAGSchemaParams(t *testing.T) {
 			spec: `
 params: first second
 steps:
-  - command: echo "$1 $2"
+  - run: echo "$1 $2"
 `,
 		},
 		{
@@ -40,7 +40,7 @@ params:
   - ENVIRONMENT: prod
   - COUNT: 3
 steps:
-  - command: echo "${ENVIRONMENT} ${COUNT}"
+  - run: echo "${ENVIRONMENT} ${COUNT}"
 `,
 		},
 		{
@@ -61,7 +61,7 @@ params:
     type: boolean
     default: false
 steps:
-  - command: echo "${region} ${count} ${debug}"
+  - run: echo "${region} ${count} ${debug}"
 `,
 		},
 		{
@@ -74,7 +74,7 @@ params:
     enum: [dev, staging, prod]
   - TAG: latest
 steps:
-  - command: echo "${environment} ${TAG}"
+  - run: echo "${environment} ${TAG}"
 `,
 		},
 		{
@@ -86,7 +86,7 @@ params:
     batch_size: 25
     environment: staging
 steps:
-  - command: echo done
+  - run: echo done
 `,
 		},
 		{
@@ -101,8 +101,22 @@ params:
       type: boolean
   additionalProperties: false
 steps:
-  - command: echo done
+  - run: echo done
 `,
+		},
+		{
+			name: "RejectTopLevelInlineSchemaWithPropertiesArray",
+			spec: `
+params:
+  type: object
+  properties:
+    - name: region
+      type: string
+  required: [region]
+steps:
+  - run: echo done
+`,
+			wantErr: "params",
 		},
 		{
 			name: "ExternalInlineSchemaMode",
@@ -116,7 +130,7 @@ params:
   values:
     batch_size: 25
 steps:
-  - command: echo done
+  - run: echo done
 `,
 		},
 		{
@@ -127,7 +141,7 @@ params:
   values:
     batch_size: 25
 steps:
-  - command: echo done
+  - run: echo done
 `,
 		},
 		{
@@ -138,7 +152,7 @@ params:
     type: string
     minLength: 3
 steps:
-  - command: echo "${project_name}"
+  - run: echo "${project_name}"
 `,
 			wantErr: "params",
 		},
@@ -150,7 +164,7 @@ params:
       type: string
       default: demo
 steps:
-  - command: echo hi
+  - run: echo hi
 `,
 			wantErr: "params",
 		},
@@ -160,7 +174,7 @@ steps:
 params:
   - name: foo
 steps:
-  - command: echo "${foo}"
+  - run: echo "${foo}"
 `,
 			wantErr: "params",
 		},
@@ -171,7 +185,7 @@ params:
   schema: prod
   region: us
 steps:
-  - command: echo "${schema} ${region}"
+  - run: echo "${schema} ${region}"
 `,
 		},
 		{
@@ -182,7 +196,7 @@ params:
     foo: bar
   region: us
 steps:
-  - command: echo "${region}"
+  - run: echo "${region}"
 `,
 		},
 	}
@@ -203,7 +217,7 @@ steps:
 	}
 }
 
-func TestDAGSchemaStepOutputSchema(t *testing.T) {
+func TestDAGSchemaSecrets(t *testing.T) {
 	t.Parallel()
 
 	resolved := mustResolveDAGSchema(t)
@@ -214,35 +228,627 @@ func TestDAGSchemaStepOutputSchema(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name: "InlineObjectSchema",
+			name: "ProviderAndKey",
 			spec: `
+secrets:
+  - name: DB_PASSWORD
+    provider: env
+    key: DB_PASSWORD
 steps:
-  - command: echo hi
-    output:
-      name: RESULT
-      schema:
-        type: object
+  - run: echo done
 `,
 		},
 		{
-			name: "BooleanSchema",
+			name: "RegistryRef",
 			spec: `
+secrets:
+  - name: DB_PASSWORD
+    ref: prod/db-password
 steps:
-  - command: echo hi
-    output:
-      name: RESULT
-      schema: true
+  - run: echo done
 `,
 		},
 		{
-			name: "StringSchemaReference",
+			name: "RejectRefAndProviderKey",
+			spec: `
+secrets:
+  - name: DB_PASSWORD
+    ref: prod/db-password
+    provider: env
+    key: DB_PASSWORD
+steps:
+  - run: echo done
+`,
+			wantErr: "secrets",
+		},
+		{
+			name: "RejectOptionsWithRegistryRef",
+			spec: `
+secrets:
+  - name: DB_PASSWORD
+    ref: prod/db-password
+    options:
+      region: us-east-1
+steps:
+  - run: echo done
+`,
+			wantErr: "secrets",
+		},
+		{
+			name: "RejectDaguPrefixedName",
+			spec: `
+secrets:
+  - name: DAGU_TOKEN
+    provider: env
+    key: TOKEN
+steps:
+  - run: echo done
+`,
+			wantErr: "secrets",
+		},
+		{
+			name: "RejectInvalidRegistryRef",
+			spec: `
+secrets:
+  - name: DB_PASSWORD
+    ref: Prod/db_password
+steps:
+  - run: echo done
+`,
+			wantErr: "secrets",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := mustParseYAMLDocument(t, tt.spec)
+			err := resolved.Validate(doc)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestDAGSchemaStepOutputObject(t *testing.T) {
+	t.Parallel()
+
+	resolved := mustResolveDAGSchema(t)
+
+	tests := []struct {
+		name    string
+		spec    string
+		wantErr string
+	}{
+		{
+			name: "LiteralObjectValue",
 			spec: `
 steps:
-  - command: echo hi
+  - run: echo hi
     output:
-      name: RESULT
-      schema: ./output.schema.json
+      meta:
+        version: v1.2.3
 `,
+		},
+		{
+			name: "StructuredSourceEntry",
+			spec: `
+steps:
+  - run: echo hi
+    output:
+      version:
+        from: stdout
+        decode: json
+        select: .version
+`,
+		},
+		{
+			name: "RejectInvalidStructuredSource",
+			spec: `
+steps:
+  - run: echo hi
+    output:
+      version:
+        from: network
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectFileSourceWithoutPath",
+			spec: `
+steps:
+  - run: echo hi
+    output:
+      version:
+        from: file
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectInvalidDecode",
+			spec: `
+steps:
+  - run: echo hi
+    output:
+      version:
+        from: stdout
+        decode: xml
+`,
+			wantErr: "did not validate",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := mustParseYAMLDocument(t, tt.spec)
+			err := resolved.Validate(doc)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestDAGSchemaStepV2(t *testing.T) {
+	t.Parallel()
+
+	resolved := mustResolveDAGSchema(t)
+
+	tests := []struct {
+		name    string
+		spec    string
+		wantErr string
+	}{
+		{
+			name: "Run",
+			spec: `
+steps:
+  - run: echo ok
+    with:
+      shell: bash -e
+      shell_args: [-c]
+`,
+		},
+		{
+			name: "ActionDagRunParallel",
+			spec: `
+steps:
+  - action: dag.run
+    parallel:
+      items: [a, b]
+    with:
+      dag: child
+      params:
+        item: ${ITEM}
+`,
+		},
+		{
+			name: "CustomAction",
+			spec: `
+actions:
+  slack.notify:
+    input_schema:
+      type: object
+      properties:
+        text:
+          type: string
+    output_schema:
+      type: object
+      properties:
+        ok:
+          type: boolean
+    template:
+      action: http.request
+      with:
+        method: POST
+        url: ${SLACK_WEBHOOK_URL}
+steps:
+  - action: slack.notify
+    with:
+      text: hello
+`,
+		},
+		{
+			name: "FileActions",
+			spec: `
+steps:
+  - action: file.write
+    with:
+      path: out/data.txt
+      content: hello
+      create_dirs: true
+  - action: file.copy
+    with:
+      source: out/data.txt
+      destination: out/copy.txt
+  - action: file.list
+    with:
+      path: out
+      recursive: true
+      pattern: "**/*.txt"
+`,
+		},
+		{
+			name: "DataConvertAction",
+			spec: `
+steps:
+  - action: data.convert
+    with:
+      from: csv
+      to: json
+      data: |
+        name,age
+        Alice,30
+`,
+		},
+		{
+			name: "DataPickAction",
+			spec: `
+steps:
+  - action: data.pick
+    with:
+      from: yaml
+      select: .spec.containers[0].image
+      raw: true
+      data:
+        spec:
+          containers:
+            - image: nginx:1.27
+`,
+		},
+		{
+			name: "ArtifactActions",
+			spec: `
+steps:
+  - run: ./generate-report
+    stdout:
+      artifact: reports/report.md
+    stderr:
+      artifact: reports/report.err
+  - action: artifact.write
+    with:
+      path: reports/summary.md
+      content: hello
+  - action: artifact.read
+    with:
+      path: reports/summary.md
+  - action: artifact.list
+    with:
+      path: reports
+      recursive: true
+      pattern: "**/*.md"
+  - action: artifact.list
+`,
+		},
+		{
+			name: "OutputsActions",
+			spec: `
+steps:
+  - run: printf '{"id":"msg-123"}'
+    stdout:
+      outputs:
+        fields:
+          messageId:
+            decode: json
+            select: .id
+          status:
+            value: sent
+  - action: outputs.write
+    with:
+      values:
+        messageId: msg-123
+        accepted: true
+`,
+		},
+		{
+			name: "StateActions",
+			spec: `
+steps:
+  - action: state.set
+    with:
+      key: cursors/api
+      value:
+        last_id: 123
+  - action: state.get
+    with:
+      key: cursors/api
+  - action: state.diff
+    with:
+      key: snapshots/api
+      value:
+        count: 10
+  - action: state.list
+    with:
+      prefix: cursors/
+  - action: state.delete
+    with:
+      key: cursors/api
+`,
+		},
+		{
+			name: "RejectStateGetMissingKey",
+			spec: `
+steps:
+  - action: state.get
+    with:
+      default: null
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectStateSetMissingValue",
+			spec: `
+steps:
+  - action: state.set
+    with:
+      key: cursors/api
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectStateDiffMissingKey",
+			spec: `
+steps:
+  - action: state.diff
+    with:
+      value:
+        last_id: 123
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectStateDeleteMissingKey",
+			spec: `
+steps:
+  - action: state.delete
+    with: {}
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectStateCustomScopeMissingNamespace",
+			spec: `
+steps:
+  - action: state.get
+    with:
+      scope: custom
+      key: cursor
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "LegacyFileTypeConfig",
+			spec: `
+steps:
+  - type: file
+    command: stat
+    config:
+      path: out/data.txt
+`,
+		},
+		{
+			name: "WaitActions",
+			spec: `
+steps:
+  - action: wait.duration
+    with:
+      duration: 10s
+  - action: wait.until
+    with:
+      until: "2026-01-02T03:04:05Z"
+  - action: wait.file
+    with:
+      path: out/ready.flag
+      state: exists
+      poll_interval: 2s
+  - action: wait.http
+    with:
+      url: https://example.com/health
+      status: 204
+      request_timeout: 10s
+`,
+		},
+		{
+			name: "RejectWaitActionUnknownConfigField",
+			spec: `
+steps:
+  - action: wait.duration
+    with:
+      duration: 10s
+      seconds: 10
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectFileActionUnknownConfigField",
+			spec: `
+steps:
+  - action: file.delete
+    with:
+      path: out/data.txt
+      dryrun: true
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectLegacyFileTypeUnknownConfigField",
+			spec: `
+steps:
+  - type: file
+    command: delete
+    config:
+      path: out/data.txt
+      dryrun: true
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectRunAndAction",
+			spec: `
+steps:
+  - run: echo ok
+    action: log.write
+    with:
+      message: ok
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectRunAndCommand",
+			spec: `
+steps:
+  - run: echo ok
+    command: echo legacy
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectRunAndExec",
+			spec: `
+steps:
+  - run: echo ok
+    exec:
+      command: /bin/echo
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectRunAndShellArgs",
+			spec: `
+steps:
+  - run: echo ok
+    shell_args: [-c]
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectActionAndCommand",
+			spec: `
+steps:
+  - action: log.write
+    command: echo legacy
+    with:
+      message: ok
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectActionAndCall",
+			spec: `
+steps:
+  - action: log.write
+    call: child
+    with:
+      message: ok
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectActionAndScript",
+			spec: `
+steps:
+  - action: log.write
+    script: echo legacy
+    with:
+      message: ok
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectActionExecMissingCommand",
+			spec: `
+steps:
+  - action: exec
+    with:
+      args: [hello]
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectActionJQFilterDataAndInput",
+			spec: `
+steps:
+  - action: jq.filter
+    with:
+      filter: .name
+      data:
+        name: Alice
+      input: input.json
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectActionNoopWithConfig",
+			spec: `
+steps:
+  - action: noop
+    with:
+      message: ignored
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectFileActionUnknownConfig",
+			spec: `
+steps:
+  - action: file.read
+    with:
+      path: out/data.txt
+      unexpected: true
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectDataConvertUnknownConfig",
+			spec: `
+steps:
+  - action: data.convert
+    with:
+      from: csv
+      to: json
+      data: "name\nAlice\n"
+      unexpected: true
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectDataPickMissingSelect",
+			spec: `
+steps:
+  - action: data.pick
+    with:
+      from: yaml
+      data:
+        name: Alice
+`,
+			wantErr: "did not validate",
+		},
+		{
+			name: "RejectCustomActionTemplateLegacyExecutionField",
+			spec: `
+actions:
+  bad.notify:
+    input_schema:
+      type: object
+    template:
+      action: log.write
+      command: echo legacy
+      with:
+        message: ok
+steps:
+  - action: bad.notify
+`,
+			wantErr: "not: validated against",
 		},
 	}
 
@@ -279,7 +885,7 @@ schedule:
   - kind: cron
     expression: "0 * * * *"
 steps:
-  - command: echo hi
+  - run: echo hi
 `,
 		},
 		{
@@ -290,7 +896,7 @@ schedule:
     kind: at
     at: "2026-03-29T02:10:00+01:00"
 steps:
-  - command: echo hi
+  - run: echo hi
 `,
 		},
 		{
@@ -299,7 +905,7 @@ steps:
 schedule:
   - kind: cron
 steps:
-  - command: echo hi
+  - run: echo hi
 `,
 			wantErr: "schedule",
 		},
@@ -309,7 +915,7 @@ steps:
 schedule:
   - kind: at
 steps:
-  - command: echo hi
+  - run: echo hi
 `,
 			wantErr: "schedule",
 		},
@@ -322,7 +928,7 @@ schedule:
     expression: "0 * * * *"
     at: "2026-03-29T02:10:00+01:00"
 steps:
-  - command: echo hi
+  - run: echo hi
 `,
 			wantErr: "schedule",
 		},
@@ -333,7 +939,7 @@ schedule:
   stop:
     kind: cron
 steps:
-  - command: echo hi
+  - run: echo hi
 `,
 			wantErr: "schedule",
 		},
@@ -375,7 +981,7 @@ retry_policy:
   backoff: 2.0
   max_interval_sec: 60
 steps:
-  - command: echo hi
+  - run: echo hi
 `,
 		},
 		{
@@ -388,7 +994,27 @@ retry_policy:
   backoff: false
   max_interval_sec: "60"
 steps:
-  - command: echo hi
+  - run: echo hi
+`,
+		},
+		{
+			name: "LimitZero",
+			spec: `
+name: retryable-dag
+retry_policy:
+  limit: 0
+steps:
+  - run: echo hi
+`,
+		},
+		{
+			name: "StringLimitZero",
+			spec: `
+name: retryable-dag
+retry_policy:
+  limit: "0"
+steps:
+  - run: echo hi
 `,
 		},
 		{
@@ -398,7 +1024,7 @@ name: retryable-dag
 retry_policy:
   interval_sec: 10
 steps:
-  - command: echo hi
+  - run: echo hi
 `,
 			wantErr: "retry_policy",
 		},
@@ -410,7 +1036,29 @@ retry_policy:
   limit: three
   interval_sec: 10
 steps:
-  - command: echo hi
+  - run: echo hi
+`,
+			wantErr: "retry_policy",
+		},
+		{
+			name: "RejectsNegativeLimit",
+			spec: `
+name: retryable-dag
+retry_policy:
+  limit: -1
+steps:
+  - run: echo hi
+`,
+			wantErr: "retry_policy",
+		},
+		{
+			name: "RejectsNegativeStringLimit",
+			spec: `
+name: retryable-dag
+retry_policy:
+  limit: "-1"
+steps:
+  - run: echo hi
 `,
 			wantErr: "retry_policy",
 		},
@@ -422,7 +1070,31 @@ retry_policy:
   limit: 3
   interval_sec: later
 steps:
-  - command: echo hi
+  - run: echo hi
+`,
+			wantErr: "retry_policy",
+		},
+		{
+			name: "RejectsZeroInterval",
+			spec: `
+name: retryable-dag
+retry_policy:
+  limit: 1
+  interval_sec: 0
+steps:
+  - run: echo hi
+`,
+			wantErr: "retry_policy",
+		},
+		{
+			name: "RejectsZeroMaxInterval",
+			spec: `
+name: retryable-dag
+retry_policy:
+  limit: 1
+  max_interval_sec: 0
+steps:
+  - run: echo hi
 `,
 			wantErr: "retry_policy",
 		},
@@ -435,7 +1107,7 @@ retry_policy:
   interval_sec: 10
   backoff: 1.0
 steps:
-  - command: echo hi
+  - run: echo hi
 `,
 			wantErr: "retry_policy",
 		},
@@ -447,7 +1119,7 @@ retry_policy:
   limit: 3
   unknown_retry_field: 10
 steps:
-  - command: echo hi
+  - run: echo hi
 `,
 			wantErr: "retry_policy",
 		},
@@ -480,12 +1152,112 @@ retry_policy:
   interval_sec: 10
   exit_code: [1]
 steps:
-  - command: echo hi
+  - run: echo hi
 `)
 
 	err := resolved.Validate(doc)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "retry_policy")
+}
+
+func TestDAGSchemaResources(t *testing.T) {
+	t.Parallel()
+
+	resolved := mustResolveDAGSchema(t)
+
+	tests := []struct {
+		name    string
+		spec    string
+		wantErr string
+	}{
+		{
+			name: "ValidLimits",
+			spec: `
+name: limited-dag
+resources:
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+steps:
+  - run: echo hi
+`,
+		},
+		{
+			name: "RejectsInvalidCPU",
+			spec: `
+name: limited-dag
+resources:
+  limits:
+    cpu: nope
+steps:
+  - run: echo hi
+`,
+			wantErr: "resources",
+		},
+		{
+			name: "RejectsSubMilliCPU",
+			spec: `
+name: limited-dag
+resources:
+  limits:
+    cpu: "0.0005"
+steps:
+  - run: echo hi
+`,
+			wantErr: "resources",
+		},
+		{
+			name: "RejectsFractionalMillicores",
+			spec: `
+name: limited-dag
+resources:
+  limits:
+    cpu: "0.5m"
+steps:
+  - run: echo hi
+`,
+			wantErr: "resources",
+		},
+		{
+			name: "RejectsInvalidMemory",
+			spec: `
+name: limited-dag
+resources:
+  limits:
+    memory: nope
+steps:
+  - run: echo hi
+`,
+			wantErr: "resources",
+		},
+		{
+			name: "RejectsUnknownLimitField",
+			spec: `
+name: limited-dag
+resources:
+  limits:
+    gpu: "1"
+steps:
+  - run: echo hi
+`,
+			wantErr: "resources",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := mustParseYAMLDocument(t, tt.spec)
+			err := resolved.Validate(doc)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }
 
 func TestDAGSchemaStepRetryPolicyRejectsUnknownField(t *testing.T) {
@@ -494,7 +1266,7 @@ func TestDAGSchemaStepRetryPolicyRejectsUnknownField(t *testing.T) {
 	resolved := mustResolveDAGSchema(t)
 	doc := mustParseYAMLDocument(t, `
 steps:
-  - command: echo hi
+  - run: echo hi
     retry_policy:
       limit: 1
       interval_sec: 5
@@ -504,6 +1276,340 @@ steps:
 	err := resolved.Validate(doc)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "steps")
+}
+
+func TestDAGSchemaStepWithFieldAndConfigAlias(t *testing.T) {
+	t.Parallel()
+
+	resolved := mustResolveDAGSchema(t)
+
+	tests := []struct {
+		name    string
+		spec    string
+		wantErr string
+	}{
+		{
+			name: "CanonicalWith",
+			spec: `
+steps:
+  - action: http.request
+    with:
+      method: GET
+      url: https://example.com
+      timeout: 30
+`,
+		},
+		{
+			name: "LegacyConfigAlias",
+			spec: `
+steps:
+  - type: http
+    command: GET https://example.com
+    config:
+      timeout: 30
+`,
+		},
+		{
+			name: "RejectBothWithAndConfig",
+			spec: `
+steps:
+  - type: http
+    command: GET https://example.com
+    with:
+      timeout: 30
+    config:
+      timeout: 60
+`,
+			wantErr: "steps",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := mustParseYAMLDocument(t, tt.spec)
+			err := resolved.Validate(doc)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestDAGSchemaLogStepRequiresMessage(t *testing.T) {
+	t.Parallel()
+
+	resolved := mustResolveDAGSchema(t)
+
+	tests := []struct {
+		name    string
+		spec    string
+		wantErr string
+	}{
+		{
+			name: "CanonicalWith",
+			spec: `
+steps:
+  - action: log.write
+    with:
+      message: hello
+`,
+		},
+		{
+			name: "LegacyConfigAlias",
+			spec: `
+steps:
+  - type: log
+    config:
+      message: hello
+`,
+		},
+		{
+			name: "RejectMissingWithOrConfig",
+			spec: `
+steps:
+  - action: log.write
+`,
+			wantErr: "steps",
+		},
+		{
+			name: "RejectMissingMessage",
+			spec: `
+steps:
+  - action: log.write
+    with: {}
+`,
+			wantErr: "steps",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := mustParseYAMLDocument(t, tt.spec)
+			err := resolved.Validate(doc)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestDAGSchemaFileExecutorObjectRejectsUnknownConfig(t *testing.T) {
+	t.Parallel()
+
+	resolved := mustResolveDAGSchemaDefinition(t, "executorObject")
+
+	require.NoError(t, resolved.Validate(map[string]any{
+		"type": "file",
+		"config": map[string]any{
+			"path": "data.txt",
+		},
+	}))
+
+	err := resolved.Validate(map[string]any{
+		"type": "file",
+		"config": map[string]any{
+			"path":   "data.txt",
+			"dryrun": true,
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "dryrun")
+}
+
+func TestDAGSchemaLogExecutorObjectRequiresMessage(t *testing.T) {
+	t.Parallel()
+
+	resolved := mustResolveDAGSchemaDefinition(t, "executorObject")
+
+	tests := []struct {
+		name    string
+		value   map[string]any
+		wantErr string
+	}{
+		{
+			name: "Valid",
+			value: map[string]any{
+				"type": "log",
+				"config": map[string]any{
+					"message": "hello",
+				},
+			},
+		},
+		{
+			name: "RejectMissingConfig",
+			value: map[string]any{
+				"type": "log",
+			},
+			wantErr: "config",
+		},
+		{
+			name: "RejectMissingMessage",
+			value: map[string]any{
+				"type":   "log",
+				"config": map[string]any{},
+			},
+			wantErr: "message",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := resolved.Validate(tt.value)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestDAGSchemaSSHExecutorPort(t *testing.T) {
+	t.Parallel()
+
+	resolved := mustResolveDAGSchema(t)
+	doc := mustParseYAMLDocument(t, `
+steps:
+  - action: ssh.run
+    with:
+      command: hostname
+      host: example.com
+      user: deploy
+      port: 22
+`)
+
+	require.NoError(t, resolved.Validate(doc))
+}
+
+func TestDAGSchemaSFTPExecutor(t *testing.T) {
+	t.Parallel()
+
+	resolved := mustResolveDAGSchema(t)
+	sftpConfigSchema := mustResolveDAGSchemaDefinition(t, "sftpExecutorConfig")
+
+	tests := []struct {
+		name    string
+		spec    string
+		wantErr string
+	}{
+		{
+			name: "WithConfig",
+			spec: `
+steps:
+  - action: sftp.upload
+    with:
+      host: example.com
+      user: deploy
+      port: "22"
+      source: ./backup.tar.gz
+      destination: /srv/backups/backup.tar.gz
+`,
+		},
+		{
+			name: "NumericPorts",
+			spec: `
+steps:
+  - action: sftp.upload
+    with:
+      host: example.com
+      user: deploy
+      port: 22
+      source: ./backup.tar.gz
+      destination: /srv/backups/backup.tar.gz
+      bastion:
+        host: bastion.example.com
+        user: deploy
+        port: 2222
+`,
+		},
+		{
+			name: "LegacyConfigAlias",
+			spec: `
+steps:
+  - type: sftp
+    config:
+      host: example.com
+      source: /srv/backups/backup.tar.gz
+      destination: ./backup.tar.gz
+      direction: download
+`,
+		},
+		{
+			name: "RejectInvalidDirection",
+			spec: `
+steps:
+  - action: sftp.upload
+    with:
+      host: example.com
+      user: deploy
+      port: "22"
+      source: ./backup.tar.gz
+      destination: /srv/backups/backup.tar.gz
+      direction: sync
+`,
+			wantErr: "direction",
+		},
+		{
+			name: "RejectEmptySource",
+			spec: `
+steps:
+  - action: sftp.upload
+    with:
+      host: example.com
+      user: deploy
+      port: "22"
+      source: ""
+      destination: /srv/backups/backup.tar.gz
+`,
+			wantErr: "source",
+		},
+		{
+			name: "RejectUnknownConfigField",
+			spec: `
+steps:
+  - action: sftp.upload
+    with:
+      host: example.com
+      user: deploy
+      port: "22"
+      source: ./backup.tar.gz
+      destination: /srv/backups/backup.tar.gz
+      unknown_field: true
+`,
+			wantErr: "unknown_field",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := mustParseYAMLDocument(t, tt.spec)
+			err := resolved.Validate(doc)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+
+			configErr := sftpConfigSchema.Validate(firstStepConfig(t, doc))
+			require.Error(t, configErr)
+			require.Contains(t, configErr.Error(), tt.wantErr)
+		})
+	}
 }
 
 func TestDAGSchemaKubernetes(t *testing.T) {
@@ -525,10 +1631,10 @@ kubernetes:
 
 steps:
   - id: report
-    type: k8s
-    config:
+    action: k8s.run
+    with:
       image: alpine:3.20
-    command: echo hello
+      command: echo hello
 `,
 		},
 		{
@@ -540,10 +1646,10 @@ kubernetes:
 
 steps:
   - id: report
-    type: k8s
-    config:
+    action: k8s.run
+    with:
       cleanup_policy: keep
-    command: echo hello
+      command: echo hello
 `,
 		},
 		{
@@ -551,8 +1657,8 @@ steps:
 			spec: `
 steps:
   - id: report
-    type: kubernetes
-    config:
+    action: kubernetes.run
+    with:
       image: alpine:3.20
       namespace: batch
       cleanup_policy: keep
@@ -567,7 +1673,7 @@ steps:
       volume_mounts:
         - name: scratch
           mount_path: /tmp/work
-    command: [sh, -c, "echo hello"]
+      command: [sh, -c, "echo hello"]
 `,
 		},
 		{
@@ -579,8 +1685,8 @@ kubernetes:
 
 steps:
   - id: report
-    type: kubernetes
-    config:
+    action: kubernetes.run
+    with:
       image: alpine:3.20
       security_context:
         run_as_non_root: true
@@ -619,7 +1725,7 @@ steps:
           - action: Ignore
             on_pod_conditions:
               - type: DisruptionTarget
-    command: echo hello
+      command: echo hello
 `,
 		},
 		{
@@ -643,12 +1749,12 @@ kubernetes:
 
 steps:
   - id: report
-    type: k8s
-    config:
+    action: k8s.run
+    with:
       image: alpine:3.20
       affinity: {}
       pod_failure_policy: {}
-    command: echo hello
+      command: echo hello
 `,
 		},
 		{
@@ -659,10 +1765,10 @@ kubernetes:
 
 steps:
   - id: report
-    type: k8s
-    config:
+    action: k8s.run
+    with:
       image: alpine:3.20
-    command: echo hello
+      command: echo hello
 `,
 			wantErr: "kubernetes",
 		},
@@ -671,12 +1777,12 @@ steps:
 			spec: `
 steps:
   - id: report
-    type: k8s
-    config:
+    action: k8s.run
+    with:
       image: alpine:3.20
       env:
         - value: missing-name
-    command: echo hello
+      command: echo hello
 `,
 			wantErr: "steps",
 		},
@@ -685,12 +1791,12 @@ steps:
 			spec: `
 steps:
   - id: report
-    type: k8s
-    config:
+    action: k8s.run
+    with:
       image: alpine:3.20
       env_from:
         - prefix: APP_
-    command: echo hello
+      command: echo hello
 `,
 			wantErr: "steps",
 		},
@@ -699,13 +1805,13 @@ steps:
 			spec: `
 steps:
   - id: report
-    type: k8s
-    config:
+    action: k8s.run
+    with:
       image: alpine:3.20
       security_context:
         seccomp_profile:
           localhost_profile: profiles/custom.json
-    command: echo hello
+      command: echo hello
 `,
 			wantErr: "steps",
 		},
@@ -714,8 +1820,8 @@ steps:
 			spec: `
 steps:
   - id: report
-    type: k8s
-    config:
+    action: k8s.run
+    with:
       image: alpine:3.20
       pod_failure_policy:
         rules:
@@ -723,7 +1829,7 @@ steps:
             on_exit_codes:
               operator: In
               values: [42]
-    command: echo hello
+      command: echo hello
 `,
 			wantErr: "steps",
 		},
@@ -732,11 +1838,11 @@ steps:
 			spec: `
 steps:
   - id: report
-    type: kubernetes
-    config:
+    action: kubernetes.run
+    with:
       image: alpine:3.20
       unknown_field: true
-    command: echo hello
+      command: echo hello
 `,
 			wantErr: "steps",
 		},
@@ -745,15 +1851,15 @@ steps:
 			spec: `
 steps:
   - id: report
-    type: k8s
-    config:
+    action: k8s.run
+    with:
       image: alpine:3.20
       volumes:
         - name: data
           empty_dir: {}
           secret:
             secret_name: app-secret
-    command: echo hello
+      command: echo hello
 `,
 			wantErr: "steps",
 		},
@@ -797,11 +1903,11 @@ harness:
       full-auto: true
 
 steps:
-  - command: Write tests
+  - run: Write tests
 
-  - type: harness
-    command: Fix bugs
-    config:
+  - action: harness.run
+    with:
+      prompt: Fix bugs
       model: opus
       effort: high
 `,
@@ -817,13 +1923,43 @@ harnesses:
     prompt_flag: --prompt
 
 steps:
-  - type: harness
-    command: Summarize the repository state
-    config:
+  - action: harness.run
+    with:
+      prompt: Summarize the repository state
       provider: gemini
       model: gemini-2.5-pro
       yolo: true
 `,
+		},
+		{
+			name: "HarnessRunWithContainer",
+			spec: `
+steps:
+  - action: harness.run
+    container:
+      image: localhost/reviewer-claude:latest
+    with:
+      prompt: Summarize the repository state
+      provider: claude
+`,
+		},
+		{
+			name: "RejectContainerRuntimeKey",
+			spec: `
+steps:
+  - action: harness.run
+    container:
+      image: localhost/reviewer-claude:latest
+      runtime: podman
+    with:
+      prompt: Summarize the repository state
+      provider: claude
+`,
+			// Runtime selection is service-level (DAGU_CONTAINER_RUNTIME), not a YAML
+			// field. The container schema sets additionalProperties:false, so a stray
+			// runtime: key must fail validation as an unknown property. This guards the
+			// contract that the removed per-step field cannot be reintroduced silently.
+			wantErr: "steps",
 		},
 		{
 			name: "RequirePromptFlagForFlagPromptMode",
@@ -834,9 +1970,9 @@ harnesses:
     prompt_mode: flag
 
 steps:
-  - type: harness
-    command: Summarize the repository state
-    config:
+  - action: harness.run
+    with:
+      prompt: Summarize the repository state
       provider: gemini
 `,
 			wantErr: "harnesses",
@@ -851,9 +1987,9 @@ harnesses:
     prompt_flag: --prompt
 
 steps:
-  - type: harness
-    command: Summarize the repository state
-    config:
+  - action: harness.run
+    with:
+      prompt: Summarize the repository state
       provider: gemini
 `,
 			wantErr: "harnesses",
@@ -867,7 +2003,7 @@ harness:
     provider: codex
 
 steps:
-  - command: Write tests
+  - run: Write tests
 `,
 			wantErr: "harness",
 		},
@@ -875,9 +2011,9 @@ steps:
 			name: "RejectNestedFallbackInFallbackProvider",
 			spec: `
 steps:
-  - type: harness
-    command: Write tests
-    config:
+  - action: harness.run
+    with:
+      prompt: Write tests
       provider: claude
       fallback:
         - provider: codex
@@ -927,10 +2063,47 @@ func mustResolveDAGSchema(t *testing.T) *jsonschema.Resolved {
 	return resolved
 }
 
+func mustResolveDAGSchemaDefinition(t *testing.T, name string) *jsonschema.Resolved {
+	t.Helper()
+
+	var root jsonschema.Schema
+	require.NoError(t, json.Unmarshal(DAGSchemaJSON, &root))
+
+	_, ok := root.Definitions[name]
+	require.True(t, ok, "schema definition %q should exist", name)
+
+	schema := jsonschema.Schema{
+		Ref:         "#/definitions/" + name,
+		Definitions: root.Definitions,
+	}
+
+	resolved, err := schema.Resolve(&jsonschema.ResolveOptions{})
+	require.NoError(t, err)
+	return resolved
+}
+
 func mustParseYAMLDocument(t *testing.T, spec string) map[string]any {
 	t.Helper()
 
 	var doc map[string]any
 	require.NoError(t, yaml.Unmarshal([]byte(spec), &doc))
 	return doc
+}
+
+func firstStepConfig(t *testing.T, doc map[string]any) map[string]any {
+	t.Helper()
+
+	steps, ok := doc["steps"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, steps)
+
+	step, ok := steps[0].(map[string]any)
+	require.True(t, ok)
+
+	if config, ok := step["with"].(map[string]any); ok {
+		return config
+	}
+	config, ok := step["config"].(map[string]any)
+	require.True(t, ok)
+	return config
 }

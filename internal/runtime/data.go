@@ -5,6 +5,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -14,8 +15,8 @@ import (
 	"time"
 
 	"github.com/dagucloud/dagu/internal/cmn/collections"
-	"github.com/dagucloud/dagu/internal/cmn/eval"
 	"github.com/dagucloud/dagu/internal/cmn/stringutil"
+	cmnvalue "github.com/dagucloud/dagu/internal/cmn/value"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
 )
@@ -39,6 +40,10 @@ type NodeState struct {
 	Stdout string
 	// Stderr is the log file path for the error log (stderr).
 	Stderr string
+	// WorkingDir is the effective working directory used for this node execution.
+	WorkingDir string
+	// StepOutputFile is the DAGU_OUTPUT_FILE path for the current step attempt.
+	StepOutputFile string
 	// StartedAt is the time when the node started.
 	StartedAt time.Time
 	// FinishedAt is the time when the node finished.
@@ -53,6 +58,9 @@ type NodeState struct {
 	// This is used to generate unique run IDs for repeated steps in case the node
 	// runs nested DAGs.
 	Repeated bool
+	// SkippedByRetry marks a node that was intentionally skipped by an edited
+	// retry while preserving its output variables for downstream steps.
+	SkippedByRetry bool
 	// Error is the error that the executor encountered.
 	Error error
 	// ExitCode is the exit code that the command exited with.
@@ -69,6 +77,13 @@ type NodeState struct {
 	// OutputVariables stores the output variables for the following steps.
 	// It only contains the local output variables.
 	OutputVariables *collections.SyncMap
+	// OutputValue stores the step-scoped output payload for ${step.output} references.
+	// String-form output stores captured stdout; object-form output stores compact JSON.
+	OutputValue *string
+	// OutputsValue stores the legacy DAG/action outputs payload.
+	OutputsValue *string
+	// StepOutputsValue stores declared file-based outputs for ${steps.<id>.outputs.<name>} references.
+	StepOutputsValue *string
 	// ChatMessages stores the chat session messages for message passing between steps.
 	ChatMessages []exec.LLMMessage
 	// ToolDefinitions stores the tool definitions that were available to the LLM during execution.
@@ -91,6 +106,11 @@ type NodeState struct {
 	ApprovalIteration int
 	// PushBackInputs stores inputs from the last push-back for env var injection.
 	PushBackInputs map[string]string
+	// PushBackHistory stores the chronological push-back feedback for this step.
+	PushBackHistory []exec.PushBackEntry
+	// PushBackPreviousStdout stores the stdout log path from the execution that
+	// was reset by the latest push-back.
+	PushBackPreviousStdout string
 }
 
 // Parallel represents the evaluated parallel execution configuration for a node.
@@ -253,21 +273,41 @@ func (d *Data) Setup(ctx context.Context, logFile string, startedAt time.Time) e
 	}
 	d.inner.State.StartedAt = startedAt
 
-	env := GetEnv(ctx)
-
-	// Evaluate the stdout field
-	stdout, err := env.EvalString(ctx, d.inner.Step.Stdout, eval.WithoutDollarEscape())
-	if err != nil {
-		return fmt.Errorf("failed to evaluate stdout field: %w", err)
+	if d.inner.Step.StdoutArtifact != "" {
+		stdout, err := resolveRuntimeString(ctx, d.inner.Step.StdoutArtifact, cmnvalue.StepArtifactOutputField("stdout.artifact"))
+		if err != nil {
+			return fmt.Errorf("failed to evaluate stdout artifact field: %w", err)
+		}
+		stdout, err = artifactOutputFilePath(ctx, stdout)
+		if err != nil {
+			return fmt.Errorf("failed to resolve stdout artifact field: %w", err)
+		}
+		d.inner.Step.Stdout = stdout
+	} else {
+		stdout, err := resolveRuntimeString(ctx, d.inner.Step.Stdout, cmnvalue.StepArtifactOutputField("stdout"))
+		if err != nil {
+			return fmt.Errorf("failed to evaluate stdout field: %w", err)
+		}
+		d.inner.Step.Stdout = stdout
 	}
-	d.inner.Step.Stdout = stdout
 
-	// Evaluate the stderr field
-	stderr, err := env.EvalString(ctx, d.inner.Step.Stderr, eval.WithoutDollarEscape())
-	if err != nil {
-		return fmt.Errorf("failed to evaluate stderr field: %w", err)
+	if d.inner.Step.StderrArtifact != "" {
+		stderr, err := resolveRuntimeString(ctx, d.inner.Step.StderrArtifact, cmnvalue.StepArtifactOutputField("stderr.artifact"))
+		if err != nil {
+			return fmt.Errorf("failed to evaluate stderr artifact field: %w", err)
+		}
+		stderr, err = artifactOutputFilePath(ctx, stderr)
+		if err != nil {
+			return fmt.Errorf("failed to resolve stderr artifact field: %w", err)
+		}
+		d.inner.Step.Stderr = stderr
+	} else {
+		stderr, err := resolveRuntimeString(ctx, d.inner.Step.Stderr, cmnvalue.StepArtifactOutputField("stderr"))
+		if err != nil {
+			return fmt.Errorf("failed to evaluate stderr field: %w", err)
+		}
+		d.inner.Step.Stderr = stderr
 	}
-	d.inner.Step.Stderr = stderr
 
 	return nil
 }
@@ -293,28 +333,123 @@ func (d *Data) SetStatus(s core.NodeStatus) {
 	d.inner.State.Status = s
 }
 
-func (d *Data) StepInfo() eval.StepInfo {
+func (d *Data) StepInfo() cmnvalue.StepInfo {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	info := eval.StepInfo{
+	info := cmnvalue.StepInfo{
 		Stdout:   d.inner.State.Stdout,
 		Stderr:   d.inner.State.Stderr,
 		ExitCode: strconv.Itoa(d.inner.State.ExitCode),
 	}
 
-	// Populate captured output if the step has output: configured and the value was stored
-	if outputKey := d.inner.Step.Output; outputKey != "" && d.inner.State.OutputVariables != nil {
-		if raw, ok := d.inner.State.OutputVariables.Load(outputKey); ok {
-			if strVal, ok := raw.(string); ok {
-				if _, v, found := strings.Cut(strVal, "="); found {
-					info.Output = &v
-				}
-			}
+	// Step-scoped references use OutputValue for both string-form and object-form output.
+	if d.inner.State.OutputValue != nil {
+		value := *d.inner.State.OutputValue
+		info.Output = &value
+	}
+
+	// Backward-compatible fallback for previously persisted string-form outputs.
+	if info.Output == nil {
+		if value, ok := d.inner.StringFormOutputValue(); ok {
+			info.Output = &value
 		}
+	}
+	if d.inner.State.StepOutputsValue != nil {
+		value := *d.inner.State.StepOutputsValue
+		info.Outputs = &value
+		info.DeclaredOutputs = &value
+	}
+	if info.Outputs == nil && d.inner.State.OutputsValue != nil {
+		value := *d.inner.State.OutputsValue
+		info.Outputs = &value
 	}
 
 	return info
+}
+
+func (d NodeData) OutputsValueMap() map[string]any {
+	if d.State.OutputsValue == nil {
+		return nil
+	}
+	var values map[string]any
+	if err := json.Unmarshal([]byte(*d.State.OutputsValue), &values); err != nil {
+		return nil
+	}
+	return values
+}
+
+func (d NodeData) OutputsValueStringMap() map[string]string {
+	values := d.OutputsValueMap()
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(values))
+	for key, value := range values {
+		result[key] = outputValueToString(value)
+	}
+	return result
+}
+
+func (d NodeData) StepOutputsValueMap() map[string]string {
+	if d.State.StepOutputsValue == nil {
+		return nil
+	}
+	var values map[string]string
+	if err := json.Unmarshal([]byte(*d.State.StepOutputsValue), &values); err != nil {
+		return nil
+	}
+	return values
+}
+
+func outputValueToString(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	default:
+		data, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Sprint(v)
+		}
+		return string(data)
+	}
+}
+
+// StringFormOutputValue returns the canonical captured output for string-form output: NAME steps.
+// OutputValue is the source of truth for newly executed steps; OutputVariables remains as a
+// backward-compatible fallback for previously persisted state.
+func (d NodeData) StringFormOutputValue() (string, bool) {
+	if d.Step.Output == "" {
+		return "", false
+	}
+	if d.State.OutputValue != nil {
+		return *d.State.OutputValue, true
+	}
+	return legacyOutputVariableValue(d.Step.Output, d.State.OutputVariables)
+}
+
+func legacyOutputVariableValue(outputKey string, vars *collections.SyncMap) (string, bool) {
+	if outputKey == "" || vars == nil {
+		return "", false
+	}
+
+	raw, ok := vars.Load(outputKey)
+	if !ok {
+		return "", false
+	}
+
+	strVal, ok := raw.(string)
+	if !ok {
+		return "", false
+	}
+
+	if _, value, found := strings.Cut(strVal, "="); found {
+		return value, true
+	}
+
+	return "", false
 }
 
 func (d *Data) ContinueOn() core.ContinueOn {
@@ -428,6 +563,58 @@ func (d *Data) setVariable(key, value string) {
 	d.inner.State.OutputVariables.Store(key, stringutil.NewKeyValue(key, value).String())
 }
 
+func (d *Data) setOutputValue(value string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	v := value
+	d.inner.State.OutputValue = &v
+}
+
+func (d *Data) setOutputsValue(value string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	v := value
+	d.inner.State.OutputsValue = &v
+}
+
+func (d *Data) clearOutputsValue() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.inner.State.OutputsValue = nil
+}
+
+func (d *Data) setStepOutputsValue(value string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	v := value
+	d.inner.State.StepOutputsValue = &v
+}
+
+func (d *Data) clearStepOutputsValue() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.inner.State.StepOutputsValue = nil
+}
+
+func (d *Data) setStepOutputFile(path string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.inner.State.StepOutputFile = path
+}
+
+func (d *Data) stepOutputFile() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	return d.inner.State.StepOutputFile
+}
+
 func (d *Data) Finish() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -503,6 +690,14 @@ func (d *Data) SetExitCode(exitCode int) {
 	defer d.mu.Unlock()
 
 	d.inner.State.ExitCode = exitCode
+}
+
+// SetWorkingDir records the effective working directory for the node execution.
+func (d *Data) SetWorkingDir(workingDir string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.inner.State.WorkingDir = workingDir
 }
 
 func (d *Data) ClearState(s core.Step) {

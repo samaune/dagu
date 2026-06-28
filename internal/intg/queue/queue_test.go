@@ -16,9 +16,11 @@ import (
 	"github.com/dagucloud/dagu/internal/cmn/stringutil"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
+	"github.com/dagucloud/dagu/internal/core/spec"
 	"github.com/dagucloud/dagu/internal/service/coordinator"
 	"github.com/dagucloud/dagu/internal/service/scheduler"
 	"github.com/dagucloud/dagu/internal/test"
+	"github.com/dagucloud/dagu/internal/test/intgharness"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,12 +30,11 @@ func TestBasicProcessing(t *testing.T) {
 name: echo-dag
 steps:
   - name: echo
-    command: echo hello
+    run: echo hello
 `).Enqueue(3).StartScheduler(30 * time.Second)
+	defer f.Stop()
 
-	f.WaitDrain(35 * time.Second)
-	f.WaitForAllStatuses(core.Succeeded, 20*time.Second)
-	f.Stop()
+	f.WaitForAllStatusesAndDrain(core.Succeeded, 20*time.Second, 35*time.Second)
 
 	items, err := f.th.QueueStore.List(f.th.Context, f.queue)
 	require.NoError(t, err)
@@ -47,7 +48,7 @@ func TestParallelQueueFixturesRemainIsolated(t *testing.T) {
 name: echo-dag
 steps:
   - name: echo
-    command: echo hello
+    run: echo hello
 `).Enqueue(1).StartScheduler(20 * time.Second)
 			defer f.Stop()
 
@@ -58,16 +59,15 @@ steps:
 }
 
 func TestGlobalConcurrency(t *testing.T) {
-	sleepDuration := time.Second
+	startedDir := t.TempDir()
+	releaseFile := filepath.Join(t.TempDir(), "release")
 	maxDiff := 2 * time.Second
 	switch {
 	case runtime.GOOS == "windows" && raceEnabled():
-		sleepDuration = 12 * time.Second
 		maxDiff = 10 * time.Second
 	case runtime.GOOS == "windows":
 		// StartedAt is second-granularity in persisted queue statuses, so give
 		// Windows enough overlap budget to avoid false negatives from rounding.
-		sleepDuration = 6 * time.Second
 		maxDiff = 5 * time.Second
 	}
 
@@ -76,14 +76,60 @@ name: sleep-dag
 queue: global-queue
 steps:
   - name: sleep
-    command: %s
-`, test.ShellQuote(test.Sleep(sleepDuration))), WithQueue("global-queue"), WithGlobalQueue("global-queue", 3)).
+    run: |
+%s
+`, indentQueueTestScript(markQueueRunStartedAndWaitCommand(startedDir, releaseFile), 6)), WithQueue("global-queue"), WithGlobalQueue("global-queue", 3)).
 		Enqueue(3).StartScheduler(30 * time.Second)
+	released := false
+	stopped := false
+	defer func() {
+		if !released {
+			_ = os.WriteFile(releaseFile, []byte("release"), 0600)
+		}
+		if !stopped {
+			f.Stop()
+		}
+	}()
 
 	f.WaitDrain(35 * time.Second)
-	f.WaitForAllStatuses(core.Succeeded, 20*time.Second)
-	f.Stop()
+	f.WaitForStartedFiles(startedDir, 3, 20*time.Second)
 	f.AssertConcurrent(maxDiff)
+
+	require.NoError(t, os.WriteFile(releaseFile, []byte("release"), 0600))
+	released = true
+	f.WaitForAllStatuses(core.Succeeded, 20*time.Second)
+	f.WaitForAllStopped(10 * time.Second)
+	f.Stop()
+	stopped = true
+}
+
+func markQueueRunStartedAndWaitCommand(startedDir, releaseFile string) string {
+	waitForRelease := intgharness.PortableCommands().WaitForFile(releaseFile)
+	return test.ForOS(
+		fmt.Sprintf(`mkdir -p %s
+run_id=$(printenv DAG_RUN_ID 2>/dev/null || true)
+if [ -z "$run_id" ]; then
+  run_id=$$
+fi
+: > %s/"started-$run_id"
+%s`, test.PosixQuote(startedDir), test.PosixQuote(startedDir), waitForRelease),
+		fmt.Sprintf(`New-Item -ItemType Directory -Path %s -Force | Out-Null
+$runId = $env:DAG_RUN_ID
+if ([string]::IsNullOrWhiteSpace($runId)) {
+  $runId = [guid]::NewGuid().ToString()
+}
+New-Item -ItemType File -Path (Join-Path %s ("started-" + $runId)) -Force | Out-Null
+%s`, test.PowerShellQuote(startedDir), test.PowerShellQuote(startedDir), waitForRelease),
+	)
+}
+
+func indentQueueTestScript(script string, spaces int) string {
+	indent := strings.Repeat(" ", spaces)
+	lines := strings.Split(strings.TrimRight(script, "\n"), "\n")
+	for i, line := range lines {
+		lines[i] = indent + line
+	}
+	return strings.Join(lines, "\n")
 }
 
 func TestLocalQueueFIFOProcessing(t *testing.T) {
@@ -92,12 +138,11 @@ name: batch-dag
 max_active_runs: 3
 steps:
   - name: sleep
-    command: %s
+    run: %s
 `, test.ShellQuote(test.Sleep(time.Second)))).Enqueue(3).StartScheduler(30 * time.Second)
+	defer f.Stop()
 
 	f.WaitDrain(20 * time.Second)
-	f.Stop()
-
 	times := f.collectStartTimes()
 	require.Len(t, times, 3)
 	for i := 1; i < len(times); i++ {
@@ -113,17 +158,16 @@ name: priority-dag
 max_active_runs: 1
 steps:
   - name: echo
-    command: echo done
+    run: echo done
 `).
 		EnqueueWithPriority(exec.QueuePriorityLow).
 		EnqueueWithPriority(exec.QueuePriorityLow).
 		EnqueueWithPriority(exec.QueuePriorityHigh).
 		EnqueueWithPriority(exec.QueuePriorityHigh).
 		StartScheduler(30 * time.Second)
+	defer f.Stop()
 
-	f.WaitDrain(35 * time.Second)
-	f.WaitForAllStatuses(core.Succeeded, 20*time.Second)
-	f.Stop()
+	f.WaitForAllStatusesAndDrain(core.Succeeded, 20*time.Second, 35*time.Second)
 
 	times := f.collectStartTimes()
 	require.Len(t, times, 4)
@@ -145,7 +189,7 @@ name: retry-dag
 queue: retry-queue
 steps:
   - name: echo
-    command: echo retried
+    run: echo retried
 `, WithQueue("retry-queue"), WithGlobalQueue("retry-queue", 1)).
 		FailedRun()
 
@@ -198,7 +242,7 @@ env:
   - EXPORTED_SECRET: ${%s}
 steps:
   - name: capture
-    command: %q
+    run: %q
     output: RESULT
 `, rawVar, test.EnvOutput("EXPORTED_SECRET", rawVar)), WithQueue("queue-explicit-env"), WithGlobalQueue("queue-explicit-env", 1))
 
@@ -261,14 +305,11 @@ retry_policy:
   max_interval_sec: 1
 handler_on:
   failure:
-    command: %q
+    run: %q
 steps:
   - id: retry_step
-    command: echo retried
-`, test.ForOS(
-			fmt.Sprintf("printf '%%s' %s > %s", test.PosixQuote("failed"), test.PosixQuote(markerPath)),
-			fmt.Sprintf("Set-Content -Path %s -Value %s -NoNewline", test.PowerShellQuote(markerPath), test.PowerShellQuote("failed")),
-		)), WithQueue("retry-queue"), WithGlobalQueue("retry-queue", 1))
+    run: echo retried
+`, intgharness.PortableCommands().WriteFile(markerPath, "failed")), WithQueue("retry-queue"), WithGlobalQueue("retry-queue", 1))
 
 		failedAt := time.Now().UTC().Add(-30 * time.Second)
 		runID := f.FailedRunWithMetadata(runStatusOptions{
@@ -310,14 +351,11 @@ retry_policy:
   max_interval_sec: 1
 handler_on:
   failure:
-    command: %q
+    run: %q
 steps:
   - id: retry_step
-    command: echo retried
-`, test.ForOS(
-			fmt.Sprintf("printf '%%s' %s > %s", test.PosixQuote("failed"), test.PosixQuote(markerPath)),
-			fmt.Sprintf("Set-Content -Path %s -Value %s -NoNewline", test.PowerShellQuote(markerPath), test.PowerShellQuote("failed")),
-		)), WithQueue("retry-queue"), WithGlobalQueue("retry-queue", 1))
+    run: echo retried
+`, intgharness.PortableCommands().WriteFile(markerPath, "failed")), WithQueue("retry-queue"), WithGlobalQueue("retry-queue", 1))
 
 		failedAt := time.Now().UTC().Add(-30 * time.Second)
 		runID := f.FailedRunWithMetadata(runStatusOptions{
@@ -342,6 +380,67 @@ steps:
 		assert.Equal(t, 1, latest.AutoRetryCount)
 	})
 
+	t.Run("DisabledByChildSkipsInheritedBaseRetryPolicy", func(t *testing.T) {
+		f := newFixture(t, `
+type: graph
+name: retry-disabled-dag
+queue: retry-disabled-queue
+retry_policy:
+  limit: 0
+steps:
+  - id: retry_step
+    run: echo retried
+`, WithQueue("retry-disabled-queue"), WithGlobalQueue("retry-disabled-queue", 1))
+
+		require.NoError(t, os.WriteFile(f.th.Config.Paths.BaseConfig, []byte(`
+retry_policy:
+  limit: 1
+  interval_sec: 1
+  backoff: false
+  max_interval_sec: 1
+`), 0600))
+
+		dag, err := spec.Load(f.th.Context, f.dag.Location, spec.WithBaseConfig(f.th.Config.Paths.BaseConfig))
+		require.NoError(t, err)
+		f.dag = dag
+		require.NotNil(t, f.dag.RetryPolicy)
+		require.Equal(t, 0, f.dag.RetryPolicy.Limit)
+
+		failedAt := time.Now().UTC().Add(-30 * time.Second)
+		runID := f.FailedRunWithMetadata(runStatusOptions{
+			StartedAt:    failedAt.Add(-5 * time.Second),
+			FinishedAt:   failedAt,
+			ScheduleTime: failedAt.Add(-time.Minute),
+			TriggerType:  core.TriggerTypeScheduler,
+		})
+		originalStatus := f.MustStatus(runID)
+		originalAttemptID := originalStatus.AttemptID
+		require.Equal(t, 0, originalStatus.AutoRetryLimit)
+
+		f.StartScheduler(10 * time.Second)
+		defer f.Stop()
+
+		require.Never(t, func() bool {
+			status, err := f.Status(runID)
+			if err != nil {
+				return false
+			}
+			return status.AttemptID != originalAttemptID ||
+				status.Status != core.Failed ||
+				status.AutoRetryCount != 0
+		}, 3*time.Second, 100*time.Millisecond)
+
+		latest := f.MustStatus(runID)
+		assert.Equal(t, core.Failed, latest.Status)
+		assert.Equal(t, originalAttemptID, latest.AttemptID)
+		assert.Equal(t, 0, latest.AutoRetryCount)
+		assert.Equal(t, 0, latest.AutoRetryLimit)
+
+		items, err := f.th.QueueStore.List(f.th.Context, "retry-disabled-queue")
+		require.NoError(t, err)
+		assert.Empty(t, items)
+	})
+
 	t.Run("NewerScheduledRunDoesNotSuppressRetry", func(t *testing.T) {
 		markerPath := filepath.Join(t.TempDir(), "failure.marker")
 		f := newFixture(t, fmt.Sprintf(`
@@ -355,14 +454,11 @@ retry_policy:
   max_interval_sec: 1
 handler_on:
   failure:
-    command: %q
+    run: %q
 steps:
   - id: retry_step
-    command: echo retried
-`, test.ForOS(
-			fmt.Sprintf("printf '%%s' %s > %s", test.PosixQuote("failed"), test.PosixQuote(markerPath)),
-			fmt.Sprintf("Set-Content -Path %s -Value %s -NoNewline", test.PowerShellQuote(markerPath), test.PowerShellQuote("failed")),
-		)), WithQueue("retry-queue"), WithGlobalQueue("retry-queue", 1), WithRetryWindow(48*time.Hour))
+    run: echo retried
+`, intgharness.PortableCommands().WriteFile(markerPath, "failed")), WithQueue("retry-queue"), WithGlobalQueue("retry-queue", 1), WithRetryWindow(48*time.Hour))
 
 		now := time.Now().UTC()
 		midnight := retryScanReferenceMidnight(now)
@@ -407,7 +503,7 @@ func TestCatchupQueuedHappyPath(t *testing.T) {
 name: catchup-local-test
 steps:
   - name: echo-step
-    command: echo catchup-local
+    run: echo catchup-local
 `)
 
 	runID := f.enqueueCatchup(scheduleTime)
@@ -430,17 +526,16 @@ steps:
 }
 
 func TestSchedulerCatchupFromPersistedWatermark(t *testing.T) {
-	scheduledTime := stableCurrentMinute(t)
-
 	f := newFixture(t, `
 name: catchup-watermark-test
 schedule: "* * * * *"
-catchup_window: "2m"
+catchup_window: "10m"
 steps:
   - name: echo-step
-    command: echo catchup-from-watermark
+    run: echo catchup-from-watermark
 `)
 
+	scheduledTime := time.Now().UTC().Truncate(time.Minute)
 	f.seedWatermark(scheduledTime.Add(-time.Minute), scheduledTime.Add(-time.Minute))
 	f.StartScheduler(45 * time.Second)
 	defer f.Stop()
@@ -481,15 +576,4 @@ func retryScanReferenceMidnight(now time.Time) time.Time {
 		return midnight.Add(-24 * time.Hour)
 	}
 	return midnight
-}
-
-func stableCurrentMinute(t *testing.T) time.Time {
-	t.Helper()
-
-	now := time.Now().UTC()
-	if now.Second() >= 50 {
-		return now.Truncate(time.Minute).Add(-time.Minute)
-	}
-
-	return now.Truncate(time.Minute)
 }

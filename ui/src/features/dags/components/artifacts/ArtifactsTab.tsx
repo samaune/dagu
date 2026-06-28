@@ -2,23 +2,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { Button } from '@/components/ui/button';
-import { AppBarContext } from '@/contexts/AppBarContext';
+import { DocMarkdownPreview } from '@/components/ui/doc-markdown-preview';
+import { useRemoteNode } from '@/contexts/RemoteNodeContext';
 import { useClient } from '@/hooks/api';
 import { cn } from '@/lib/utils';
 import {
   AlertCircle,
+  Check,
+  ClipboardCopy,
   Download,
   File,
+  FileCode,
   FileImage,
   FileText,
   Folder,
   FolderOpen,
   RefreshCw,
 } from 'lucide-react';
-import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { components } from '../../../../api/v1/schema';
+import { HtmlArtifactPreview } from './HtmlArtifactPreview';
 
 type ArtifactTreeNode = components['schemas']['ArtifactTreeNode'];
 type ArtifactPreviewResponse = components['schemas']['ArtifactPreviewResponse'];
@@ -27,6 +30,8 @@ type DAGRunDetails = components['schemas']['DAGRunDetails'];
 type Props = {
   dagRun: DAGRunDetails;
   artifactEnabled?: boolean;
+  className?: string;
+  fillHeight?: boolean;
 };
 
 function collectDirectoryPaths(nodes: ArtifactTreeNode[]): string[] {
@@ -68,14 +73,6 @@ function flattenNodes(nodes: ArtifactTreeNode[]): ArtifactTreeNode[] {
   return flat;
 }
 
-function ArtifactMarkdown({ content }: { content: string }) {
-  return (
-    <div className="prose prose-slate max-w-none text-sm leading-6 prose-headings:font-semibold prose-pre:bg-muted prose-pre:border prose-pre:border-border prose-code:before:content-none prose-code:after:content-none">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-    </div>
-  );
-}
-
 function TreeNode({
   node,
   depth,
@@ -101,9 +98,11 @@ function TreeNode({
       : Folder
     : node.path.match(/\.(md|markdown|mdown|mkd)$/i)
       ? FileText
-      : node.path.match(/\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i)
-        ? FileImage
-        : File;
+      : node.path.match(/\.(html?|xhtml)$/i)
+        ? FileCode
+        : node.path.match(/\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i)
+          ? FileImage
+          : File;
 
   return (
     <div>
@@ -154,10 +153,11 @@ function TreeNode({
 export default function ArtifactsTab({
   dagRun,
   artifactEnabled = false,
+  className,
+  fillHeight = false,
 }: Props) {
   const client = useClient();
-  const appBarContext = useContext(AppBarContext);
-  const remoteNode = appBarContext.selectedRemoteNode || 'local';
+  const remoteNode = useRemoteNode();
   const isSubDAGRun =
     !!dagRun.rootDAGRunId &&
     dagRun.rootDAGRunId !== dagRun.dagRunId &&
@@ -172,6 +172,13 @@ export default function ArtifactsTab({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [markdownViewMode, setMarkdownViewMode] = useState<'preview' | 'raw'>(
+    'preview'
+  );
+  const [htmlViewMode, setHTMLViewMode] = useState<'preview' | 'raw'>(
+    'preview'
+  );
+  const [copiedContent, setCopiedContent] = useState(false);
   const [openDirs, setOpenDirs] = useState<Set<string>>(new Set());
   const treeRequestRef = useRef<{
     id: number;
@@ -183,6 +190,19 @@ export default function ArtifactsTab({
     () => allNodes.find((node) => node.path === selectedPath) ?? null,
     [allNodes, selectedPath]
   );
+  const isMarkdownPreview = preview?.kind === 'markdown';
+  const isHTMLPreview = preview?.kind === 'html';
+  const isMarkupPreview = isMarkdownPreview || isHTMLPreview;
+  const markupViewMode = isHTMLPreview ? htmlViewMode : markdownViewMode;
+  const isCopyablePreview =
+    preview?.kind === 'markdown' ||
+    preview?.kind === 'html' ||
+    preview?.kind === 'text';
+  const previewTruncatedNotice =
+    preview?.truncated &&
+    (preview.kind === 'markdown' ||
+      preview.kind === 'html' ||
+      preview.kind === 'text');
 
   const requestArtifactTree = async (signal?: AbortSignal) => {
     if (isSubDAGRun) {
@@ -527,6 +547,32 @@ export default function ArtifactsTab({
     URL.revokeObjectURL(objectUrl);
   };
 
+  const handleCopyContent = async () => {
+    if (!preview || !selectedPath || !isCopyablePreview) {
+      return;
+    }
+
+    let text = preview.content ?? '';
+    if (preview.truncated || preview.tooLarge || preview.content == null) {
+      const request = await fetchArtifactDownload(selectedPath);
+      text = await request.data.text();
+    }
+
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+    }
+
+    setCopiedContent(true);
+    window.setTimeout(() => setCopiedContent(false), 2000);
+  };
+
   if (!artifactEnabled && !dagRun.artifactsAvailable) {
     return (
       <div className="rounded-lg border border-dashed border-border bg-muted/20 p-6 text-sm text-muted-foreground">
@@ -548,8 +594,19 @@ export default function ArtifactsTab({
   }
 
   return (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
-      <div className="rounded-lg border border-border bg-surface">
+    <div
+      className={cn(
+        'grid grid-cols-1 gap-4 xl:grid-cols-[320px_minmax(0,1fr)]',
+        fillHeight && 'h-full min-h-0',
+        className
+      )}
+    >
+      <div
+        className={cn(
+          'rounded-lg border border-border bg-surface',
+          fillHeight && 'flex min-h-0 flex-col overflow-hidden'
+        )}
+      >
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
           <div>
             <p className="text-sm font-medium">Artifacts</p>
@@ -573,7 +630,12 @@ export default function ArtifactsTab({
           </Button>
         </div>
 
-        <div className="max-h-[34rem] overflow-auto p-2">
+        <div
+          className={cn(
+            'overflow-auto p-2',
+            fillHeight ? 'min-h-0 flex-1' : 'max-h-[34rem]'
+          )}
+        >
           {treeLoading ? (
             <div className="px-2 py-6 text-sm text-muted-foreground">
               Loading artifacts...
@@ -615,7 +677,12 @@ export default function ArtifactsTab({
         </div>
       </div>
 
-      <div className="rounded-lg border border-border bg-background">
+      <div
+        className={cn(
+          'rounded-lg border border-border bg-background',
+          fillHeight && 'flex min-h-0 flex-col overflow-hidden'
+        )}
+      >
         <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
           <div className="min-w-0">
             <p className="truncate text-sm font-medium">
@@ -625,24 +692,94 @@ export default function ArtifactsTab({
               {selectedPath || 'Choose a file from the left panel'}
             </p>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!selectedPath || selectedNode?.type !== 'file'}
-            onClick={() => {
-              void handleDownload().catch((error: unknown) => {
-                setPreviewError(
-                  error instanceof Error ? error.message : 'Download failed'
-                );
-              });
-            }}
-          >
-            <Download className="h-4 w-4" />
-            Download
-          </Button>
+          <div className="flex items-center gap-2">
+            {isCopyablePreview ? (
+              <button
+                type="button"
+                onClick={() => {
+                  void handleCopyContent().catch((error: unknown) => {
+                    setPreviewError(
+                      error instanceof Error
+                        ? error.message
+                        : 'Failed to copy artifact contents'
+                    );
+                  });
+                }}
+                className="flex items-center gap-1 rounded-md px-2 py-0.5 text-xs text-muted-foreground transition-all hover:bg-muted hover:text-foreground"
+                title="Copy content"
+              >
+                {copiedContent ? (
+                  <Check className="h-3 w-3 text-green-500" />
+                ) : (
+                  <ClipboardCopy className="h-3 w-3" />
+                )}
+                <span>Copy</span>
+              </button>
+            ) : null}
+            {isMarkupPreview ? (
+              <div className="flex overflow-hidden rounded-md border border-border">
+                <button
+                  type="button"
+                  className={cn(
+                    'px-2 py-0.5 text-xs transition-colors',
+                    markupViewMode === 'preview'
+                      ? 'bg-accent text-accent-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                  onClick={() => {
+                    if (isHTMLPreview) {
+                      setHTMLViewMode('preview');
+                      return;
+                    }
+                    setMarkdownViewMode('preview');
+                  }}
+                >
+                  Preview
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    'px-2 py-0.5 text-xs transition-colors',
+                    markupViewMode === 'raw'
+                      ? 'bg-accent text-accent-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                  onClick={() => {
+                    if (isHTMLPreview) {
+                      setHTMLViewMode('raw');
+                      return;
+                    }
+                    setMarkdownViewMode('raw');
+                  }}
+                >
+                  Raw
+                </button>
+              </div>
+            ) : null}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!selectedPath || selectedNode?.type !== 'file'}
+              onClick={() => {
+                void handleDownload().catch((error: unknown) => {
+                  setPreviewError(
+                    error instanceof Error ? error.message : 'Download failed'
+                  );
+                });
+              }}
+            >
+              <Download className="h-4 w-4" />
+              Download
+            </Button>
+          </div>
         </div>
 
-        <div className="max-h-[34rem] overflow-auto p-4">
+        <div
+          className={cn(
+            'overflow-auto p-4',
+            fillHeight ? 'min-h-0 flex-1' : 'max-h-[34rem]'
+          )}
+        >
           {!selectedPath ? (
             <div className="text-sm text-muted-foreground">
               Select a file to preview it.
@@ -681,17 +818,64 @@ export default function ArtifactsTab({
               </dl>
             </div>
           ) : preview.kind === 'markdown' ? (
-            <ArtifactMarkdown content={preview.content || ''} />
+            <div className="space-y-3">
+              {previewTruncatedNotice ? (
+                <div className="rounded-md border border-dashed border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                  Inline preview is truncated. Use Copy or Download for the full
+                  file.
+                </div>
+              ) : null}
+              {markdownViewMode === 'raw' ? (
+                <pre className="overflow-auto rounded-md border border-border bg-muted/20 p-4 text-sm leading-6 whitespace-pre-wrap">
+                  {preview.content || ''}
+                </pre>
+              ) : (
+                <DocMarkdownPreview content={preview.content} />
+              )}
+            </div>
+          ) : preview.kind === 'html' ? (
+            <div
+              className={cn('space-y-3', fillHeight && 'flex min-h-0 flex-col')}
+            >
+              {previewTruncatedNotice ? (
+                <div className="rounded-md border border-dashed border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                  Inline preview is truncated. Use Copy or Download for the full
+                  file.
+                </div>
+              ) : null}
+              {htmlViewMode === 'raw' ? (
+                <pre className="overflow-auto rounded-md border border-border bg-muted/20 p-4 text-sm leading-6 whitespace-pre-wrap">
+                  {preview.content || ''}
+                </pre>
+              ) : (
+                <HtmlArtifactPreview
+                  content={preview.content}
+                  fillHeight={fillHeight}
+                  className={fillHeight ? 'min-h-0 flex-1' : undefined}
+                />
+              )}
+            </div>
           ) : preview.kind === 'text' ? (
-            <pre className="overflow-auto rounded-md border border-border bg-muted/20 p-4 text-sm leading-6 whitespace-pre-wrap">
-              {preview.content || ''}
-            </pre>
+            <div className="space-y-3">
+              {previewTruncatedNotice ? (
+                <div className="rounded-md border border-dashed border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                  Inline preview is truncated. Use Copy or Download for the full
+                  file.
+                </div>
+              ) : null}
+              <pre className="overflow-auto rounded-md border border-border bg-muted/20 p-4 text-sm leading-6 whitespace-pre-wrap">
+                {preview.content || ''}
+              </pre>
+            </div>
           ) : preview.kind === 'image' ? (
             imageUrl ? (
               <img
                 src={imageUrl}
                 alt={preview.name}
-                className="max-h-[40rem] max-w-full rounded-md border border-border object-contain"
+                className={cn(
+                  'max-w-full rounded-md border border-border object-contain',
+                  fillHeight ? 'max-h-full' : 'max-h-[40rem]'
+                )}
               />
             ) : (
               <div className="text-sm text-muted-foreground">

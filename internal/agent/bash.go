@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"time"
 
@@ -52,7 +51,7 @@ type commandRunResult struct {
 // BashToolInput defines the input parameters for the bash tool.
 type BashToolInput struct {
 	Command string `json:"command"`
-	Timeout int    `json:"timeout,omitempty"`
+	Timeout int    `json:"timeout,omitempty" lenient:"true"`
 }
 
 // NewBashTool creates a new bash tool for shell command execution.
@@ -89,7 +88,7 @@ func NewBashTool() *AgentTool {
 
 func bashRun(toolCtx ToolContext, input json.RawMessage) ToolOut {
 	var args BashToolInput
-	if err := json.Unmarshal(input, &args); err != nil {
+	if err := decodeToolInput(input, &args); err != nil {
 		return toolError("Failed to parse input: %v", err)
 	}
 	if args.Command == "" {
@@ -184,7 +183,7 @@ func executeWithBash(ctx context.Context, bashPath, command, workDir string) com
 		default:
 		}
 
-		_ = cmdutil.KillProcessGroup(cmd, os.Kill)
+		_ = cmdutil.TerminateProcessGroup(cmd, cmdutil.ForceTermination())
 		<-waitCh
 
 		return commandRunResult{

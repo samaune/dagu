@@ -121,6 +121,7 @@ func TestLoad_Env(t *testing.T) {
 		"DAGU_LOG_DIR":              filepath.Join(testPaths, "logs"),
 		"DAGU_DATA_DIR":             filepath.Join(testPaths, "data"),
 		"DAGU_ARTIFACT_DIR":         filepath.Join(testPaths, "artifacts"),
+		"DAGU_DAG_STATE_DIR":        filepath.Join(testPaths, "dag-state"),
 		"DAGU_SUSPEND_FLAGS_DIR":    filepath.Join(testPaths, "suspend"),
 		"DAGU_ADMIN_LOG_DIR":        filepath.Join(testPaths, "admin"),
 		"DAGU_BASE_CONFIG":          filepath.Join(testPaths, "base.yaml"),
@@ -244,6 +245,9 @@ func TestLoad_Env(t *testing.T) {
 			Enabled:       true,
 			RetentionDays: 1,
 		},
+		Webhooks: WebhooksConfig{
+			MaxPayloadSize: DefaultWebhookMaxPayloadSize,
+		},
 		Paths: PathsConfig{
 			DAGsDir:            filepath.Join(testPaths, "dags"),
 			DocsDir:            filepath.Join(testPaths, "dags", "docs"),
@@ -251,7 +255,9 @@ func TestLoad_Env(t *testing.T) {
 			Executable:         filepath.Join(testPaths, "bin", "dagu"),
 			LogDir:             filepath.Join(testPaths, "logs"),
 			DataDir:            filepath.Join(testPaths, "data"),
+			ToolsDir:           filepath.Join(testPaths, "data", "tools"),
 			ArtifactDir:        filepath.Join(testPaths, "artifacts"),
+			DAGStateDir:        filepath.Join(testPaths, "dag-state"),
 			SuspendFlagsDir:    filepath.Join(testPaths, "suspend"),
 			AdminLogsDir:       filepath.Join(testPaths, "admin"),
 			EventStoreDir:      cfg.Paths.EventStoreDir,
@@ -267,6 +273,7 @@ func TestLoad_Env(t *testing.T) {
 			ContextsDir:        filepath.Join(testPaths, "data", "contexts"),          // Derived from DataDir
 			RemoteNodesDir:     filepath.Join(testPaths, "data", "remote-nodes"),      // Derived from DataDir
 			WorkspacesDir:      filepath.Join(testPaths, "data", "workspaces"),        // Derived from DataDir
+			ViewsDir:           filepath.Join(testPaths, "data", "views"),             // Derived from DataDir
 		},
 		Secrets: SecretsConfig{
 			Vault: VaultSecretsConfig{
@@ -351,6 +358,10 @@ func TestLoad_Env(t *testing.T) {
 				RespondToAll:         true,
 			},
 			Discord: DiscordBotConfig{
+				InterestedEventTypes: DefaultBotInterestedEventTypes,
+				RespondToAll:         true,
+			},
+			Line: LineBotConfig{
 				InterestedEventTypes: DefaultBotInterestedEventTypes,
 				RespondToAll:         true,
 			},
@@ -523,6 +534,7 @@ permissions:
   write_dags: false
   run_dags: false
 debug: true
+public_url: "https://dagu.example.com/workflows/"
 base_path: "/dagu"
 api_base_path: "/api/v1"
 tz: "UTC"
@@ -536,6 +548,7 @@ paths:
   dags_dir: "/var/dagu/dags"
   log_dir: "/var/dagu/logs"
   data_dir: "/var/dagu/data"
+  tools_dir: "/var/dagu/tools"
   suspend_flags_dir: "/var/dagu/suspend"
   admin_logs_dir: "/var/dagu/adminlogs"
   base_config: "/var/dagu/base.yaml"
@@ -634,6 +647,7 @@ scheduler:
 		Server: Server{
 			Host:              "0.0.0.0",
 			Port:              9090,
+			PublicURL:         "https://dagu.example.com/workflows",
 			BasePath:          "/dagu",
 			APIBasePath:       "/api/v1",
 			Headless:          true,
@@ -700,11 +714,16 @@ scheduler:
 			Enabled:       true,
 			RetentionDays: 1,
 		},
+		Webhooks: WebhooksConfig{
+			MaxPayloadSize: DefaultWebhookMaxPayloadSize,
+		},
 		Paths: PathsConfig{
 			DAGsDir:            resolvedTestPath(t, "/var/dagu/dags"),
 			DocsDir:            resolvedTestPath(t, "/var/dagu/dags/docs"),
 			LogDir:             resolvedTestPath(t, "/var/dagu/logs"),
 			DataDir:            resolvedTestPath(t, "/var/dagu/data"),
+			DAGStateDir:        resolvedTestPath(t, "/var/dagu/data/dag-state"),
+			ToolsDir:           resolvedTestPath(t, "/var/dagu/tools"),
 			ArtifactDir:        cfg.Paths.ArtifactDir,
 			SuspendFlagsDir:    resolvedTestPath(t, "/var/dagu/suspend"),
 			AdminLogsDir:       resolvedTestPath(t, "/var/dagu/adminlogs"),
@@ -722,6 +741,7 @@ scheduler:
 			ContextsDir:        resolvedTestPath(t, "/var/dagu/data/contexts"),
 			RemoteNodesDir:     resolvedTestPath(t, "/var/dagu/data/remote-nodes"),
 			WorkspacesDir:      resolvedTestPath(t, "/var/dagu/data/workspaces"),
+			ViewsDir:           resolvedTestPath(t, "/var/dagu/data/views"),
 		},
 		UI: UI{
 			LogEncodingCharset:    "iso-8859-1",
@@ -791,6 +811,10 @@ scheduler:
 				InterestedEventTypes: DefaultBotInterestedEventTypes,
 				RespondToAll:         true,
 			},
+			Line: LineBotConfig{
+				InterestedEventTypes: DefaultBotInterestedEventTypes,
+				RespondToAll:         true,
+			},
 		},
 		DefaultExecMode: ExecutionModeLocal,
 		Warnings:        nil,
@@ -846,6 +870,7 @@ paths:
 `)
 	dataDir := resolvedTestPath(t, "/custom/data")
 	assert.Equal(t, dataDir, cfg.Paths.DataDir)
+	assert.Equal(t, filepath.Join(dataDir, "tools"), cfg.Paths.ToolsDir)
 	assert.Equal(t, filepath.Join(dataDir, "dag-runs"), cfg.Paths.DAGRunsDir)
 	assert.Equal(t, filepath.Join(dataDir, "proc"), cfg.Paths.ProcDir)
 	assert.Equal(t, filepath.Join(dataDir, "queue"), cfg.Paths.QueueDir)
@@ -853,6 +878,24 @@ paths:
 	assert.Equal(t, filepath.Join(dataDir, "users"), cfg.Paths.UsersDir)
 	assert.Equal(t, filepath.Join(dataDir, "agent", "sessions"), cfg.Paths.SessionsDir)
 	assert.Equal(t, filepath.Join(dataDir, "contexts"), cfg.Paths.ContextsDir)
+}
+
+func TestLoad_EdgeCases_ToolsDirFromConfig(t *testing.T) {
+	cfg := loadFromYAML(t, `
+paths:
+  data_dir: "/custom/data"
+  tools_dir: "/custom/tools"
+`)
+
+	assert.Equal(t, resolvedTestPath(t, "/custom/tools"), cfg.Paths.ToolsDir)
+}
+
+func TestLoad_EdgeCases_ToolsDirFromEnv(t *testing.T) {
+	cfg := loadWithEnv(t, "# empty", map[string]string{
+		"DAGU_TOOLS_DIR": "/tmp/custom-tools",
+	})
+
+	assert.Equal(t, resolvedTestPath(t, "/tmp/custom-tools"), cfg.Paths.ToolsDir)
 }
 
 func TestLoad_EdgeCases_ContextsDirFromEnv(t *testing.T) {
@@ -878,6 +921,32 @@ func TestLoad_ArtifactDirFromEnv(t *testing.T) {
 	})
 
 	assert.Equal(t, resolvedTestPath(t, "/env/artifacts"), cfg.Paths.ArtifactDir)
+}
+
+func TestLoad_DAGStateDirFromConfig(t *testing.T) {
+	cfg := loadFromYAML(t, `
+paths:
+  dag_state_dir: "/custom/dag-state"
+`)
+
+	assert.Equal(t, resolvedTestPath(t, "/custom/dag-state"), cfg.Paths.DAGStateDir)
+}
+
+func TestLoad_DAGStateDirFromEnv(t *testing.T) {
+	cfg := loadWithEnv(t, "# empty", map[string]string{
+		"DAGU_DAG_STATE_DIR": "/env/dag-state",
+	})
+
+	assert.Equal(t, resolvedTestPath(t, "/env/dag-state"), cfg.Paths.DAGStateDir)
+}
+
+func TestLoad_DAGStateDirDefaultDerivedFromDataDir(t *testing.T) {
+	cfg := loadFromYAML(t, `
+paths:
+  data_dir: "/custom/data"
+`)
+
+	assert.Equal(t, resolvedTestPath(t, "/custom/data/dag-state"), cfg.Paths.DAGStateDir)
 }
 
 func TestLoad_EdgeCases_Errors(t *testing.T) {
@@ -1043,6 +1112,7 @@ func TestLoad_LegacyEnv(t *testing.T) {
 		"DAGU__ADMIN_HOST":         "0.0.0.0",
 		"DAGU__ADMIN_NAVBAR_TITLE": "LegacyTitle",
 		"DAGU__ADMIN_NAVBAR_COLOR": "#abc123",
+		"DAGU_PUBLIC_URL":          "https://dagu.example.com/ui/",
 		"DAGU__DATA":               filepath.Join(tempDir, "legacy", "data"),
 		"DAGU__SUSPEND_FLAGS_DIR":  filepath.Join(tempDir, "legacy", "suspend"),
 		"DAGU__ADMIN_LOGS_DIR":     filepath.Join(tempDir, "legacy", "adminlogs"),
@@ -1050,6 +1120,7 @@ func TestLoad_LegacyEnv(t *testing.T) {
 
 	assert.Equal(t, 1234, cfg.Server.Port)
 	assert.Equal(t, "0.0.0.0", cfg.Server.Host)
+	assert.Equal(t, "https://dagu.example.com/ui", cfg.Server.PublicURL)
 	assert.Equal(t, "LegacyTitle", cfg.UI.NavbarTitle)
 	assert.Equal(t, "#abc123", cfg.UI.NavbarColor)
 	assert.Equal(t, filepath.Join(tempDir, "legacy", "data"), cfg.Paths.DataDir)
@@ -1281,6 +1352,36 @@ bots:
 
 		assert.Equal(t, []string{"dag.run.running", "dag.run.queued"}, cfg.Bots.Discord.InterestedEventTypes)
 	})
+
+	t.Run("line env overrides config", func(t *testing.T) {
+		cfg := loadWithEnv(t, `
+bots:
+  line:
+    interested_event_types:
+      - dag.run.failed
+      - dag.run.succeeded
+`, map[string]string{
+			"DAGU_BOTS_LINE_INTERESTED_EVENT_TYPES": "dag.run.running,dag.run.queued",
+		})
+
+		assert.Equal(t, []string{"dag.run.running", "dag.run.queued"}, cfg.Bots.Line.InterestedEventTypes)
+	})
+
+	t.Run("line env overrides config for source ids and respond mode", func(t *testing.T) {
+		cfg := loadWithEnv(t, `
+bots:
+  line:
+    allowed_source_ids:
+      - Ufrom-yaml
+    respond_to_all: true
+`, map[string]string{
+			"DAGU_BOTS_LINE_ALLOWED_SOURCE_IDS": "Ufrom-env,Cfrom-env",
+			"DAGU_BOTS_LINE_RESPOND_TO_ALL":     "false",
+		})
+
+		assert.Equal(t, []string{"Ufrom-env", "Cfrom-env"}, cfg.Bots.Line.AllowedSourceIDs)
+		assert.False(t, cfg.Bots.Line.RespondToAll)
+	})
 }
 
 func TestLoad_DiscordBotEnvOnlyConfig(t *testing.T) {
@@ -1296,6 +1397,23 @@ func TestLoad_DiscordBotEnvOnlyConfig(t *testing.T) {
 	assert.Equal(t, []string{"chan-1", "chan-2"}, cfg.Bots.Discord.AllowedChannelIDs)
 	assert.False(t, cfg.Bots.Discord.RespondToAll)
 	assert.Equal(t, DefaultBotInterestedEventTypes, cfg.Bots.Discord.InterestedEventTypes)
+}
+
+func TestLoad_LineBotEnvOnlyConfig(t *testing.T) {
+	cfg := loadWithEnv(t, "# empty", map[string]string{
+		"DAGU_BOTS_PROVIDER":                  "line",
+		"DAGU_BOTS_LINE_CHANNEL_ACCESS_TOKEN": "line-channel-token",
+		"DAGU_BOTS_LINE_CHANNEL_SECRET":       "line-channel-secret",
+		"DAGU_BOTS_LINE_ALLOWED_SOURCE_IDS":   "U123,C456",
+		"DAGU_BOTS_LINE_RESPOND_TO_ALL":       "false",
+	})
+
+	assert.Equal(t, BotProviderLine, cfg.Bots.Provider)
+	assert.Equal(t, "line-channel-token", cfg.Bots.Line.ChannelAccessToken)
+	assert.Equal(t, "line-channel-secret", cfg.Bots.Line.ChannelSecret)
+	assert.Equal(t, []string{"U123", "C456"}, cfg.Bots.Line.AllowedSourceIDs)
+	assert.False(t, cfg.Bots.Line.RespondToAll)
+	assert.Equal(t, DefaultBotInterestedEventTypes, cfg.Bots.Line.InterestedEventTypes)
 }
 
 func TestLoad_Monitoring(t *testing.T) {
@@ -1728,6 +1846,47 @@ cache: invalid
 			"DAGU_CACHE": "low",
 		})
 		assert.Equal(t, CacheModeLow, cfg.Cache)
+	})
+}
+
+func TestLoad_WebhooksConfig(t *testing.T) {
+	t.Run("DefaultMaxPayloadSize", func(t *testing.T) {
+		cfg := loadFromYAML(t, ``)
+		assert.Equal(t, DefaultWebhookMaxPayloadSize, cfg.Webhooks.MaxPayloadSize)
+	})
+
+	t.Run("MaxPayloadSizeFromYAML", func(t *testing.T) {
+		cfg := loadFromYAML(t, `
+webhooks:
+  max_payload_size: 2097152
+`)
+		assert.Equal(t, 2097152, cfg.Webhooks.MaxPayloadSize)
+	})
+
+	t.Run("MaxPayloadSizeFromEnv", func(t *testing.T) {
+		cfg := loadWithEnv(t, ``, map[string]string{
+			"DAGU_WEBHOOKS_MAX_PAYLOAD_SIZE": "3145728",
+		})
+		assert.Equal(t, 3145728, cfg.Webhooks.MaxPayloadSize)
+	})
+
+	t.Run("EnvOverridesYAML", func(t *testing.T) {
+		cfg := loadWithEnv(t, `
+webhooks:
+  max_payload_size: 2097152
+`, map[string]string{
+			"DAGU_WEBHOOKS_MAX_PAYLOAD_SIZE": "3145728",
+		})
+		assert.Equal(t, 3145728, cfg.Webhooks.MaxPayloadSize)
+	})
+
+	t.Run("RejectsNonPositiveMaxPayloadSize", func(t *testing.T) {
+		err := loadWithErrorFromYAML(t, `
+webhooks:
+  max_payload_size: 0
+`)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "webhooks.max_payload_size must be > 0")
 	})
 }
 

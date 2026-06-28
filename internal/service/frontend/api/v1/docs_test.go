@@ -6,10 +6,13 @@ package api_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	apigen "github.com/dagucloud/dagu/api/v1"
 	"github.com/dagucloud/dagu/internal/agent"
@@ -17,6 +20,7 @@ import (
 	"github.com/dagucloud/dagu/internal/core/exec"
 	"github.com/dagucloud/dagu/internal/runtime"
 	apiv1 "github.com/dagucloud/dagu/internal/service/frontend/api/v1"
+	workspacepkg "github.com/dagucloud/dagu/internal/workspace"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,6 +36,48 @@ type mockDocStore struct {
 	docs         map[string]*agent.Doc
 	failAll      bool // when true, all operations return errForced
 	lastListOpts agent.ListDocsOptions
+}
+
+type mockWorkspaceStore struct {
+	workspaces []*workspacepkg.Workspace
+	err        error
+}
+
+func (m *mockWorkspaceStore) Create(context.Context, *workspacepkg.Workspace) error {
+	return nil
+}
+
+func (m *mockWorkspaceStore) GetByID(_ context.Context, id string) (*workspacepkg.Workspace, error) {
+	for _, ws := range m.workspaces {
+		if ws.ID == id {
+			return ws, nil
+		}
+	}
+	return nil, workspacepkg.ErrWorkspaceNotFound
+}
+
+func (m *mockWorkspaceStore) GetByName(_ context.Context, name string) (*workspacepkg.Workspace, error) {
+	for _, ws := range m.workspaces {
+		if ws.Name == name {
+			return ws, nil
+		}
+	}
+	return nil, workspacepkg.ErrWorkspaceNotFound
+}
+
+func (m *mockWorkspaceStore) List(context.Context) ([]*workspacepkg.Workspace, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.workspaces, nil
+}
+
+func (m *mockWorkspaceStore) Update(context.Context, *workspacepkg.Workspace) error {
+	return nil
+}
+
+func (m *mockWorkspaceStore) Delete(context.Context, string) error {
+	return nil
 }
 
 func (m *mockDocStore) Get(_ context.Context, id string) (*agent.Doc, error) {
@@ -206,9 +252,10 @@ func (m *mockDocStore) Search(_ context.Context, query string) ([]*agent.DocSear
 				}
 			}
 			results = append(results, &agent.DocSearchResult{
-				ID:      doc.ID,
-				Title:   doc.Title,
-				Matches: matches,
+				ID:          doc.ID,
+				Title:       doc.Title,
+				Description: doc.Description,
+				Matches:     matches,
 			})
 		}
 	}
@@ -325,6 +372,11 @@ func (m *mockDocStore) SearchMatches(_ context.Context, id string, opts agent.Se
 	return cursorResult, nil
 }
 
+func mockDocPathRootExcluded(id string, excludedRoots []string) bool {
+	root, _, _ := strings.Cut(id, "/")
+	return slices.Contains(excludedRoots, root)
+}
+
 func (m *mockDocStore) List(_ context.Context, opts agent.ListDocsOptions) (*exec.PaginatedResult[*agent.DocTreeNode], error) {
 	m.lastListOpts = opts
 	if m.failAll {
@@ -332,6 +384,9 @@ func (m *mockDocStore) List(_ context.Context, opts agent.ListDocsOptions) (*exe
 	}
 	nodes := make([]*agent.DocTreeNode, 0, len(m.docs))
 	for _, doc := range m.docs {
+		if mockDocPathRootExcluded(doc.ID, opts.ExcludePathRoots) {
+			continue
+		}
 		nodes = append(nodes, &agent.DocTreeNode{
 			ID:    doc.ID,
 			Name:  path.Base(doc.ID),
@@ -355,9 +410,14 @@ func (m *mockDocStore) ListFlat(_ context.Context, opts agent.ListDocsOptions) (
 	}
 	items := make([]agent.DocMetadata, 0, len(m.docs))
 	for _, doc := range m.docs {
+		if mockDocPathRootExcluded(doc.ID, opts.ExcludePathRoots) {
+			continue
+		}
 		items = append(items, agent.DocMetadata{
-			ID:    doc.ID,
-			Title: doc.Title,
+			ID:          doc.ID,
+			Title:       doc.Title,
+			Description: doc.Description,
+			ModTime:     time.Unix(1700000000, 0),
 		})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
@@ -378,16 +438,46 @@ type docTestSetup struct {
 func newDocTestSetup(t *testing.T) *docTestSetup {
 	t.Helper()
 	store := &mockDocStore{docs: make(map[string]*agent.Doc)}
+	return newDocTestSetupWithStore(t, store, nil)
+}
+
+func newDocTestSetupWithWorkspaces(t *testing.T, names ...string) *docTestSetup {
+	t.Helper()
+	store := &mockDocStore{docs: make(map[string]*agent.Doc)}
+	workspaces := make([]*workspacepkg.Workspace, 0, len(names))
+	for _, name := range names {
+		workspaces = append(workspaces, &workspacepkg.Workspace{ID: name, Name: name})
+	}
+	return newDocTestSetupWithStore(t, store, &mockWorkspaceStore{workspaces: workspaces})
+}
+
+func newDocTestSetupWithStore(t *testing.T, store *mockDocStore, workspaceStore workspacepkg.Store) *docTestSetup {
+	t.Helper()
+	return newDocTestSetupWithStoreOptions(t, store, workspaceStore)
+}
+
+func newDocTestSetupWithStoreOptions(
+	t *testing.T,
+	store *mockDocStore,
+	workspaceStore workspacepkg.Store,
+	extraOptions ...apiv1.APIOption,
+) *docTestSetup {
+	t.Helper()
 	cfg := &config.Config{}
 	cfg.Server.Permissions = map[config.Permission]bool{
 		config.PermissionWriteDAGs: true,
 	}
+	options := []apiv1.APIOption{apiv1.WithDocStore(store)}
+	if workspaceStore != nil {
+		options = append(options, apiv1.WithWorkspaceStore(workspaceStore))
+	}
+	options = append(options, extraOptions...)
 	a := apiv1.New(
 		nil, nil, nil, nil, runtime.Manager{},
 		cfg, nil, nil,
 		prometheus.NewRegistry(),
 		nil,
-		apiv1.WithDocStore(store),
+		options...,
 	)
 	return &docTestSetup{api: a, store: store}
 }
@@ -399,7 +489,7 @@ func TestListDocs(t *testing.T) {
 		t.Parallel()
 
 		setup := newDocTestSetup(t)
-		setup.store.docs["alpha"] = &agent.Doc{ID: "alpha", Title: "alpha", Content: "content-a"}
+		setup.store.docs["alpha"] = &agent.Doc{ID: "alpha", Title: "alpha", Description: "Alpha runbook", Content: "content-a"}
 		setup.store.docs["beta"] = &agent.Doc{ID: "beta", Title: "beta", Content: "content-b"}
 
 		resp, err := setup.api.ListDocs(adminCtx(), apigen.ListDocsRequestObject{
@@ -415,6 +505,7 @@ func TestListDocs(t *testing.T) {
 		require.True(t, ok)
 		require.NotNil(t, listResp.Items)
 		assert.Len(t, *listResp.Items, 2)
+		assert.Equal(t, "Alpha runbook", (*listResp.Items)[0].Description)
 	})
 
 	t.Run("tree mode returns nodes", func(t *testing.T) {
@@ -436,6 +527,63 @@ func TestListDocs(t *testing.T) {
 		require.True(t, ok)
 		require.NotNil(t, listResp.Tree)
 		assert.Len(t, *listResp.Tree, 2)
+	})
+
+	t.Run("no workspace scope filters known workspace roots before pagination", func(t *testing.T) {
+		t.Parallel()
+
+		setup := newDocTestSetupWithWorkspaces(t, "aaa")
+		setup.store.docs["aaa/hidden"] = &agent.Doc{ID: "aaa/hidden", Title: "hidden", Content: "private"}
+		setup.store.docs["bbb"] = &agent.Doc{ID: "bbb", Title: "bbb", Content: "public"}
+		flat := true
+		page := 1
+		perPage := 1
+		workspace := apigen.Workspace("default")
+
+		resp, err := setup.api.ListDocs(adminCtx(), apigen.ListDocsRequestObject{
+			Params: apigen.ListDocsParams{
+				Workspace: &workspace,
+				Flat:      &flat,
+				Page:      &page,
+				PerPage:   &perPage,
+			},
+		})
+		require.NoError(t, err)
+
+		listResp, ok := resp.(apigen.ListDocs200JSONResponse)
+		require.True(t, ok)
+		require.NotNil(t, listResp.Items)
+		require.NotNil(t, listResp.Pagination)
+		require.Len(t, *listResp.Items, 1)
+		assert.Equal(t, "bbb", (*listResp.Items)[0].Id)
+		assert.Equal(t, 1, listResp.Pagination.TotalRecords)
+		assert.Equal(t, 1, listResp.Pagination.TotalPages)
+	})
+
+	t.Run("no workspace scope fails closed when workspace names cannot be loaded", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockDocStore{docs: make(map[string]*agent.Doc)}
+		setup := newDocTestSetupWithStore(t, store, &mockWorkspaceStore{err: errForced})
+		workspace := apigen.Workspace("default")
+
+		_, err := setup.api.ListDocs(adminCtx(), apigen.ListDocsRequestObject{
+			Params: apigen.ListDocsParams{Workspace: &workspace},
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("all scope fails closed when workspace names cannot be loaded", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockDocStore{docs: make(map[string]*agent.Doc)}
+		setup := newDocTestSetupWithStore(t, store, &mockWorkspaceStore{err: errForced})
+		workspace := apigen.Workspace("all")
+
+		_, err := setup.api.ListDocs(adminCtx(), apigen.ListDocsRequestObject{
+			Params: apigen.ListDocsParams{Workspace: &workspace},
+		})
+		require.Error(t, err)
 	})
 
 	t.Run("no doc store returns error", func(t *testing.T) {
@@ -515,6 +663,40 @@ func TestListDocsSortParamsForwarded(t *testing.T) {
 	})
 }
 
+func TestDocMutationsNotify(t *testing.T) {
+	store := &mockDocStore{docs: make(map[string]*agent.Doc)}
+	var notifications int
+	setup := newDocTestSetupWithStoreOptions(t, store, nil, apiv1.WithDocMutationNotifier(func() {
+		notifications++
+	}))
+
+	_, err := setup.api.CreateDoc(adminCtx(), apigen.CreateDocRequestObject{
+		Body: &apigen.CreateDocJSONRequestBody{Id: "doc1", Content: "created"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, notifications)
+
+	_, err = setup.api.UpdateDoc(adminCtx(), apigen.UpdateDocRequestObject{
+		Params: apigen.UpdateDocParams{Path: "doc1"},
+		Body:   &apigen.UpdateDocJSONRequestBody{Content: "updated"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, notifications)
+
+	_, err = setup.api.RenameDoc(adminCtx(), apigen.RenameDocRequestObject{
+		Params: apigen.RenameDocParams{Path: "doc1"},
+		Body:   &apigen.RenameDocJSONRequestBody{NewPath: "doc2"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 3, notifications)
+
+	_, err = setup.api.DeleteDoc(adminCtx(), apigen.DeleteDocRequestObject{
+		Params: apigen.DeleteDocParams{Path: "doc2"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 4, notifications)
+}
+
 func TestCreateDoc(t *testing.T) {
 	t.Parallel()
 
@@ -568,6 +750,24 @@ func TestCreateDoc(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("omitted workspace rejects known workspace-prefixed path", func(t *testing.T) {
+		t.Parallel()
+
+		setup := newDocTestSetupWithWorkspaces(t, "ops")
+
+		_, err := setup.api.CreateDoc(adminCtx(), apigen.CreateDocRequestObject{
+			Body: &apigen.CreateDocJSONRequestBody{
+				Id:      "ops/runbook",
+				Content: "private",
+			},
+		})
+		require.Error(t, err)
+		var apiErr *apiv1.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusBadRequest, apiErr.HTTPStatus)
+		assert.NotContains(t, setup.store.docs, "ops/runbook")
+	})
+
 	t.Run("nil body", func(t *testing.T) {
 		t.Parallel()
 
@@ -602,7 +802,7 @@ func TestGetDoc(t *testing.T) {
 		t.Parallel()
 
 		setup := newDocTestSetup(t)
-		setup.store.docs["my-doc"] = &agent.Doc{ID: "my-doc", Title: "my-doc", Content: "hello"}
+		setup.store.docs["my-doc"] = &agent.Doc{ID: "my-doc", Title: "my-doc", Description: "My doc description", Content: "hello"}
 
 		resp, err := setup.api.GetDoc(adminCtx(), apigen.GetDocRequestObject{
 			Params: apigen.GetDocParams{Path: "my-doc"},
@@ -614,6 +814,7 @@ func TestGetDoc(t *testing.T) {
 		assert.Equal(t, "my-doc", getResp.Id)
 		assert.Equal(t, "hello", getResp.Content)
 		assert.Equal(t, "my-doc", getResp.Title)
+		assert.Equal(t, "My doc description", getResp.Description)
 	})
 
 	t.Run("not found", func(t *testing.T) {
@@ -658,7 +859,7 @@ func TestSearchDocs(t *testing.T) {
 		t.Parallel()
 
 		setup := newDocTestSetup(t)
-		setup.store.docs["doc1"] = &agent.Doc{ID: "doc1", Title: "doc1", Content: "hello world"}
+		setup.store.docs["doc1"] = &agent.Doc{ID: "doc1", Title: "doc1", Description: "World runbook", Content: "hello world"}
 		setup.store.docs["doc2"] = &agent.Doc{ID: "doc2", Title: "doc2", Content: "goodbye world"}
 		setup.store.docs["doc3"] = &agent.Doc{ID: "doc3", Title: "doc3", Content: "nothing here"}
 
@@ -670,6 +871,7 @@ func TestSearchDocs(t *testing.T) {
 		searchResp, ok := resp.(apigen.SearchDocs200JSONResponse)
 		require.True(t, ok)
 		assert.Len(t, searchResp.Results, 2)
+		assert.Equal(t, "World runbook", searchResp.Results[0].Description)
 	})
 
 	t.Run("empty query", func(t *testing.T) {
@@ -1087,8 +1289,16 @@ func (m *mockDocStoreWithTree) List(_ context.Context, opts agent.ListDocsOption
 			},
 		},
 	}
+	filtered := nodes[:0]
+	for _, node := range nodes {
+		if !mockDocPathRootExcluded(node.ID, opts.ExcludePathRoots) {
+			filtered = append(filtered, node)
+		}
+	}
 	pg := exec.NewPaginator(opts.Page, opts.PerPage)
-	result := exec.NewPaginatedResult(nodes, len(nodes), pg)
+	start := min(pg.Offset(), len(filtered))
+	end := min(start+pg.Limit(), len(filtered))
+	result := exec.NewPaginatedResult(filtered[start:end], len(filtered), pg)
 	return &result, nil
 }
 

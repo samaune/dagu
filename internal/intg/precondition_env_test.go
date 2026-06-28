@@ -5,12 +5,40 @@ package intg_test
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/dagucloud/dagu/internal/test"
 )
+
+func posixHomeRelativeTempPath(t *testing.T, pattern string) (string, string) {
+	t.Helper()
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("resolve home dir: %v", err)
+	}
+
+	tempFile, err := os.CreateTemp(homeDir, pattern)
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		t.Fatalf("close temp file: %v", err)
+	}
+	if err := os.Remove(tempFile.Name()); err != nil {
+		t.Fatalf("remove temp file: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_ = os.Remove(tempFile.Name())
+	})
+
+	return tempFile.Name(), "~/" + filepath.Base(tempFile.Name())
+}
 
 func powerShellEnvOrLiteral(value string) string {
 	if strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}") && len(value) > 3 {
@@ -51,7 +79,7 @@ env:
   - DEV_ALERT: "80"
 steps:
   - name: check-threshold
-    command: echo "alert triggered"
+    run: echo "alert triggered"
     output: RESULT
     preconditions:
       - condition: %q
@@ -73,7 +101,7 @@ env:
   - DEV_ALERT: "80"
 steps:
   - name: check-threshold
-    command: echo "alert triggered"
+    run: echo "alert triggered"
     output: RESULT
     preconditions:
       - condition: %q
@@ -95,7 +123,7 @@ preconditions:
   - condition: %q
 steps:
   - name: run
-    command: echo "executed"
+    run: echo "executed"
     output: RESULT
 `, stringPreconditionCommand("${ENABLED}", "yes")))
 	agent := dag.Agent()
@@ -112,10 +140,10 @@ func TestPreconditionWithStepOutput(t *testing.T) {
 type: graph
 steps:
   - name: produce
-    command: echo "go"
+    run: echo "go"
     output: STEP_RESULT
   - name: consume
-    command: echo "ran"
+    run: echo "ran"
     output: FINAL
     preconditions:
       - condition: %q
@@ -127,4 +155,40 @@ steps:
 		"STEP_RESULT": "go",
 		"FINAL":       "ran",
 	})
+}
+
+func TestPreconditionWithHomeRelativeDAGEnvVar(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping Unix shell test on Windows")
+	}
+
+	t.Parallel()
+	th := test.Setup(t)
+	absolutePath, homeRelativePath := posixHomeRelativeTempPath(t, ".dagu-precondition-*")
+
+	dag := th.DAG(t, fmt.Sprintf(`
+type: graph
+env:
+  - TEST_FILE: %q
+steps:
+  - name: create
+    run: touch $TEST_FILE
+  - name: check
+    run: echo "ran"
+    output: RESULT
+    depends: create
+    preconditions:
+      - condition: test -f $TEST_FILE
+`, homeRelativePath))
+	agent := dag.Agent()
+	agent.RunSuccess(t)
+
+	dag.AssertOutputs(t, map[string]any{
+		"RESULT": "ran",
+	})
+
+	_, err := os.Stat(absolutePath)
+	if err != nil {
+		t.Fatalf("expected file to exist: %v", err)
+	}
 }

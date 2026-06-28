@@ -26,7 +26,7 @@ func History() *cobra.Command {
 			Long: `Display execution history of DAG runs with filtering and formatting options.
 
 This command retrieves and displays historical DAG run information from local storage,
-allowing you to query by various criteria including time range, status, tags, and run ID.
+allowing you to query by various criteria including time range, status, labels, and run ID.
 
 Date/Time Filtering:
   --from, --to      Absolute date range in UTC (formats: 2006-01-02 or 2006-01-02T15:04:05Z)
@@ -34,10 +34,12 @@ Date/Time Filtering:
                     Note: --last cannot be combined with --from or --to
 
 Status Filtering:
-  --status          Filter by execution status (running, succeeded, failed, aborted, skipped, waiting, none)
+  --status          Filter by execution status. Accepts a single status or comma-separated statuses
+                    (running, succeeded, failed, aborted, queued, waiting, rejected, not_started, partially_succeeded)
 
 Other Filters:
-  --tags            Filter by DAG tags (comma-separated, AND logic)
+  --labels          Filter by DAG labels (comma-separated, AND logic)
+  --tags            Deprecated alias for --labels
   --run-id          Filter by run ID (partial match supported)
 
 Output Control:
@@ -54,8 +56,9 @@ Examples:
   dagu history --from 2026-01-01              # Runs since date
   dagu history --last 7d                      # Last 7 days
   dagu history --status failed                # Only failed runs
+  dagu history --status running,queued        # Running or queued runs
   dagu history --format json                  # JSON output
-  dagu history --tags "prod,critical"         # Filter by tags (AND logic)
+  dagu history --labels "prod,critical"       # Filter by labels (AND logic)
   dagu history --limit 50                     # Limit to 50 results
   dagu history my-dag --status failed --last 24h  # Combined filters
 `,
@@ -72,6 +75,7 @@ var historyFlags = []commandLineFlag{
 	historyLastFlag,
 	historyStatusFlag,
 	historyRunIDFlag,
+	historyLabelsFlag,
 	historyTagsFlag,
 	historyFormatFlag,
 	historyLimitFlag,
@@ -105,12 +109,24 @@ func runHistory(ctx *Context, args []string) error {
 
 	// Handle empty results
 	if len(statuses) == 0 {
-		fmt.Println("No DAG runs found matching the specified filters.")
-		return nil
+		return renderEmptyHistory(format)
 	}
 
 	// Render output based on format
 	return renderHistory(format, statuses)
+}
+
+const noHistoryRunsMessage = "No DAG runs found matching the specified filters."
+
+func renderEmptyHistory(format string) error {
+	_, _ = fmt.Fprintln(os.Stderr, noHistoryRunsMessage)
+
+	switch format {
+	case "json", "csv":
+		return renderHistory(format, nil)
+	default:
+		return nil
+	}
 }
 
 // validateFormat checks if the output format is valid.
@@ -174,11 +190,11 @@ func buildHistoryOptions(ctx *Context, args []string) ([]exec.ListDAGRunStatuses
 		opts = append(opts, runIDOpt)
 	}
 
-	// Tags filter
-	if tagsOpt, err := buildTagsOption(ctx); err != nil {
+	// Labels filter
+	if labelsOpt, err := buildLabelsOption(ctx); err != nil {
 		return nil, err
-	} else if tagsOpt != nil {
-		opts = append(opts, tagsOpt)
+	} else if labelsOpt != nil {
+		opts = append(opts, labelsOpt)
 	}
 
 	// Limit filter
@@ -258,12 +274,12 @@ func buildStatusOption(ctx *Context) (exec.ListDAGRunStatusesOption, error) {
 		return nil, nil
 	}
 
-	status, err := parseStatus(statusStr)
+	statuses, err := parseStatuses(statusStr)
 	if err != nil {
 		return nil, err
 	}
 
-	return exec.WithStatuses([]core.Status{status}), nil
+	return exec.WithStatuses(statuses), nil
 }
 
 // buildRunIDOption constructs run ID filtering option.
@@ -280,19 +296,19 @@ func buildRunIDOption(ctx *Context) (exec.ListDAGRunStatusesOption, error) {
 	return exec.WithDAGRunID(runID), nil
 }
 
-// buildTagsOption constructs tags filtering option.
-func buildTagsOption(ctx *Context) (exec.ListDAGRunStatusesOption, error) {
-	tagsStr, err := ctx.StringParam("tags")
+// buildLabelsOption constructs labels filtering option.
+func buildLabelsOption(ctx *Context) (exec.ListDAGRunStatusesOption, error) {
+	labelsStr, err := labelsParam(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get 'tags' parameter: %w", err)
+		return nil, err
 	}
 
-	if tagsStr == "" {
+	if labelsStr == "" {
 		return nil, nil
 	}
 
-	if tags := parseTags(tagsStr); len(tags) > 0 {
-		return exec.WithTags(tags), nil
+	if labels := parseLabels(labelsStr); len(labels) > 0 {
+		return exec.WithLabels(labels), nil
 	}
 
 	return nil, nil
@@ -412,23 +428,44 @@ func parseStatus(s string) (core.Status, error) {
 	return core.NotStarted, fmt.Errorf("invalid status '%s'. Valid values: running, succeeded, failed, aborted, queued, waiting, rejected, not_started, partially_succeeded", s)
 }
 
-// parseTags splits comma-separated tags and trims whitespace.
-func parseTags(s string) []string {
+// parseStatuses converts a comma-separated status string to core.Status values.
+func parseStatuses(s string) ([]core.Status, error) {
+	parts := strings.Split(s, ",")
+	statuses := make([]core.Status, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		status, err := parseStatus(trimmed)
+		if err != nil {
+			return nil, err
+		}
+		statuses = append(statuses, status)
+	}
+	if len(statuses) == 0 {
+		return nil, fmt.Errorf("invalid status '%s'. Valid values: running, succeeded, failed, aborted, queued, waiting, rejected, not_started, partially_succeeded", s)
+	}
+	return statuses, nil
+}
+
+// parseLabels splits comma-separated labels and trims whitespace.
+func parseLabels(s string) []string {
 	if s == "" {
 		return nil
 	}
 	parts := strings.Split(s, ",")
-	tags := make([]string, 0, len(parts))
+	labels := make([]string, 0, len(parts))
 	for _, part := range parts {
 		trimmed := strings.TrimSpace(part)
 		if trimmed != "" {
-			tags = append(tags, trimmed)
+			labels = append(labels, trimmed)
 		}
 	}
-	if len(tags) == 0 {
+	if len(labels) == 0 {
 		return nil
 	}
-	return tags
+	return labels
 }
 
 // renderHistoryTable displays DAG run history as an aligned table.
@@ -528,7 +565,7 @@ func renderHistoryJSON(statuses []*exec.DAGRunStatus) error {
 		FinishedAt string   `json:"finishedAt,omitempty"`
 		Duration   string   `json:"duration,omitempty"`
 		Params     string   `json:"params,omitempty"`
-		Tags       []string `json:"tags,omitempty"`
+		Labels     []string `json:"labels,omitempty"`
 		WorkerID   string   `json:"workerId,omitempty"`
 		Error      string   `json:"error,omitempty"`
 	}
@@ -543,7 +580,7 @@ func renderHistoryJSON(statuses []*exec.DAGRunStatus) error {
 			FinishedAt: status.FinishedAt,
 			Duration:   formatDuration(status),
 			Params:     status.Params,
-			Tags:       status.Tags,
+			Labels:     status.Labels,
 			WorkerID:   status.WorkerID,
 			Error:      status.Error,
 		}

@@ -11,9 +11,24 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/dagucloud/dagu/internal/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestValidateTemplateRequiresScriptMessage(t *testing.T) {
+	err := validateTemplate(core.Step{})
+	require.Error(t, err)
+	assert.Equal(t, "field 'script': script field is required", err.Error())
+	assert.NotContains(t, err.Error(), "executor")
+}
+
+func TestNewTemplateRequiresScriptMessage(t *testing.T) {
+	_, err := newTemplate(context.Background(), core.Step{})
+	require.Error(t, err)
+	assert.Equal(t, "field 'script': script field is required", err.Error())
+	assert.NotContains(t, err.Error(), "executor")
+}
 
 func TestTemplateExec_BasicStdout(t *testing.T) {
 	t.Parallel()
@@ -603,8 +618,10 @@ func TestFuncMap_JoinGenericSlices(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			fn := funcMap["join"].(func(string, any) string)
-			result := fn(tt.sep, tt.input)
+			fn, ok := funcMap["join"].(func(string, any) (string, error))
+			require.Truef(t, ok, "join has unexpected signature: %T", funcMap["join"])
+			result, err := fn(tt.sep, tt.input)
+			require.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

@@ -322,10 +322,11 @@ func (b0 PollResponse_builder) Build() *PollResponse {
 
 // Request message for dispatching a task.
 type DispatchRequest struct {
-	state         protoimpl.MessageState `protogen:"hybrid.v1"`
-	Task          *Task                  `protobuf:"bytes,1,opt,name=task,proto3" json:"task,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                     protoimpl.MessageState `protogen:"hybrid.v1"`
+	Task                      *Task                  `protobuf:"bytes,1,opt,name=task,proto3" json:"task,omitempty"`
+	AdmissionReservationToken string                 `protobuf:"bytes,2,opt,name=admission_reservation_token,json=admissionReservationToken,proto3" json:"admission_reservation_token,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *DispatchRequest) Reset() {
@@ -360,8 +361,19 @@ func (x *DispatchRequest) GetTask() *Task {
 	return nil
 }
 
+func (x *DispatchRequest) GetAdmissionReservationToken() string {
+	if x != nil {
+		return x.AdmissionReservationToken
+	}
+	return ""
+}
+
 func (x *DispatchRequest) SetTask(v *Task) {
 	x.Task = v
+}
+
+func (x *DispatchRequest) SetAdmissionReservationToken(v string) {
+	x.AdmissionReservationToken = v
 }
 
 func (x *DispatchRequest) HasTask() bool {
@@ -378,7 +390,8 @@ func (x *DispatchRequest) ClearTask() {
 type DispatchRequest_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	Task *Task
+	Task                      *Task
+	AdmissionReservationToken string
 }
 
 func (b0 DispatchRequest_builder) Build() *DispatchRequest {
@@ -386,6 +399,7 @@ func (b0 DispatchRequest_builder) Build() *DispatchRequest {
 	b, x := &b0, m0
 	_, _ = b, x
 	x.Task = b.Task
+	x.AdmissionReservationToken = b.AdmissionReservationToken
 	return m0
 }
 
@@ -448,15 +462,15 @@ type Task struct {
 	WorkerSelector   map[string]string      `protobuf:"bytes,10,rep,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Required worker labels for execution
 	Definition       string                 `protobuf:"bytes,11,opt,name=definition,proto3" json:"definition,omitempty"`                                                                                                         // Optional: DAG definition (YAML) for local DAGs
 	WorkerId         string                 `protobuf:"bytes,12,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`                                                                                             // ID of the worker that will execute this task
-	// Previous status for OPERATION_RETRY in shared-nothing mode.
+	// Previous status for OPERATION_RETRY.
 	// When set, workers can retry without needing local DAGRunStore access.
 	PreviousStatus *DAGRunStatusProto `protobuf:"bytes,13,opt,name=previous_status,json=previousStatus,proto3" json:"previous_status,omitempty"`
 	// Attempt ID created by coordinator. Workers use this to create attempts with the same ID.
 	AttemptId string `protobuf:"bytes,14,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
 	// Globally unique attempt identifier for cancellation tracking.
 	AttemptKey string `protobuf:"bytes,15,opt,name=attempt_key,json=attemptKey,proto3" json:"attempt_key,omitempty"`
-	// Additional tags (comma-separated key=value or key-only) to apply to the DAG run.
-	Tags string `protobuf:"bytes,16,opt,name=tags,proto3" json:"tags,omitempty"`
+	// Additional labels (comma-separated key=value or key-only) to apply to the DAG run.
+	Labels string `protobuf:"bytes,16,opt,name=labels,proto3" json:"labels,omitempty"`
 	// Base config YAML content for workers (avoids relying on local base config files).
 	BaseConfig string `protobuf:"bytes,17,opt,name=base_config,json=baseConfig,proto3" json:"base_config,omitempty"`
 	// RFC 3339 timestamp of when this task was originally scheduled.
@@ -475,6 +489,14 @@ type Task struct {
 	SourceFile string `protobuf:"bytes,25,opt,name=source_file,json=sourceFile,proto3" json:"source_file,omitempty"`
 	// Opaque execution-scoped agent settings snapshot for distributed workers.
 	AgentSnapshot []byte `protobuf:"bytes,26,opt,name=agent_snapshot,json=agentSnapshot,proto3" json:"agent_snapshot,omitempty"`
+	// Content-addressed workspace bundle for action sub-DAGs.
+	WorkspaceBundleDigest      string `protobuf:"bytes,27,opt,name=workspace_bundle_digest,json=workspaceBundleDigest,proto3" json:"workspace_bundle_digest,omitempty"`
+	WorkspaceBundleSize        int64  `protobuf:"varint,28,opt,name=workspace_bundle_size,json=workspaceBundleSize,proto3" json:"workspace_bundle_size,omitempty"`
+	WorkspaceBundleDagPath     string `protobuf:"bytes,29,opt,name=workspace_bundle_dag_path,json=workspaceBundleDagPath,proto3" json:"workspace_bundle_dag_path,omitempty"`
+	WorkspaceBundleOriginalRef string `protobuf:"bytes,30,opt,name=workspace_bundle_original_ref,json=workspaceBundleOriginalRef,proto3" json:"workspace_bundle_original_ref,omitempty"`
+	WorkspaceBundleResolvedRef string `protobuf:"bytes,31,opt,name=workspace_bundle_resolved_ref,json=workspaceBundleResolvedRef,proto3" json:"workspace_bundle_resolved_ref,omitempty"`
+	// Runtime profile name. Workers resolve values at attempt start.
+	ProfileName   string `protobuf:"bytes,32,opt,name=profile_name,json=profileName,proto3" json:"profile_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -609,9 +631,9 @@ func (x *Task) GetAttemptKey() string {
 	return ""
 }
 
-func (x *Task) GetTags() string {
+func (x *Task) GetLabels() string {
 	if x != nil {
-		return x.Tags
+		return x.Labels
 	}
 	return ""
 }
@@ -686,6 +708,48 @@ func (x *Task) GetAgentSnapshot() []byte {
 	return nil
 }
 
+func (x *Task) GetWorkspaceBundleDigest() string {
+	if x != nil {
+		return x.WorkspaceBundleDigest
+	}
+	return ""
+}
+
+func (x *Task) GetWorkspaceBundleSize() int64 {
+	if x != nil {
+		return x.WorkspaceBundleSize
+	}
+	return 0
+}
+
+func (x *Task) GetWorkspaceBundleDagPath() string {
+	if x != nil {
+		return x.WorkspaceBundleDagPath
+	}
+	return ""
+}
+
+func (x *Task) GetWorkspaceBundleOriginalRef() string {
+	if x != nil {
+		return x.WorkspaceBundleOriginalRef
+	}
+	return ""
+}
+
+func (x *Task) GetWorkspaceBundleResolvedRef() string {
+	if x != nil {
+		return x.WorkspaceBundleResolvedRef
+	}
+	return ""
+}
+
+func (x *Task) GetProfileName() string {
+	if x != nil {
+		return x.ProfileName
+	}
+	return ""
+}
+
 func (x *Task) SetOperation(v Operation) {
 	x.Operation = v
 }
@@ -746,8 +810,8 @@ func (x *Task) SetAttemptKey(v string) {
 	x.AttemptKey = v
 }
 
-func (x *Task) SetTags(v string) {
-	x.Tags = v
+func (x *Task) SetLabels(v string) {
+	x.Labels = v
 }
 
 func (x *Task) SetBaseConfig(v string) {
@@ -793,6 +857,30 @@ func (x *Task) SetAgentSnapshot(v []byte) {
 	x.AgentSnapshot = v
 }
 
+func (x *Task) SetWorkspaceBundleDigest(v string) {
+	x.WorkspaceBundleDigest = v
+}
+
+func (x *Task) SetWorkspaceBundleSize(v int64) {
+	x.WorkspaceBundleSize = v
+}
+
+func (x *Task) SetWorkspaceBundleDagPath(v string) {
+	x.WorkspaceBundleDagPath = v
+}
+
+func (x *Task) SetWorkspaceBundleOriginalRef(v string) {
+	x.WorkspaceBundleOriginalRef = v
+}
+
+func (x *Task) SetWorkspaceBundleResolvedRef(v string) {
+	x.WorkspaceBundleResolvedRef = v
+}
+
+func (x *Task) SetProfileName(v string) {
+	x.ProfileName = v
+}
+
 func (x *Task) HasPreviousStatus() bool {
 	if x == nil {
 		return false
@@ -819,15 +907,15 @@ type Task_builder struct {
 	WorkerSelector   map[string]string
 	Definition       string
 	WorkerId         string
-	// Previous status for OPERATION_RETRY in shared-nothing mode.
+	// Previous status for OPERATION_RETRY.
 	// When set, workers can retry without needing local DAGRunStore access.
 	PreviousStatus *DAGRunStatusProto
 	// Attempt ID created by coordinator. Workers use this to create attempts with the same ID.
 	AttemptId string
 	// Globally unique attempt identifier for cancellation tracking.
 	AttemptKey string
-	// Additional tags (comma-separated key=value or key-only) to apply to the DAG run.
-	Tags string
+	// Additional labels (comma-separated key=value or key-only) to apply to the DAG run.
+	Labels string
 	// Base config YAML content for workers (avoids relying on local base config files).
 	BaseConfig string
 	// RFC 3339 timestamp of when this task was originally scheduled.
@@ -846,6 +934,14 @@ type Task_builder struct {
 	SourceFile string
 	// Opaque execution-scoped agent settings snapshot for distributed workers.
 	AgentSnapshot []byte
+	// Content-addressed workspace bundle for action sub-DAGs.
+	WorkspaceBundleDigest      string
+	WorkspaceBundleSize        int64
+	WorkspaceBundleDagPath     string
+	WorkspaceBundleOriginalRef string
+	WorkspaceBundleResolvedRef string
+	// Runtime profile name. Workers resolve values at attempt start.
+	ProfileName string
 }
 
 func (b0 Task_builder) Build() *Task {
@@ -867,7 +963,7 @@ func (b0 Task_builder) Build() *Task {
 	x.PreviousStatus = b.PreviousStatus
 	x.AttemptId = b.AttemptId
 	x.AttemptKey = b.AttemptKey
-	x.Tags = b.Tags
+	x.Labels = b.Labels
 	x.BaseConfig = b.BaseConfig
 	x.ScheduleTime = b.ScheduleTime
 	x.ExternalStepRetry = b.ExternalStepRetry
@@ -878,6 +974,12 @@ func (b0 Task_builder) Build() *Task {
 	x.ClaimToken = b.ClaimToken
 	x.SourceFile = b.SourceFile
 	x.AgentSnapshot = b.AgentSnapshot
+	x.WorkspaceBundleDigest = b.WorkspaceBundleDigest
+	x.WorkspaceBundleSize = b.WorkspaceBundleSize
+	x.WorkspaceBundleDagPath = b.WorkspaceBundleDagPath
+	x.WorkspaceBundleOriginalRef = b.WorkspaceBundleOriginalRef
+	x.WorkspaceBundleResolvedRef = b.WorkspaceBundleResolvedRef
+	x.ProfileName = b.ProfileName
 	return m0
 }
 
@@ -2725,6 +2827,480 @@ func (b0 StreamArtifactsResponse_builder) Build() *StreamArtifactsResponse {
 	return m0
 }
 
+// Workspace bundle descriptor.
+type WorkspaceBundle struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Digest        string                 `protobuf:"bytes,1,opt,name=digest,proto3" json:"digest,omitempty"`
+	Size          int64                  `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
+	DagPath       string                 `protobuf:"bytes,3,opt,name=dag_path,json=dagPath,proto3" json:"dag_path,omitempty"`
+	OriginalRef   string                 `protobuf:"bytes,4,opt,name=original_ref,json=originalRef,proto3" json:"original_ref,omitempty"`
+	ResolvedRef   string                 `protobuf:"bytes,5,opt,name=resolved_ref,json=resolvedRef,proto3" json:"resolved_ref,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkspaceBundle) Reset() {
+	*x = WorkspaceBundle{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkspaceBundle) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkspaceBundle) ProtoMessage() {}
+
+func (x *WorkspaceBundle) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *WorkspaceBundle) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+func (x *WorkspaceBundle) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *WorkspaceBundle) GetDagPath() string {
+	if x != nil {
+		return x.DagPath
+	}
+	return ""
+}
+
+func (x *WorkspaceBundle) GetOriginalRef() string {
+	if x != nil {
+		return x.OriginalRef
+	}
+	return ""
+}
+
+func (x *WorkspaceBundle) GetResolvedRef() string {
+	if x != nil {
+		return x.ResolvedRef
+	}
+	return ""
+}
+
+func (x *WorkspaceBundle) SetDigest(v string) {
+	x.Digest = v
+}
+
+func (x *WorkspaceBundle) SetSize(v int64) {
+	x.Size = v
+}
+
+func (x *WorkspaceBundle) SetDagPath(v string) {
+	x.DagPath = v
+}
+
+func (x *WorkspaceBundle) SetOriginalRef(v string) {
+	x.OriginalRef = v
+}
+
+func (x *WorkspaceBundle) SetResolvedRef(v string) {
+	x.ResolvedRef = v
+}
+
+type WorkspaceBundle_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Digest      string
+	Size        int64
+	DagPath     string
+	OriginalRef string
+	ResolvedRef string
+}
+
+func (b0 WorkspaceBundle_builder) Build() *WorkspaceBundle {
+	m0 := &WorkspaceBundle{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Digest = b.Digest
+	x.Size = b.Size
+	x.DagPath = b.DagPath
+	x.OriginalRef = b.OriginalRef
+	x.ResolvedRef = b.ResolvedRef
+	return m0
+}
+
+// Workspace bundle chunk for upload and download streams.
+type WorkspaceBundleChunk struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Bundle        *WorkspaceBundle       `protobuf:"bytes,1,opt,name=bundle,proto3" json:"bundle,omitempty"`
+	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	Sequence      uint64                 `protobuf:"varint,3,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	IsFinal       bool                   `protobuf:"varint,4,opt,name=is_final,json=isFinal,proto3" json:"is_final,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkspaceBundleChunk) Reset() {
+	*x = WorkspaceBundleChunk{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkspaceBundleChunk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkspaceBundleChunk) ProtoMessage() {}
+
+func (x *WorkspaceBundleChunk) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *WorkspaceBundleChunk) GetBundle() *WorkspaceBundle {
+	if x != nil {
+		return x.Bundle
+	}
+	return nil
+}
+
+func (x *WorkspaceBundleChunk) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *WorkspaceBundleChunk) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *WorkspaceBundleChunk) GetIsFinal() bool {
+	if x != nil {
+		return x.IsFinal
+	}
+	return false
+}
+
+func (x *WorkspaceBundleChunk) SetBundle(v *WorkspaceBundle) {
+	x.Bundle = v
+}
+
+func (x *WorkspaceBundleChunk) SetData(v []byte) {
+	if v == nil {
+		v = []byte{}
+	}
+	x.Data = v
+}
+
+func (x *WorkspaceBundleChunk) SetSequence(v uint64) {
+	x.Sequence = v
+}
+
+func (x *WorkspaceBundleChunk) SetIsFinal(v bool) {
+	x.IsFinal = v
+}
+
+func (x *WorkspaceBundleChunk) HasBundle() bool {
+	if x == nil {
+		return false
+	}
+	return x.Bundle != nil
+}
+
+func (x *WorkspaceBundleChunk) ClearBundle() {
+	x.Bundle = nil
+}
+
+type WorkspaceBundleChunk_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Bundle   *WorkspaceBundle
+	Data     []byte
+	Sequence uint64
+	IsFinal  bool
+}
+
+func (b0 WorkspaceBundleChunk_builder) Build() *WorkspaceBundleChunk {
+	m0 := &WorkspaceBundleChunk{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Bundle = b.Bundle
+	x.Data = b.Data
+	x.Sequence = b.Sequence
+	x.IsFinal = b.IsFinal
+	return m0
+}
+
+// Response message for workspace bundle upload.
+type PutWorkspaceBundleResponse struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutWorkspaceBundleResponse) Reset() {
+	*x = PutWorkspaceBundleResponse{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutWorkspaceBundleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutWorkspaceBundleResponse) ProtoMessage() {}
+
+func (x *PutWorkspaceBundleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *PutWorkspaceBundleResponse) GetAccepted() bool {
+	if x != nil {
+		return x.Accepted
+	}
+	return false
+}
+
+func (x *PutWorkspaceBundleResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *PutWorkspaceBundleResponse) SetAccepted(v bool) {
+	x.Accepted = v
+}
+
+func (x *PutWorkspaceBundleResponse) SetError(v string) {
+	x.Error = v
+}
+
+type PutWorkspaceBundleResponse_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Accepted bool
+	Error    string
+}
+
+func (b0 PutWorkspaceBundleResponse_builder) Build() *PutWorkspaceBundleResponse {
+	m0 := &PutWorkspaceBundleResponse{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Accepted = b.Accepted
+	x.Error = b.Error
+	return m0
+}
+
+// Request message for checking workspace bundle presence.
+type HasWorkspaceBundleRequest struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Digest        string                 `protobuf:"bytes,1,opt,name=digest,proto3" json:"digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HasWorkspaceBundleRequest) Reset() {
+	*x = HasWorkspaceBundleRequest{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HasWorkspaceBundleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HasWorkspaceBundleRequest) ProtoMessage() {}
+
+func (x *HasWorkspaceBundleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *HasWorkspaceBundleRequest) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+func (x *HasWorkspaceBundleRequest) SetDigest(v string) {
+	x.Digest = v
+}
+
+type HasWorkspaceBundleRequest_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Digest string
+}
+
+func (b0 HasWorkspaceBundleRequest_builder) Build() *HasWorkspaceBundleRequest {
+	m0 := &HasWorkspaceBundleRequest{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Digest = b.Digest
+	return m0
+}
+
+// Response message for checking workspace bundle presence.
+type HasWorkspaceBundleResponse struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Exists        bool                   `protobuf:"varint,1,opt,name=exists,proto3" json:"exists,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HasWorkspaceBundleResponse) Reset() {
+	*x = HasWorkspaceBundleResponse{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HasWorkspaceBundleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HasWorkspaceBundleResponse) ProtoMessage() {}
+
+func (x *HasWorkspaceBundleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *HasWorkspaceBundleResponse) GetExists() bool {
+	if x != nil {
+		return x.Exists
+	}
+	return false
+}
+
+func (x *HasWorkspaceBundleResponse) SetExists(v bool) {
+	x.Exists = v
+}
+
+type HasWorkspaceBundleResponse_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Exists bool
+}
+
+func (b0 HasWorkspaceBundleResponse_builder) Build() *HasWorkspaceBundleResponse {
+	m0 := &HasWorkspaceBundleResponse{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Exists = b.Exists
+	return m0
+}
+
+// Request message for workspace bundle download.
+type GetWorkspaceBundleRequest struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Digest        string                 `protobuf:"bytes,1,opt,name=digest,proto3" json:"digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetWorkspaceBundleRequest) Reset() {
+	*x = GetWorkspaceBundleRequest{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetWorkspaceBundleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetWorkspaceBundleRequest) ProtoMessage() {}
+
+func (x *GetWorkspaceBundleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *GetWorkspaceBundleRequest) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+func (x *GetWorkspaceBundleRequest) SetDigest(v string) {
+	x.Digest = v
+}
+
+type GetWorkspaceBundleRequest_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Digest string
+}
+
+func (b0 GetWorkspaceBundleRequest_builder) Build() *GetWorkspaceBundleRequest {
+	m0 := &GetWorkspaceBundleRequest{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Digest = b.Digest
+	return m0
+}
+
 // Request message for getting DAG run status.
 type GetDAGRunStatusRequest struct {
 	state    protoimpl.MessageState `protogen:"hybrid.v1"`
@@ -2740,7 +3316,7 @@ type GetDAGRunStatusRequest struct {
 
 func (x *GetDAGRunStatusRequest) Reset() {
 	*x = GetDAGRunStatusRequest{}
-	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[24]
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2752,7 +3328,7 @@ func (x *GetDAGRunStatusRequest) String() string {
 func (*GetDAGRunStatusRequest) ProtoMessage() {}
 
 func (x *GetDAGRunStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[24]
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2841,7 +3417,7 @@ type GetDAGRunStatusResponse struct {
 
 func (x *GetDAGRunStatusResponse) Reset() {
 	*x = GetDAGRunStatusResponse{}
-	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[25]
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2853,7 +3429,7 @@ func (x *GetDAGRunStatusResponse) String() string {
 func (*GetDAGRunStatusResponse) ProtoMessage() {}
 
 func (x *GetDAGRunStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[25]
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2940,7 +3516,7 @@ type RequestCancelRequest struct {
 
 func (x *RequestCancelRequest) Reset() {
 	*x = RequestCancelRequest{}
-	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[26]
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2952,7 +3528,7 @@ func (x *RequestCancelRequest) String() string {
 func (*RequestCancelRequest) ProtoMessage() {}
 
 func (x *RequestCancelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[26]
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3039,7 +3615,7 @@ type RequestCancelResponse struct {
 
 func (x *RequestCancelResponse) Reset() {
 	*x = RequestCancelResponse{}
-	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[27]
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3051,7 +3627,7 @@ func (x *RequestCancelResponse) String() string {
 func (*RequestCancelResponse) ProtoMessage() {}
 
 func (x *RequestCancelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[27]
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3100,6 +3676,1338 @@ func (b0 RequestCancelResponse_builder) Build() *RequestCancelResponse {
 	return m0
 }
 
+type StateRef struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Scope         string                 `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
+	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Key           string                 `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StateRef) Reset() {
+	*x = StateRef{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StateRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StateRef) ProtoMessage() {}
+
+func (x *StateRef) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *StateRef) GetScope() string {
+	if x != nil {
+		return x.Scope
+	}
+	return ""
+}
+
+func (x *StateRef) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *StateRef) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *StateRef) SetScope(v string) {
+	x.Scope = v
+}
+
+func (x *StateRef) SetNamespace(v string) {
+	x.Namespace = v
+}
+
+func (x *StateRef) SetKey(v string) {
+	x.Key = v
+}
+
+type StateRef_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Scope     string
+	Namespace string
+	Key       string
+}
+
+func (b0 StateRef_builder) Build() *StateRef {
+	m0 := &StateRef{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Scope = b.Scope
+	x.Namespace = b.Namespace
+	x.Key = b.Key
+	return m0
+}
+
+type StateUpdateSource struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	DagName       string                 `protobuf:"bytes,1,opt,name=dag_name,json=dagName,proto3" json:"dag_name,omitempty"`
+	DagRunId      string                 `protobuf:"bytes,2,opt,name=dag_run_id,json=dagRunId,proto3" json:"dag_run_id,omitempty"`
+	AttemptId     string                 `protobuf:"bytes,3,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
+	StepName      string                 `protobuf:"bytes,4,opt,name=step_name,json=stepName,proto3" json:"step_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StateUpdateSource) Reset() {
+	*x = StateUpdateSource{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StateUpdateSource) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StateUpdateSource) ProtoMessage() {}
+
+func (x *StateUpdateSource) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *StateUpdateSource) GetDagName() string {
+	if x != nil {
+		return x.DagName
+	}
+	return ""
+}
+
+func (x *StateUpdateSource) GetDagRunId() string {
+	if x != nil {
+		return x.DagRunId
+	}
+	return ""
+}
+
+func (x *StateUpdateSource) GetAttemptId() string {
+	if x != nil {
+		return x.AttemptId
+	}
+	return ""
+}
+
+func (x *StateUpdateSource) GetStepName() string {
+	if x != nil {
+		return x.StepName
+	}
+	return ""
+}
+
+func (x *StateUpdateSource) SetDagName(v string) {
+	x.DagName = v
+}
+
+func (x *StateUpdateSource) SetDagRunId(v string) {
+	x.DagRunId = v
+}
+
+func (x *StateUpdateSource) SetAttemptId(v string) {
+	x.AttemptId = v
+}
+
+func (x *StateUpdateSource) SetStepName(v string) {
+	x.StepName = v
+}
+
+type StateUpdateSource_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	DagName   string
+	DagRunId  string
+	AttemptId string
+	StepName  string
+}
+
+func (b0 StateUpdateSource_builder) Build() *StateUpdateSource {
+	m0 := &StateUpdateSource{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.DagName = b.DagName
+	x.DagRunId = b.DagRunId
+	x.AttemptId = b.AttemptId
+	x.StepName = b.StepName
+	return m0
+}
+
+type StateEntry struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Ref           *StateRef              `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	Value         []byte                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	Version       int64                  `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"`
+	Hash          string                 `protobuf:"bytes,4,opt,name=hash,proto3" json:"hash,omitempty"`
+	CreatedAt     int64                  `protobuf:"varint,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt     int64                  `protobuf:"varint,6,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	UpdatedBy     *StateUpdateSource     `protobuf:"bytes,7,opt,name=updated_by,json=updatedBy,proto3" json:"updated_by,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StateEntry) Reset() {
+	*x = StateEntry{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StateEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StateEntry) ProtoMessage() {}
+
+func (x *StateEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *StateEntry) GetRef() *StateRef {
+	if x != nil {
+		return x.Ref
+	}
+	return nil
+}
+
+func (x *StateEntry) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+func (x *StateEntry) GetVersion() int64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *StateEntry) GetHash() string {
+	if x != nil {
+		return x.Hash
+	}
+	return ""
+}
+
+func (x *StateEntry) GetCreatedAt() int64 {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return 0
+}
+
+func (x *StateEntry) GetUpdatedAt() int64 {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return 0
+}
+
+func (x *StateEntry) GetUpdatedBy() *StateUpdateSource {
+	if x != nil {
+		return x.UpdatedBy
+	}
+	return nil
+}
+
+func (x *StateEntry) SetRef(v *StateRef) {
+	x.Ref = v
+}
+
+func (x *StateEntry) SetValue(v []byte) {
+	if v == nil {
+		v = []byte{}
+	}
+	x.Value = v
+}
+
+func (x *StateEntry) SetVersion(v int64) {
+	x.Version = v
+}
+
+func (x *StateEntry) SetHash(v string) {
+	x.Hash = v
+}
+
+func (x *StateEntry) SetCreatedAt(v int64) {
+	x.CreatedAt = v
+}
+
+func (x *StateEntry) SetUpdatedAt(v int64) {
+	x.UpdatedAt = v
+}
+
+func (x *StateEntry) SetUpdatedBy(v *StateUpdateSource) {
+	x.UpdatedBy = v
+}
+
+func (x *StateEntry) HasRef() bool {
+	if x == nil {
+		return false
+	}
+	return x.Ref != nil
+}
+
+func (x *StateEntry) HasUpdatedBy() bool {
+	if x == nil {
+		return false
+	}
+	return x.UpdatedBy != nil
+}
+
+func (x *StateEntry) ClearRef() {
+	x.Ref = nil
+}
+
+func (x *StateEntry) ClearUpdatedBy() {
+	x.UpdatedBy = nil
+}
+
+type StateEntry_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Ref       *StateRef
+	Value     []byte
+	Version   int64
+	Hash      string
+	CreatedAt int64
+	UpdatedAt int64
+	UpdatedBy *StateUpdateSource
+}
+
+func (b0 StateEntry_builder) Build() *StateEntry {
+	m0 := &StateEntry{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Ref = b.Ref
+	x.Value = b.Value
+	x.Version = b.Version
+	x.Hash = b.Hash
+	x.CreatedAt = b.CreatedAt
+	x.UpdatedAt = b.UpdatedAt
+	x.UpdatedBy = b.UpdatedBy
+	return m0
+}
+
+type GetStateRequest struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Ref           *StateRef              `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetStateRequest) Reset() {
+	*x = GetStateRequest{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetStateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetStateRequest) ProtoMessage() {}
+
+func (x *GetStateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *GetStateRequest) GetRef() *StateRef {
+	if x != nil {
+		return x.Ref
+	}
+	return nil
+}
+
+func (x *GetStateRequest) SetRef(v *StateRef) {
+	x.Ref = v
+}
+
+func (x *GetStateRequest) HasRef() bool {
+	if x == nil {
+		return false
+	}
+	return x.Ref != nil
+}
+
+func (x *GetStateRequest) ClearRef() {
+	x.Ref = nil
+}
+
+type GetStateRequest_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Ref *StateRef
+}
+
+func (b0 GetStateRequest_builder) Build() *GetStateRequest {
+	m0 := &GetStateRequest{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Ref = b.Ref
+	return m0
+}
+
+type GetStateResponse struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	Entry         *StateEntry            `protobuf:"bytes,2,opt,name=entry,proto3" json:"entry,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetStateResponse) Reset() {
+	*x = GetStateResponse{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetStateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetStateResponse) ProtoMessage() {}
+
+func (x *GetStateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *GetStateResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *GetStateResponse) GetEntry() *StateEntry {
+	if x != nil {
+		return x.Entry
+	}
+	return nil
+}
+
+func (x *GetStateResponse) SetFound(v bool) {
+	x.Found = v
+}
+
+func (x *GetStateResponse) SetEntry(v *StateEntry) {
+	x.Entry = v
+}
+
+func (x *GetStateResponse) HasEntry() bool {
+	if x == nil {
+		return false
+	}
+	return x.Entry != nil
+}
+
+func (x *GetStateResponse) ClearEntry() {
+	x.Entry = nil
+}
+
+type GetStateResponse_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Found bool
+	Entry *StateEntry
+}
+
+func (b0 GetStateResponse_builder) Build() *GetStateResponse {
+	m0 := &GetStateResponse{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Found = b.Found
+	x.Entry = b.Entry
+	return m0
+}
+
+type PutStateRequest struct {
+	state              protoimpl.MessageState `protogen:"hybrid.v1"`
+	Ref                *StateRef              `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	Value              []byte                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	HasExpectedVersion bool                   `protobuf:"varint,3,opt,name=has_expected_version,json=hasExpectedVersion,proto3" json:"has_expected_version,omitempty"`
+	ExpectedVersion    int64                  `protobuf:"varint,4,opt,name=expected_version,json=expectedVersion,proto3" json:"expected_version,omitempty"`
+	CreateOnly         bool                   `protobuf:"varint,5,opt,name=create_only,json=createOnly,proto3" json:"create_only,omitempty"`
+	UpdatedBy          *StateUpdateSource     `protobuf:"bytes,6,opt,name=updated_by,json=updatedBy,proto3" json:"updated_by,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *PutStateRequest) Reset() {
+	*x = PutStateRequest{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutStateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutStateRequest) ProtoMessage() {}
+
+func (x *PutStateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *PutStateRequest) GetRef() *StateRef {
+	if x != nil {
+		return x.Ref
+	}
+	return nil
+}
+
+func (x *PutStateRequest) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+func (x *PutStateRequest) GetHasExpectedVersion() bool {
+	if x != nil {
+		return x.HasExpectedVersion
+	}
+	return false
+}
+
+func (x *PutStateRequest) GetExpectedVersion() int64 {
+	if x != nil {
+		return x.ExpectedVersion
+	}
+	return 0
+}
+
+func (x *PutStateRequest) GetCreateOnly() bool {
+	if x != nil {
+		return x.CreateOnly
+	}
+	return false
+}
+
+func (x *PutStateRequest) GetUpdatedBy() *StateUpdateSource {
+	if x != nil {
+		return x.UpdatedBy
+	}
+	return nil
+}
+
+func (x *PutStateRequest) SetRef(v *StateRef) {
+	x.Ref = v
+}
+
+func (x *PutStateRequest) SetValue(v []byte) {
+	if v == nil {
+		v = []byte{}
+	}
+	x.Value = v
+}
+
+func (x *PutStateRequest) SetHasExpectedVersion(v bool) {
+	x.HasExpectedVersion = v
+}
+
+func (x *PutStateRequest) SetExpectedVersion(v int64) {
+	x.ExpectedVersion = v
+}
+
+func (x *PutStateRequest) SetCreateOnly(v bool) {
+	x.CreateOnly = v
+}
+
+func (x *PutStateRequest) SetUpdatedBy(v *StateUpdateSource) {
+	x.UpdatedBy = v
+}
+
+func (x *PutStateRequest) HasRef() bool {
+	if x == nil {
+		return false
+	}
+	return x.Ref != nil
+}
+
+func (x *PutStateRequest) HasUpdatedBy() bool {
+	if x == nil {
+		return false
+	}
+	return x.UpdatedBy != nil
+}
+
+func (x *PutStateRequest) ClearRef() {
+	x.Ref = nil
+}
+
+func (x *PutStateRequest) ClearUpdatedBy() {
+	x.UpdatedBy = nil
+}
+
+type PutStateRequest_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Ref                *StateRef
+	Value              []byte
+	HasExpectedVersion bool
+	ExpectedVersion    int64
+	CreateOnly         bool
+	UpdatedBy          *StateUpdateSource
+}
+
+func (b0 PutStateRequest_builder) Build() *PutStateRequest {
+	m0 := &PutStateRequest{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Ref = b.Ref
+	x.Value = b.Value
+	x.HasExpectedVersion = b.HasExpectedVersion
+	x.ExpectedVersion = b.ExpectedVersion
+	x.CreateOnly = b.CreateOnly
+	x.UpdatedBy = b.UpdatedBy
+	return m0
+}
+
+type PutStateResponse struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Entry         *StateEntry            `protobuf:"bytes,1,opt,name=entry,proto3" json:"entry,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutStateResponse) Reset() {
+	*x = PutStateResponse{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutStateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutStateResponse) ProtoMessage() {}
+
+func (x *PutStateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *PutStateResponse) GetEntry() *StateEntry {
+	if x != nil {
+		return x.Entry
+	}
+	return nil
+}
+
+func (x *PutStateResponse) SetEntry(v *StateEntry) {
+	x.Entry = v
+}
+
+func (x *PutStateResponse) HasEntry() bool {
+	if x == nil {
+		return false
+	}
+	return x.Entry != nil
+}
+
+func (x *PutStateResponse) ClearEntry() {
+	x.Entry = nil
+}
+
+type PutStateResponse_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Entry *StateEntry
+}
+
+func (b0 PutStateResponse_builder) Build() *PutStateResponse {
+	m0 := &PutStateResponse{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Entry = b.Entry
+	return m0
+}
+
+type DeleteStateRequest struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Ref           *StateRef              `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteStateRequest) Reset() {
+	*x = DeleteStateRequest{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteStateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteStateRequest) ProtoMessage() {}
+
+func (x *DeleteStateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *DeleteStateRequest) GetRef() *StateRef {
+	if x != nil {
+		return x.Ref
+	}
+	return nil
+}
+
+func (x *DeleteStateRequest) SetRef(v *StateRef) {
+	x.Ref = v
+}
+
+func (x *DeleteStateRequest) HasRef() bool {
+	if x == nil {
+		return false
+	}
+	return x.Ref != nil
+}
+
+func (x *DeleteStateRequest) ClearRef() {
+	x.Ref = nil
+}
+
+type DeleteStateRequest_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Ref *StateRef
+}
+
+func (b0 DeleteStateRequest_builder) Build() *DeleteStateRequest {
+	m0 := &DeleteStateRequest{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Ref = b.Ref
+	return m0
+}
+
+type DeleteStateResponse struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Deleted       bool                   `protobuf:"varint,1,opt,name=deleted,proto3" json:"deleted,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteStateResponse) Reset() {
+	*x = DeleteStateResponse{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteStateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteStateResponse) ProtoMessage() {}
+
+func (x *DeleteStateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *DeleteStateResponse) GetDeleted() bool {
+	if x != nil {
+		return x.Deleted
+	}
+	return false
+}
+
+func (x *DeleteStateResponse) SetDeleted(v bool) {
+	x.Deleted = v
+}
+
+type DeleteStateResponse_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Deleted bool
+}
+
+func (b0 DeleteStateResponse_builder) Build() *DeleteStateResponse {
+	m0 := &DeleteStateResponse{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Deleted = b.Deleted
+	return m0
+}
+
+type ListStateRequest struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Scope         string                 `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
+	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	KeyPrefix     string                 `protobuf:"bytes,3,opt,name=key_prefix,json=keyPrefix,proto3" json:"key_prefix,omitempty"`
+	Limit         int32                  `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListStateRequest) Reset() {
+	*x = ListStateRequest{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListStateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListStateRequest) ProtoMessage() {}
+
+func (x *ListStateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *ListStateRequest) GetScope() string {
+	if x != nil {
+		return x.Scope
+	}
+	return ""
+}
+
+func (x *ListStateRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *ListStateRequest) GetKeyPrefix() string {
+	if x != nil {
+		return x.KeyPrefix
+	}
+	return ""
+}
+
+func (x *ListStateRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *ListStateRequest) SetScope(v string) {
+	x.Scope = v
+}
+
+func (x *ListStateRequest) SetNamespace(v string) {
+	x.Namespace = v
+}
+
+func (x *ListStateRequest) SetKeyPrefix(v string) {
+	x.KeyPrefix = v
+}
+
+func (x *ListStateRequest) SetLimit(v int32) {
+	x.Limit = v
+}
+
+type ListStateRequest_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Scope     string
+	Namespace string
+	KeyPrefix string
+	Limit     int32
+}
+
+func (b0 ListStateRequest_builder) Build() *ListStateRequest {
+	m0 := &ListStateRequest{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Scope = b.Scope
+	x.Namespace = b.Namespace
+	x.KeyPrefix = b.KeyPrefix
+	x.Limit = b.Limit
+	return m0
+}
+
+type ListStateResponse struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Entries       []*StateEntry          `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListStateResponse) Reset() {
+	*x = ListStateResponse{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListStateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListStateResponse) ProtoMessage() {}
+
+func (x *ListStateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *ListStateResponse) GetEntries() []*StateEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *ListStateResponse) SetEntries(v []*StateEntry) {
+	x.Entries = v
+}
+
+type ListStateResponse_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Entries []*StateEntry
+}
+
+func (b0 ListStateResponse_builder) Build() *ListStateResponse {
+	m0 := &ListStateResponse{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Entries = b.Entries
+	return m0
+}
+
+// GetDAG retrieves a DAG definition (raw YAML spec) from the coordinator's DAG store.
+// Used as a fallback when a worker's local DAG store misses a definition during
+// sub-DAG execution. This eliminates race conditions in git-synced setups where
+// a new DAG YAML may not yet be present on the worker.
+type GetDAGRequest struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"` // DAG name to look up
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetDAGRequest) Reset() {
+	*x = GetDAGRequest{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetDAGRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetDAGRequest) ProtoMessage() {}
+
+func (x *GetDAGRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *GetDAGRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *GetDAGRequest) SetName(v string) {
+	x.Name = v
+}
+
+type GetDAGRequest_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Name string
+}
+
+func (b0 GetDAGRequest_builder) Build() *GetDAGRequest {
+	m0 := &GetDAGRequest{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Name = b.Name
+	return m0
+}
+
+type GetDAGResponse struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Spec          string                 `protobuf:"bytes,1,opt,name=spec,proto3" json:"spec,omitempty"`   // Raw YAML content of the DAG definition (empty if not found)
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"` // Error description when the DAG cannot be retrieved
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetDAGResponse) Reset() {
+	*x = GetDAGResponse{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetDAGResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetDAGResponse) ProtoMessage() {}
+
+func (x *GetDAGResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *GetDAGResponse) GetSpec() string {
+	if x != nil {
+		return x.Spec
+	}
+	return ""
+}
+
+func (x *GetDAGResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *GetDAGResponse) SetSpec(v string) {
+	x.Spec = v
+}
+
+func (x *GetDAGResponse) SetError(v string) {
+	x.Error = v
+}
+
+type GetDAGResponse_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Spec  string
+	Error string
+}
+
+func (b0 GetDAGResponse_builder) Build() *GetDAGResponse {
+	m0 := &GetDAGResponse{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Spec = b.Spec
+	x.Error = b.Error
+	return m0
+}
+
+// ResolveSecretReference resolves or checks one Dagu-managed registry ref.
+type ResolveSecretReferenceRequest struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`                               // Environment variable name requested by the DAG
+	Ref           string                 `protobuf:"bytes,2,opt,name=ref,proto3" json:"ref,omitempty"`                                 // Registry ref, for example "prod/db-password"
+	Workspace     string                 `protobuf:"bytes,3,opt,name=workspace,proto3" json:"workspace,omitempty"`                     // Workspace scope; empty means global
+	CheckOnly     bool                   `protobuf:"varint,4,opt,name=check_only,json=checkOnly,proto3" json:"check_only,omitempty"`   // When true, verify access without returning plaintext
+	WorkerId      string                 `protobuf:"bytes,5,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`       // Worker currently owning the dispatched attempt
+	AttemptKey    string                 `protobuf:"bytes,6,opt,name=attempt_key,json=attemptKey,proto3" json:"attempt_key,omitempty"` // Active distributed attempt lease key
+	AttemptId     string                 `protobuf:"bytes,7,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`    // Attempt ID created by the coordinator
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveSecretReferenceRequest) Reset() {
+	*x = ResolveSecretReferenceRequest{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveSecretReferenceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveSecretReferenceRequest) ProtoMessage() {}
+
+func (x *ResolveSecretReferenceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *ResolveSecretReferenceRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ResolveSecretReferenceRequest) GetRef() string {
+	if x != nil {
+		return x.Ref
+	}
+	return ""
+}
+
+func (x *ResolveSecretReferenceRequest) GetWorkspace() string {
+	if x != nil {
+		return x.Workspace
+	}
+	return ""
+}
+
+func (x *ResolveSecretReferenceRequest) GetCheckOnly() bool {
+	if x != nil {
+		return x.CheckOnly
+	}
+	return false
+}
+
+func (x *ResolveSecretReferenceRequest) GetWorkerId() string {
+	if x != nil {
+		return x.WorkerId
+	}
+	return ""
+}
+
+func (x *ResolveSecretReferenceRequest) GetAttemptKey() string {
+	if x != nil {
+		return x.AttemptKey
+	}
+	return ""
+}
+
+func (x *ResolveSecretReferenceRequest) GetAttemptId() string {
+	if x != nil {
+		return x.AttemptId
+	}
+	return ""
+}
+
+func (x *ResolveSecretReferenceRequest) SetName(v string) {
+	x.Name = v
+}
+
+func (x *ResolveSecretReferenceRequest) SetRef(v string) {
+	x.Ref = v
+}
+
+func (x *ResolveSecretReferenceRequest) SetWorkspace(v string) {
+	x.Workspace = v
+}
+
+func (x *ResolveSecretReferenceRequest) SetCheckOnly(v bool) {
+	x.CheckOnly = v
+}
+
+func (x *ResolveSecretReferenceRequest) SetWorkerId(v string) {
+	x.WorkerId = v
+}
+
+func (x *ResolveSecretReferenceRequest) SetAttemptKey(v string) {
+	x.AttemptKey = v
+}
+
+func (x *ResolveSecretReferenceRequest) SetAttemptId(v string) {
+	x.AttemptId = v
+}
+
+type ResolveSecretReferenceRequest_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Name       string
+	Ref        string
+	Workspace  string
+	CheckOnly  bool
+	WorkerId   string
+	AttemptKey string
+	AttemptId  string
+}
+
+func (b0 ResolveSecretReferenceRequest_builder) Build() *ResolveSecretReferenceRequest {
+	m0 := &ResolveSecretReferenceRequest{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Name = b.Name
+	x.Ref = b.Ref
+	x.Workspace = b.Workspace
+	x.CheckOnly = b.CheckOnly
+	x.WorkerId = b.WorkerId
+	x.AttemptKey = b.AttemptKey
+	x.AttemptId = b.AttemptId
+	return m0
+}
+
+type ResolveSecretReferenceResponse struct {
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Value         string                 `protobuf:"bytes,1,opt,name=value,proto3" json:"value,omitempty"` // Plaintext secret value; empty for check_only
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveSecretReferenceResponse) Reset() {
+	*x = ResolveSecretReferenceResponse{}
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveSecretReferenceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveSecretReferenceResponse) ProtoMessage() {}
+
+func (x *ResolveSecretReferenceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_coordinator_v1_coordinator_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *ResolveSecretReferenceResponse) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+func (x *ResolveSecretReferenceResponse) SetValue(v string) {
+	x.Value = v
+}
+
+type ResolveSecretReferenceResponse_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	Value string
+}
+
+func (b0 ResolveSecretReferenceResponse_builder) Build() *ResolveSecretReferenceResponse {
+	m0 := &ResolveSecretReferenceResponse{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Value = b.Value
+	return m0
+}
+
 var File_proto_coordinator_v1_coordinator_proto protoreflect.FileDescriptor
 
 const file_proto_coordinator_v1_coordinator_proto_rawDesc = "" +
@@ -3113,10 +5021,11 @@ const file_proto_coordinator_v1_coordinator_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"8\n" +
 	"\fPollResponse\x12(\n" +
-	"\x04task\x18\x01 \x01(\v2\x14.coordinator.v1.TaskR\x04task\";\n" +
+	"\x04task\x18\x01 \x01(\v2\x14.coordinator.v1.TaskR\x04task\"{\n" +
 	"\x0fDispatchRequest\x12(\n" +
-	"\x04task\x18\x01 \x01(\v2\x14.coordinator.v1.TaskR\x04task\"\x12\n" +
-	"\x10DispatchResponse\"\xdc\b\n" +
+	"\x04task\x18\x01 \x01(\v2\x14.coordinator.v1.TaskR\x04task\x12>\n" +
+	"\x1badmission_reservation_token\x18\x02 \x01(\tR\x19admissionReservationToken\"\x12\n" +
+	"\x10DispatchResponse\"\xb0\v\n" +
 	"\x04Task\x127\n" +
 	"\toperation\x18\x06 \x01(\x0e2\x19.coordinator.v1.OperationR\toperation\x12)\n" +
 	"\x11root_dag_run_name\x18\x01 \x01(\tR\x0erootDagRunName\x12%\n" +
@@ -3138,8 +5047,8 @@ const file_proto_coordinator_v1_coordinator_proto_rawDesc = "" +
 	"\n" +
 	"attempt_id\x18\x0e \x01(\tR\tattemptId\x12\x1f\n" +
 	"\vattempt_key\x18\x0f \x01(\tR\n" +
-	"attemptKey\x12\x12\n" +
-	"\x04tags\x18\x10 \x01(\tR\x04tags\x12\x1f\n" +
+	"attemptKey\x12\x16\n" +
+	"\x06labels\x18\x10 \x01(\tR\x06labels\x12\x1f\n" +
 	"\vbase_config\x18\x11 \x01(\tR\n" +
 	"baseConfig\x12#\n" +
 	"\rschedule_time\x18\x12 \x01(\tR\fscheduleTime\x12.\n" +
@@ -3153,7 +5062,13 @@ const file_proto_coordinator_v1_coordinator_proto_rawDesc = "" +
 	"claimToken\x12\x1f\n" +
 	"\vsource_file\x18\x19 \x01(\tR\n" +
 	"sourceFile\x12%\n" +
-	"\x0eagent_snapshot\x18\x1a \x01(\fR\ragentSnapshot\x1aA\n" +
+	"\x0eagent_snapshot\x18\x1a \x01(\fR\ragentSnapshot\x126\n" +
+	"\x17workspace_bundle_digest\x18\x1b \x01(\tR\x15workspaceBundleDigest\x122\n" +
+	"\x15workspace_bundle_size\x18\x1c \x01(\x03R\x13workspaceBundleSize\x129\n" +
+	"\x19workspace_bundle_dag_path\x18\x1d \x01(\tR\x16workspaceBundleDagPath\x12A\n" +
+	"\x1dworkspace_bundle_original_ref\x18\x1e \x01(\tR\x1aworkspaceBundleOriginalRef\x12A\n" +
+	"\x1dworkspace_bundle_resolved_ref\x18\x1f \x01(\tR\x1aworkspaceBundleResolvedRef\x12!\n" +
+	"\fprofile_name\x18  \x01(\tR\vprofileName\x1aA\n" +
 	"\x13WorkerSelectorEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x13\n" +
@@ -3263,7 +5178,27 @@ const file_proto_coordinator_v1_coordinator_proto_rawDesc = "" +
 	"\x17StreamArtifactsResponse\x12'\n" +
 	"\x0fchunks_received\x18\x01 \x01(\x04R\x0echunksReceived\x12#\n" +
 	"\rbytes_written\x18\x02 \x01(\x04R\fbytesWritten\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"\xa3\x01\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\x9e\x01\n" +
+	"\x0fWorkspaceBundle\x12\x16\n" +
+	"\x06digest\x18\x01 \x01(\tR\x06digest\x12\x12\n" +
+	"\x04size\x18\x02 \x01(\x03R\x04size\x12\x19\n" +
+	"\bdag_path\x18\x03 \x01(\tR\adagPath\x12!\n" +
+	"\foriginal_ref\x18\x04 \x01(\tR\voriginalRef\x12!\n" +
+	"\fresolved_ref\x18\x05 \x01(\tR\vresolvedRef\"\x9a\x01\n" +
+	"\x14WorkspaceBundleChunk\x127\n" +
+	"\x06bundle\x18\x01 \x01(\v2\x1f.coordinator.v1.WorkspaceBundleR\x06bundle\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\x12\x1a\n" +
+	"\bsequence\x18\x03 \x01(\x04R\bsequence\x12\x19\n" +
+	"\bis_final\x18\x04 \x01(\bR\aisFinal\"N\n" +
+	"\x1aPutWorkspaceBundleResponse\x12\x1a\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"3\n" +
+	"\x19HasWorkspaceBundleRequest\x12\x16\n" +
+	"\x06digest\x18\x01 \x01(\tR\x06digest\"4\n" +
+	"\x1aHasWorkspaceBundleResponse\x12\x16\n" +
+	"\x06exists\x18\x01 \x01(\bR\x06exists\"3\n" +
+	"\x19GetWorkspaceBundleRequest\x12\x16\n" +
+	"\x06digest\x18\x01 \x01(\tR\x06digest\"\xa3\x01\n" +
 	"\x16GetDAGRunStatusRequest\x12\x19\n" +
 	"\bdag_name\x18\x01 \x01(\tR\adagName\x12\x1c\n" +
 	"\n" +
@@ -3282,7 +5217,76 @@ const file_proto_coordinator_v1_coordinator_proto_rawDesc = "" +
 	"\x0froot_dag_run_id\x18\x04 \x01(\tR\frootDagRunId\"I\n" +
 	"\x15RequestCancelResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error*P\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"P\n" +
+	"\bStateRef\x12\x14\n" +
+	"\x05scope\x18\x01 \x01(\tR\x05scope\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x10\n" +
+	"\x03key\x18\x03 \x01(\tR\x03key\"\x88\x01\n" +
+	"\x11StateUpdateSource\x12\x19\n" +
+	"\bdag_name\x18\x01 \x01(\tR\adagName\x12\x1c\n" +
+	"\n" +
+	"dag_run_id\x18\x02 \x01(\tR\bdagRunId\x12\x1d\n" +
+	"\n" +
+	"attempt_id\x18\x03 \x01(\tR\tattemptId\x12\x1b\n" +
+	"\tstep_name\x18\x04 \x01(\tR\bstepName\"\xfc\x01\n" +
+	"\n" +
+	"StateEntry\x12*\n" +
+	"\x03ref\x18\x01 \x01(\v2\x18.coordinator.v1.StateRefR\x03ref\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\x03R\aversion\x12\x12\n" +
+	"\x04hash\x18\x04 \x01(\tR\x04hash\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\x05 \x01(\x03R\tcreatedAt\x12\x1d\n" +
+	"\n" +
+	"updated_at\x18\x06 \x01(\x03R\tupdatedAt\x12@\n" +
+	"\n" +
+	"updated_by\x18\a \x01(\v2!.coordinator.v1.StateUpdateSourceR\tupdatedBy\"=\n" +
+	"\x0fGetStateRequest\x12*\n" +
+	"\x03ref\x18\x01 \x01(\v2\x18.coordinator.v1.StateRefR\x03ref\"Z\n" +
+	"\x10GetStateResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x120\n" +
+	"\x05entry\x18\x02 \x01(\v2\x1a.coordinator.v1.StateEntryR\x05entry\"\x93\x02\n" +
+	"\x0fPutStateRequest\x12*\n" +
+	"\x03ref\x18\x01 \x01(\v2\x18.coordinator.v1.StateRefR\x03ref\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value\x120\n" +
+	"\x14has_expected_version\x18\x03 \x01(\bR\x12hasExpectedVersion\x12)\n" +
+	"\x10expected_version\x18\x04 \x01(\x03R\x0fexpectedVersion\x12\x1f\n" +
+	"\vcreate_only\x18\x05 \x01(\bR\n" +
+	"createOnly\x12@\n" +
+	"\n" +
+	"updated_by\x18\x06 \x01(\v2!.coordinator.v1.StateUpdateSourceR\tupdatedBy\"D\n" +
+	"\x10PutStateResponse\x120\n" +
+	"\x05entry\x18\x01 \x01(\v2\x1a.coordinator.v1.StateEntryR\x05entry\"@\n" +
+	"\x12DeleteStateRequest\x12*\n" +
+	"\x03ref\x18\x01 \x01(\v2\x18.coordinator.v1.StateRefR\x03ref\"/\n" +
+	"\x13DeleteStateResponse\x12\x18\n" +
+	"\adeleted\x18\x01 \x01(\bR\adeleted\"{\n" +
+	"\x10ListStateRequest\x12\x14\n" +
+	"\x05scope\x18\x01 \x01(\tR\x05scope\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x1d\n" +
+	"\n" +
+	"key_prefix\x18\x03 \x01(\tR\tkeyPrefix\x12\x14\n" +
+	"\x05limit\x18\x04 \x01(\x05R\x05limit\"I\n" +
+	"\x11ListStateResponse\x124\n" +
+	"\aentries\x18\x01 \x03(\v2\x1a.coordinator.v1.StateEntryR\aentries\"#\n" +
+	"\rGetDAGRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\":\n" +
+	"\x0eGetDAGResponse\x12\x12\n" +
+	"\x04spec\x18\x01 \x01(\tR\x04spec\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\xdf\x01\n" +
+	"\x1dResolveSecretReferenceRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
+	"\x03ref\x18\x02 \x01(\tR\x03ref\x12\x1c\n" +
+	"\tworkspace\x18\x03 \x01(\tR\tworkspace\x12\x1d\n" +
+	"\n" +
+	"check_only\x18\x04 \x01(\bR\tcheckOnly\x12\x1b\n" +
+	"\tworker_id\x18\x05 \x01(\tR\bworkerId\x12\x1f\n" +
+	"\vattempt_key\x18\x06 \x01(\tR\n" +
+	"attemptKey\x12\x1d\n" +
+	"\n" +
+	"attempt_id\x18\a \x01(\tR\tattemptId\"6\n" +
+	"\x1eResolveSecretReferenceResponse\x12\x14\n" +
+	"\x05value\x18\x01 \x01(\tR\x05value*P\n" +
 	"\tOperation\x12\x19\n" +
 	"\x15OPERATION_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fOPERATION_START\x10\x01\x12\x13\n" +
@@ -3296,7 +5300,7 @@ const file_proto_coordinator_v1_coordinator_proto_rawDesc = "" +
 	"\x1bLOG_STREAM_TYPE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16LOG_STREAM_TYPE_STDOUT\x10\x01\x12\x1a\n" +
 	"\x16LOG_STREAM_TYPE_STDERR\x10\x02\x12\x1d\n" +
-	"\x19LOG_STREAM_TYPE_SCHEDULER\x10\x032\xcb\a\n" +
+	"\x19LOG_STREAM_TYPE_SCHEDULER\x10\x032\x95\x0e\n" +
 	"\x12CoordinatorService\x12A\n" +
 	"\x04Poll\x12\x1b.coordinator.v1.PollRequest\x1a\x1c.coordinator.v1.PollResponse\x12M\n" +
 	"\bDispatch\x12\x1f.coordinator.v1.DispatchRequest\x1a .coordinator.v1.DispatchResponse\x12S\n" +
@@ -3308,61 +5312,91 @@ const file_proto_coordinator_v1_coordinator_proto_rawDesc = "" +
 	"\fReportStatus\x12#.coordinator.v1.ReportStatusRequest\x1a$.coordinator.v1.ReportStatusResponse\x12L\n" +
 	"\n" +
 	"StreamLogs\x12\x18.coordinator.v1.LogChunk\x1a\".coordinator.v1.StreamLogsResponse(\x01\x12[\n" +
-	"\x0fStreamArtifacts\x12\x1d.coordinator.v1.ArtifactChunk\x1a'.coordinator.v1.StreamArtifactsResponse(\x01\x12b\n" +
+	"\x0fStreamArtifacts\x12\x1d.coordinator.v1.ArtifactChunk\x1a'.coordinator.v1.StreamArtifactsResponse(\x01\x12h\n" +
+	"\x12PutWorkspaceBundle\x12$.coordinator.v1.WorkspaceBundleChunk\x1a*.coordinator.v1.PutWorkspaceBundleResponse(\x01\x12k\n" +
+	"\x12HasWorkspaceBundle\x12).coordinator.v1.HasWorkspaceBundleRequest\x1a*.coordinator.v1.HasWorkspaceBundleResponse\x12g\n" +
+	"\x12GetWorkspaceBundle\x12).coordinator.v1.GetWorkspaceBundleRequest\x1a$.coordinator.v1.WorkspaceBundleChunk0\x01\x12b\n" +
 	"\x0fGetDAGRunStatus\x12&.coordinator.v1.GetDAGRunStatusRequest\x1a'.coordinator.v1.GetDAGRunStatusResponse\x12\\\n" +
-	"\rRequestCancel\x12$.coordinator.v1.RequestCancelRequest\x1a%.coordinator.v1.RequestCancelResponseB>Z<github.com/dagucloud/dagu/proto/coordinator/v1;coordinatorv1b\x06proto3"
+	"\rRequestCancel\x12$.coordinator.v1.RequestCancelRequest\x1a%.coordinator.v1.RequestCancelResponse\x12M\n" +
+	"\bGetState\x12\x1f.coordinator.v1.GetStateRequest\x1a .coordinator.v1.GetStateResponse\x12M\n" +
+	"\bPutState\x12\x1f.coordinator.v1.PutStateRequest\x1a .coordinator.v1.PutStateResponse\x12V\n" +
+	"\vDeleteState\x12\".coordinator.v1.DeleteStateRequest\x1a#.coordinator.v1.DeleteStateResponse\x12P\n" +
+	"\tListState\x12 .coordinator.v1.ListStateRequest\x1a!.coordinator.v1.ListStateResponse\x12G\n" +
+	"\x06GetDAG\x12\x1d.coordinator.v1.GetDAGRequest\x1a\x1e.coordinator.v1.GetDAGResponse\x12w\n" +
+	"\x16ResolveSecretReference\x12-.coordinator.v1.ResolveSecretReferenceRequest\x1a..coordinator.v1.ResolveSecretReferenceResponseB>Z<github.com/dagucloud/dagu/proto/coordinator/v1;coordinatorv1b\x06proto3"
 
 var file_proto_coordinator_v1_coordinator_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_proto_coordinator_v1_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
+var file_proto_coordinator_v1_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 53)
 var file_proto_coordinator_v1_coordinator_proto_goTypes = []any{
-	(Operation)(0),                  // 0: coordinator.v1.Operation
-	(WorkerHealthStatus)(0),         // 1: coordinator.v1.WorkerHealthStatus
-	(LogStreamType)(0),              // 2: coordinator.v1.LogStreamType
-	(*PollRequest)(nil),             // 3: coordinator.v1.PollRequest
-	(*PollResponse)(nil),            // 4: coordinator.v1.PollResponse
-	(*DispatchRequest)(nil),         // 5: coordinator.v1.DispatchRequest
-	(*DispatchResponse)(nil),        // 6: coordinator.v1.DispatchResponse
-	(*Task)(nil),                    // 7: coordinator.v1.Task
-	(*GetWorkersRequest)(nil),       // 8: coordinator.v1.GetWorkersRequest
-	(*GetWorkersResponse)(nil),      // 9: coordinator.v1.GetWorkersResponse
-	(*WorkerInfo)(nil),              // 10: coordinator.v1.WorkerInfo
-	(*HeartbeatRequest)(nil),        // 11: coordinator.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),       // 12: coordinator.v1.HeartbeatResponse
-	(*AckTaskClaimRequest)(nil),     // 13: coordinator.v1.AckTaskClaimRequest
-	(*AckTaskClaimResponse)(nil),    // 14: coordinator.v1.AckTaskClaimResponse
-	(*RunHeartbeatRequest)(nil),     // 15: coordinator.v1.RunHeartbeatRequest
-	(*RunHeartbeatResponse)(nil),    // 16: coordinator.v1.RunHeartbeatResponse
-	(*CancelledRun)(nil),            // 17: coordinator.v1.CancelledRun
-	(*WorkerStats)(nil),             // 18: coordinator.v1.WorkerStats
-	(*RunningTask)(nil),             // 19: coordinator.v1.RunningTask
-	(*ReportStatusRequest)(nil),     // 20: coordinator.v1.ReportStatusRequest
-	(*ReportStatusResponse)(nil),    // 21: coordinator.v1.ReportStatusResponse
-	(*DAGRunStatusProto)(nil),       // 22: coordinator.v1.DAGRunStatusProto
-	(*LogChunk)(nil),                // 23: coordinator.v1.LogChunk
-	(*StreamLogsResponse)(nil),      // 24: coordinator.v1.StreamLogsResponse
-	(*ArtifactChunk)(nil),           // 25: coordinator.v1.ArtifactChunk
-	(*StreamArtifactsResponse)(nil), // 26: coordinator.v1.StreamArtifactsResponse
-	(*GetDAGRunStatusRequest)(nil),  // 27: coordinator.v1.GetDAGRunStatusRequest
-	(*GetDAGRunStatusResponse)(nil), // 28: coordinator.v1.GetDAGRunStatusResponse
-	(*RequestCancelRequest)(nil),    // 29: coordinator.v1.RequestCancelRequest
-	(*RequestCancelResponse)(nil),   // 30: coordinator.v1.RequestCancelResponse
-	nil,                             // 31: coordinator.v1.PollRequest.LabelsEntry
-	nil,                             // 32: coordinator.v1.Task.WorkerSelectorEntry
-	nil,                             // 33: coordinator.v1.WorkerInfo.LabelsEntry
-	nil,                             // 34: coordinator.v1.HeartbeatRequest.LabelsEntry
+	(Operation)(0),                         // 0: coordinator.v1.Operation
+	(WorkerHealthStatus)(0),                // 1: coordinator.v1.WorkerHealthStatus
+	(LogStreamType)(0),                     // 2: coordinator.v1.LogStreamType
+	(*PollRequest)(nil),                    // 3: coordinator.v1.PollRequest
+	(*PollResponse)(nil),                   // 4: coordinator.v1.PollResponse
+	(*DispatchRequest)(nil),                // 5: coordinator.v1.DispatchRequest
+	(*DispatchResponse)(nil),               // 6: coordinator.v1.DispatchResponse
+	(*Task)(nil),                           // 7: coordinator.v1.Task
+	(*GetWorkersRequest)(nil),              // 8: coordinator.v1.GetWorkersRequest
+	(*GetWorkersResponse)(nil),             // 9: coordinator.v1.GetWorkersResponse
+	(*WorkerInfo)(nil),                     // 10: coordinator.v1.WorkerInfo
+	(*HeartbeatRequest)(nil),               // 11: coordinator.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),              // 12: coordinator.v1.HeartbeatResponse
+	(*AckTaskClaimRequest)(nil),            // 13: coordinator.v1.AckTaskClaimRequest
+	(*AckTaskClaimResponse)(nil),           // 14: coordinator.v1.AckTaskClaimResponse
+	(*RunHeartbeatRequest)(nil),            // 15: coordinator.v1.RunHeartbeatRequest
+	(*RunHeartbeatResponse)(nil),           // 16: coordinator.v1.RunHeartbeatResponse
+	(*CancelledRun)(nil),                   // 17: coordinator.v1.CancelledRun
+	(*WorkerStats)(nil),                    // 18: coordinator.v1.WorkerStats
+	(*RunningTask)(nil),                    // 19: coordinator.v1.RunningTask
+	(*ReportStatusRequest)(nil),            // 20: coordinator.v1.ReportStatusRequest
+	(*ReportStatusResponse)(nil),           // 21: coordinator.v1.ReportStatusResponse
+	(*DAGRunStatusProto)(nil),              // 22: coordinator.v1.DAGRunStatusProto
+	(*LogChunk)(nil),                       // 23: coordinator.v1.LogChunk
+	(*StreamLogsResponse)(nil),             // 24: coordinator.v1.StreamLogsResponse
+	(*ArtifactChunk)(nil),                  // 25: coordinator.v1.ArtifactChunk
+	(*StreamArtifactsResponse)(nil),        // 26: coordinator.v1.StreamArtifactsResponse
+	(*WorkspaceBundle)(nil),                // 27: coordinator.v1.WorkspaceBundle
+	(*WorkspaceBundleChunk)(nil),           // 28: coordinator.v1.WorkspaceBundleChunk
+	(*PutWorkspaceBundleResponse)(nil),     // 29: coordinator.v1.PutWorkspaceBundleResponse
+	(*HasWorkspaceBundleRequest)(nil),      // 30: coordinator.v1.HasWorkspaceBundleRequest
+	(*HasWorkspaceBundleResponse)(nil),     // 31: coordinator.v1.HasWorkspaceBundleResponse
+	(*GetWorkspaceBundleRequest)(nil),      // 32: coordinator.v1.GetWorkspaceBundleRequest
+	(*GetDAGRunStatusRequest)(nil),         // 33: coordinator.v1.GetDAGRunStatusRequest
+	(*GetDAGRunStatusResponse)(nil),        // 34: coordinator.v1.GetDAGRunStatusResponse
+	(*RequestCancelRequest)(nil),           // 35: coordinator.v1.RequestCancelRequest
+	(*RequestCancelResponse)(nil),          // 36: coordinator.v1.RequestCancelResponse
+	(*StateRef)(nil),                       // 37: coordinator.v1.StateRef
+	(*StateUpdateSource)(nil),              // 38: coordinator.v1.StateUpdateSource
+	(*StateEntry)(nil),                     // 39: coordinator.v1.StateEntry
+	(*GetStateRequest)(nil),                // 40: coordinator.v1.GetStateRequest
+	(*GetStateResponse)(nil),               // 41: coordinator.v1.GetStateResponse
+	(*PutStateRequest)(nil),                // 42: coordinator.v1.PutStateRequest
+	(*PutStateResponse)(nil),               // 43: coordinator.v1.PutStateResponse
+	(*DeleteStateRequest)(nil),             // 44: coordinator.v1.DeleteStateRequest
+	(*DeleteStateResponse)(nil),            // 45: coordinator.v1.DeleteStateResponse
+	(*ListStateRequest)(nil),               // 46: coordinator.v1.ListStateRequest
+	(*ListStateResponse)(nil),              // 47: coordinator.v1.ListStateResponse
+	(*GetDAGRequest)(nil),                  // 48: coordinator.v1.GetDAGRequest
+	(*GetDAGResponse)(nil),                 // 49: coordinator.v1.GetDAGResponse
+	(*ResolveSecretReferenceRequest)(nil),  // 50: coordinator.v1.ResolveSecretReferenceRequest
+	(*ResolveSecretReferenceResponse)(nil), // 51: coordinator.v1.ResolveSecretReferenceResponse
+	nil,                                    // 52: coordinator.v1.PollRequest.LabelsEntry
+	nil,                                    // 53: coordinator.v1.Task.WorkerSelectorEntry
+	nil,                                    // 54: coordinator.v1.WorkerInfo.LabelsEntry
+	nil,                                    // 55: coordinator.v1.HeartbeatRequest.LabelsEntry
 }
 var file_proto_coordinator_v1_coordinator_proto_depIdxs = []int32{
-	31, // 0: coordinator.v1.PollRequest.labels:type_name -> coordinator.v1.PollRequest.LabelsEntry
+	52, // 0: coordinator.v1.PollRequest.labels:type_name -> coordinator.v1.PollRequest.LabelsEntry
 	7,  // 1: coordinator.v1.PollResponse.task:type_name -> coordinator.v1.Task
 	7,  // 2: coordinator.v1.DispatchRequest.task:type_name -> coordinator.v1.Task
 	0,  // 3: coordinator.v1.Task.operation:type_name -> coordinator.v1.Operation
-	32, // 4: coordinator.v1.Task.worker_selector:type_name -> coordinator.v1.Task.WorkerSelectorEntry
+	53, // 4: coordinator.v1.Task.worker_selector:type_name -> coordinator.v1.Task.WorkerSelectorEntry
 	22, // 5: coordinator.v1.Task.previous_status:type_name -> coordinator.v1.DAGRunStatusProto
 	10, // 6: coordinator.v1.GetWorkersResponse.workers:type_name -> coordinator.v1.WorkerInfo
-	33, // 7: coordinator.v1.WorkerInfo.labels:type_name -> coordinator.v1.WorkerInfo.LabelsEntry
+	54, // 7: coordinator.v1.WorkerInfo.labels:type_name -> coordinator.v1.WorkerInfo.LabelsEntry
 	19, // 8: coordinator.v1.WorkerInfo.running_tasks:type_name -> coordinator.v1.RunningTask
 	1,  // 9: coordinator.v1.WorkerInfo.health_status:type_name -> coordinator.v1.WorkerHealthStatus
-	34, // 10: coordinator.v1.HeartbeatRequest.labels:type_name -> coordinator.v1.HeartbeatRequest.LabelsEntry
+	55, // 10: coordinator.v1.HeartbeatRequest.labels:type_name -> coordinator.v1.HeartbeatRequest.LabelsEntry
 	18, // 11: coordinator.v1.HeartbeatRequest.stats:type_name -> coordinator.v1.WorkerStats
 	17, // 12: coordinator.v1.HeartbeatResponse.cancelled_runs:type_name -> coordinator.v1.CancelledRun
 	19, // 13: coordinator.v1.RunHeartbeatRequest.running_tasks:type_name -> coordinator.v1.RunningTask
@@ -3370,34 +5404,62 @@ var file_proto_coordinator_v1_coordinator_proto_depIdxs = []int32{
 	19, // 15: coordinator.v1.WorkerStats.running_tasks:type_name -> coordinator.v1.RunningTask
 	22, // 16: coordinator.v1.ReportStatusRequest.status:type_name -> coordinator.v1.DAGRunStatusProto
 	2,  // 17: coordinator.v1.LogChunk.stream_type:type_name -> coordinator.v1.LogStreamType
-	22, // 18: coordinator.v1.GetDAGRunStatusResponse.status:type_name -> coordinator.v1.DAGRunStatusProto
-	3,  // 19: coordinator.v1.CoordinatorService.Poll:input_type -> coordinator.v1.PollRequest
-	5,  // 20: coordinator.v1.CoordinatorService.Dispatch:input_type -> coordinator.v1.DispatchRequest
-	8,  // 21: coordinator.v1.CoordinatorService.GetWorkers:input_type -> coordinator.v1.GetWorkersRequest
-	11, // 22: coordinator.v1.CoordinatorService.Heartbeat:input_type -> coordinator.v1.HeartbeatRequest
-	13, // 23: coordinator.v1.CoordinatorService.AckTaskClaim:input_type -> coordinator.v1.AckTaskClaimRequest
-	15, // 24: coordinator.v1.CoordinatorService.RunHeartbeat:input_type -> coordinator.v1.RunHeartbeatRequest
-	20, // 25: coordinator.v1.CoordinatorService.ReportStatus:input_type -> coordinator.v1.ReportStatusRequest
-	23, // 26: coordinator.v1.CoordinatorService.StreamLogs:input_type -> coordinator.v1.LogChunk
-	25, // 27: coordinator.v1.CoordinatorService.StreamArtifacts:input_type -> coordinator.v1.ArtifactChunk
-	27, // 28: coordinator.v1.CoordinatorService.GetDAGRunStatus:input_type -> coordinator.v1.GetDAGRunStatusRequest
-	29, // 29: coordinator.v1.CoordinatorService.RequestCancel:input_type -> coordinator.v1.RequestCancelRequest
-	4,  // 30: coordinator.v1.CoordinatorService.Poll:output_type -> coordinator.v1.PollResponse
-	6,  // 31: coordinator.v1.CoordinatorService.Dispatch:output_type -> coordinator.v1.DispatchResponse
-	9,  // 32: coordinator.v1.CoordinatorService.GetWorkers:output_type -> coordinator.v1.GetWorkersResponse
-	12, // 33: coordinator.v1.CoordinatorService.Heartbeat:output_type -> coordinator.v1.HeartbeatResponse
-	14, // 34: coordinator.v1.CoordinatorService.AckTaskClaim:output_type -> coordinator.v1.AckTaskClaimResponse
-	16, // 35: coordinator.v1.CoordinatorService.RunHeartbeat:output_type -> coordinator.v1.RunHeartbeatResponse
-	21, // 36: coordinator.v1.CoordinatorService.ReportStatus:output_type -> coordinator.v1.ReportStatusResponse
-	24, // 37: coordinator.v1.CoordinatorService.StreamLogs:output_type -> coordinator.v1.StreamLogsResponse
-	26, // 38: coordinator.v1.CoordinatorService.StreamArtifacts:output_type -> coordinator.v1.StreamArtifactsResponse
-	28, // 39: coordinator.v1.CoordinatorService.GetDAGRunStatus:output_type -> coordinator.v1.GetDAGRunStatusResponse
-	30, // 40: coordinator.v1.CoordinatorService.RequestCancel:output_type -> coordinator.v1.RequestCancelResponse
-	30, // [30:41] is the sub-list for method output_type
-	19, // [19:30] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	27, // 18: coordinator.v1.WorkspaceBundleChunk.bundle:type_name -> coordinator.v1.WorkspaceBundle
+	22, // 19: coordinator.v1.GetDAGRunStatusResponse.status:type_name -> coordinator.v1.DAGRunStatusProto
+	37, // 20: coordinator.v1.StateEntry.ref:type_name -> coordinator.v1.StateRef
+	38, // 21: coordinator.v1.StateEntry.updated_by:type_name -> coordinator.v1.StateUpdateSource
+	37, // 22: coordinator.v1.GetStateRequest.ref:type_name -> coordinator.v1.StateRef
+	39, // 23: coordinator.v1.GetStateResponse.entry:type_name -> coordinator.v1.StateEntry
+	37, // 24: coordinator.v1.PutStateRequest.ref:type_name -> coordinator.v1.StateRef
+	38, // 25: coordinator.v1.PutStateRequest.updated_by:type_name -> coordinator.v1.StateUpdateSource
+	39, // 26: coordinator.v1.PutStateResponse.entry:type_name -> coordinator.v1.StateEntry
+	37, // 27: coordinator.v1.DeleteStateRequest.ref:type_name -> coordinator.v1.StateRef
+	39, // 28: coordinator.v1.ListStateResponse.entries:type_name -> coordinator.v1.StateEntry
+	3,  // 29: coordinator.v1.CoordinatorService.Poll:input_type -> coordinator.v1.PollRequest
+	5,  // 30: coordinator.v1.CoordinatorService.Dispatch:input_type -> coordinator.v1.DispatchRequest
+	8,  // 31: coordinator.v1.CoordinatorService.GetWorkers:input_type -> coordinator.v1.GetWorkersRequest
+	11, // 32: coordinator.v1.CoordinatorService.Heartbeat:input_type -> coordinator.v1.HeartbeatRequest
+	13, // 33: coordinator.v1.CoordinatorService.AckTaskClaim:input_type -> coordinator.v1.AckTaskClaimRequest
+	15, // 34: coordinator.v1.CoordinatorService.RunHeartbeat:input_type -> coordinator.v1.RunHeartbeatRequest
+	20, // 35: coordinator.v1.CoordinatorService.ReportStatus:input_type -> coordinator.v1.ReportStatusRequest
+	23, // 36: coordinator.v1.CoordinatorService.StreamLogs:input_type -> coordinator.v1.LogChunk
+	25, // 37: coordinator.v1.CoordinatorService.StreamArtifacts:input_type -> coordinator.v1.ArtifactChunk
+	28, // 38: coordinator.v1.CoordinatorService.PutWorkspaceBundle:input_type -> coordinator.v1.WorkspaceBundleChunk
+	30, // 39: coordinator.v1.CoordinatorService.HasWorkspaceBundle:input_type -> coordinator.v1.HasWorkspaceBundleRequest
+	32, // 40: coordinator.v1.CoordinatorService.GetWorkspaceBundle:input_type -> coordinator.v1.GetWorkspaceBundleRequest
+	33, // 41: coordinator.v1.CoordinatorService.GetDAGRunStatus:input_type -> coordinator.v1.GetDAGRunStatusRequest
+	35, // 42: coordinator.v1.CoordinatorService.RequestCancel:input_type -> coordinator.v1.RequestCancelRequest
+	40, // 43: coordinator.v1.CoordinatorService.GetState:input_type -> coordinator.v1.GetStateRequest
+	42, // 44: coordinator.v1.CoordinatorService.PutState:input_type -> coordinator.v1.PutStateRequest
+	44, // 45: coordinator.v1.CoordinatorService.DeleteState:input_type -> coordinator.v1.DeleteStateRequest
+	46, // 46: coordinator.v1.CoordinatorService.ListState:input_type -> coordinator.v1.ListStateRequest
+	48, // 47: coordinator.v1.CoordinatorService.GetDAG:input_type -> coordinator.v1.GetDAGRequest
+	50, // 48: coordinator.v1.CoordinatorService.ResolveSecretReference:input_type -> coordinator.v1.ResolveSecretReferenceRequest
+	4,  // 49: coordinator.v1.CoordinatorService.Poll:output_type -> coordinator.v1.PollResponse
+	6,  // 50: coordinator.v1.CoordinatorService.Dispatch:output_type -> coordinator.v1.DispatchResponse
+	9,  // 51: coordinator.v1.CoordinatorService.GetWorkers:output_type -> coordinator.v1.GetWorkersResponse
+	12, // 52: coordinator.v1.CoordinatorService.Heartbeat:output_type -> coordinator.v1.HeartbeatResponse
+	14, // 53: coordinator.v1.CoordinatorService.AckTaskClaim:output_type -> coordinator.v1.AckTaskClaimResponse
+	16, // 54: coordinator.v1.CoordinatorService.RunHeartbeat:output_type -> coordinator.v1.RunHeartbeatResponse
+	21, // 55: coordinator.v1.CoordinatorService.ReportStatus:output_type -> coordinator.v1.ReportStatusResponse
+	24, // 56: coordinator.v1.CoordinatorService.StreamLogs:output_type -> coordinator.v1.StreamLogsResponse
+	26, // 57: coordinator.v1.CoordinatorService.StreamArtifacts:output_type -> coordinator.v1.StreamArtifactsResponse
+	29, // 58: coordinator.v1.CoordinatorService.PutWorkspaceBundle:output_type -> coordinator.v1.PutWorkspaceBundleResponse
+	31, // 59: coordinator.v1.CoordinatorService.HasWorkspaceBundle:output_type -> coordinator.v1.HasWorkspaceBundleResponse
+	28, // 60: coordinator.v1.CoordinatorService.GetWorkspaceBundle:output_type -> coordinator.v1.WorkspaceBundleChunk
+	34, // 61: coordinator.v1.CoordinatorService.GetDAGRunStatus:output_type -> coordinator.v1.GetDAGRunStatusResponse
+	36, // 62: coordinator.v1.CoordinatorService.RequestCancel:output_type -> coordinator.v1.RequestCancelResponse
+	41, // 63: coordinator.v1.CoordinatorService.GetState:output_type -> coordinator.v1.GetStateResponse
+	43, // 64: coordinator.v1.CoordinatorService.PutState:output_type -> coordinator.v1.PutStateResponse
+	45, // 65: coordinator.v1.CoordinatorService.DeleteState:output_type -> coordinator.v1.DeleteStateResponse
+	47, // 66: coordinator.v1.CoordinatorService.ListState:output_type -> coordinator.v1.ListStateResponse
+	49, // 67: coordinator.v1.CoordinatorService.GetDAG:output_type -> coordinator.v1.GetDAGResponse
+	51, // 68: coordinator.v1.CoordinatorService.ResolveSecretReference:output_type -> coordinator.v1.ResolveSecretReferenceResponse
+	49, // [49:69] is the sub-list for method output_type
+	29, // [29:49] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_proto_coordinator_v1_coordinator_proto_init() }
@@ -3411,7 +5473,7 @@ func file_proto_coordinator_v1_coordinator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_coordinator_v1_coordinator_proto_rawDesc), len(file_proto_coordinator_v1_coordinator_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   32,
+			NumMessages:   53,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

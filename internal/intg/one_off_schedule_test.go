@@ -5,7 +5,6 @@ package intg_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,11 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dagucloud/dagu/internal/cmn/masking"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
-	"github.com/dagucloud/dagu/internal/persis/filewatermark"
+	"github.com/dagucloud/dagu/internal/persis/file"
 	"github.com/dagucloud/dagu/internal/service/scheduler"
 	"github.com/dagucloud/dagu/internal/test"
+	"github.com/dagucloud/dagu/internal/test/intgharness"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +37,7 @@ schedule:
     - at: "%s"
 steps:
   - name: step1
-    command: echo "hello"
+    run: echo "hello"
 `, scheduledAt.Format(time.RFC3339))
 	require.NoError(t, os.WriteFile(filepath.Join(dagsDir, "one-off-restart-test.yaml"), []byte(dagContent), 0644))
 
@@ -47,7 +48,9 @@ steps:
 	require.NoError(t, err)
 	require.Len(t, dag.Schedule, 1)
 
-	watermarkStore := filewatermark.New(filepath.Join(th.Config.Paths.DataDir, "scheduler"))
+	wmBackend, err := file.New(th.Config.Paths.DataDir)
+	require.NoError(t, err)
+	watermarkStore := scheduler.NewWatermarkStore(wmBackend.Collection("scheduler"))
 	fingerprint := dag.Schedule[0].Fingerprint()
 	runID := scheduler.GenerateOneOffRunID(dag.Name, fingerprint, scheduledAt)
 
@@ -99,12 +102,10 @@ steps:
 	ctx, cancel := context.WithCancel(th.Context)
 	defer cancel()
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- sc.Start(ctx)
-	}()
+	h := intgharness.New(t, th.Helper)
+	probe := h.StartScheduler(ctx, sc, th.EntryReader)
 
-	require.Eventually(t, func() bool {
+	probe.RequireEventually("expected one-off schedule to be consumed", 5*time.Second, func() bool {
 		state, err := watermarkStore.Load(th.Context)
 		if err != nil {
 			return false
@@ -115,23 +116,12 @@ steps:
 		}
 		oneOff, ok := entry.OneOffs[fingerprint]
 		return ok && oneOff.Status == scheduler.OneOffStatusConsumed
-	}, intgTestTimeout(5*time.Second), 50*time.Millisecond)
+	})
 
 	assert.Equal(t, int32(0), dispatchCount.Load())
 	assert.Len(t, th.DAGRunStore.RecentAttempts(th.Context, dag.Name, 10), 1)
 
-	sc.Stop(context.Background())
-	cancel()
-
-	select {
-	case err := <-errCh:
-		require.True(t,
-			err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded),
-			"unexpected scheduler shutdown error: %v", err,
-		)
-	case <-time.After(intgTestTimeout(5 * time.Second)):
-		t.Fatal("scheduler did not stop within 5 seconds")
-	}
+	probe.Stop(context.Background(), cancel, 5*time.Second)
 }
 
 func TestOneOffScheduleResolvesEnvSecretsWithoutLeakingSourceEnv(t *testing.T) {
@@ -154,7 +144,7 @@ secrets:
     key: %s
 steps:
   - name: capture
-    command: printf '%%s|%%s' "$EXPORTED_SECRET" "${%s:-}"
+    run: printf '%%s|%%s' "$EXPORTED_SECRET" "${%s:-}"
     output: RESULT
 `, scheduledAt.Format(time.RFC3339), rawVar, rawVar)
 	require.NoError(t, os.WriteFile(filepath.Join(dagsDir, "one-off-env-secret-test.yaml"), []byte(dagContent), 0644))
@@ -172,56 +162,19 @@ steps:
 	ctx, cancel := context.WithCancel(th.Context)
 	defer cancel()
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- sc.Start(ctx)
-	}()
+	h := intgharness.New(t, th.Helper)
+	probe := h.StartScheduler(ctx, sc, th.EntryReader)
 
-	var schedulerErr error
-	var schedulerStopped bool
-	pollSchedulerErr := func() error {
-		if schedulerStopped {
-			return schedulerErr
-		}
-		select {
-		case err := <-errCh:
-			schedulerStopped = true
-			if err == nil {
-				err = errors.New("scheduler exited unexpectedly before test completed")
-			}
-			schedulerErr = err
-		default:
-		}
-		return schedulerErr
-	}
-
-	require.Eventually(t, func() bool {
-		if err := pollSchedulerErr(); err != nil {
-			return true
-		}
+	probe.RequireEventually("expected one-off env secret run to succeed", 30*time.Second, func() bool {
 		statuses := th.DAGRunMgr.ListRecentStatus(th.Context, dag.Name, 5)
 		return len(statuses) > 0 && statuses[0].Status == core.Succeeded
-	}, 10*time.Second, 100*time.Millisecond)
-	require.NoError(t, schedulerErr)
+	})
 
 	status, err := th.DAGRunMgr.GetLatestStatus(th.Context, dag)
 	require.NoError(t, err)
 	require.Equal(t, core.Succeeded, status.Status)
 	require.Equal(t, core.TriggerTypeScheduler, status.TriggerType)
-	require.Equal(t, "from-host|", test.StatusOutputValue(t, &status, "RESULT"))
+	require.Equal(t, masking.DefaultMaskString+"|", test.StatusOutputValue(t, &status, "RESULT"))
 
-	sc.Stop(context.Background())
-	cancel()
-
-	if !schedulerStopped {
-		select {
-		case err = <-errCh:
-			require.True(t,
-				err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded),
-				"unexpected scheduler shutdown error: %v", err,
-			)
-		case <-time.After(5 * time.Second):
-			t.Fatal("scheduler did not stop within 5 seconds")
-		}
-	}
+	probe.Stop(context.Background(), cancel, 5*time.Second)
 }

@@ -5,7 +5,10 @@ package auth
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -20,20 +23,26 @@ import (
 
 // Service errors.
 var (
-	ErrInvalidCredentials   = errors.New("invalid username or password")
-	ErrInvalidToken         = errors.New("invalid or expired token")
-	ErrTokenExpired         = errors.New("token has expired")
-	ErrMissingSecret        = errors.New("token secret is not configured")
-	ErrPasswordMismatch     = errors.New("current password is incorrect")
-	ErrWeakPassword         = errors.New("password does not meet requirements")
-	ErrCannotDeleteSelf     = errors.New("cannot delete your own account")
-	ErrInvalidAPIKey        = errors.New("invalid API key")
-	ErrAPIKeyNotConfigured  = errors.New("API key management is not configured")
-	ErrInvalidCreatorID     = errors.New("creator ID is required")
-	ErrInvalidWebhookToken  = errors.New("invalid webhook token")
-	ErrWebhookNotConfigured = errors.New("webhook management is not configured")
-	ErrWebhookDisabled      = errors.New("webhook is disabled")
-	ErrUserDisabled         = errors.New("your account has been disabled, contact administrator")
+	ErrInvalidCredentials                = errors.New("invalid username or password")
+	ErrInvalidToken                      = errors.New("invalid or expired token")
+	ErrTokenExpired                      = errors.New("token has expired")
+	ErrMissingSecret                     = errors.New("token secret is not configured")
+	ErrPasswordMismatch                  = errors.New("current password is incorrect")
+	ErrWeakPassword                      = errors.New("password does not meet requirements")
+	ErrCannotDeleteSelf                  = errors.New("cannot delete your own account")
+	ErrInvalidAPIKey                     = errors.New("invalid API key")
+	ErrAPIKeyNotConfigured               = errors.New("API key management is not configured")
+	ErrInvalidCreatorID                  = errors.New("creator ID is required")
+	ErrInvalidWebhookToken               = errors.New("invalid webhook token")
+	ErrWebhookNotConfigured              = errors.New("webhook management is not configured")
+	ErrWebhookDisabled                   = errors.New("webhook is disabled")
+	ErrInvalidWebhookAuthMode            = errors.New("invalid webhook auth mode")
+	ErrInvalidWebhookHMACEnforcementMode = errors.New("invalid webhook HMAC enforcement mode")
+	ErrWebhookHMACNotSupported           = errors.New("webhook HMAC is not supported by this store")
+	ErrMissingWebhookHMACSignature       = errors.New("missing webhook HMAC signature")
+	ErrInvalidWebhookHMACSignature       = errors.New("invalid webhook HMAC signature")
+	ErrWebhookHMACNotConfigured          = errors.New("webhook HMAC is not configured")
+	ErrUserDisabled                      = errors.New("your account has been disabled, contact administrator")
 )
 
 const (
@@ -56,6 +65,8 @@ const (
 	// webhookTokenPrefixLength is how many characters of the full token we persist.
 	// Must be > len(webhookTokenPrefix) so the stored prefix includes random characters.
 	webhookTokenPrefixLength = 12
+	// webhookHMACSecretRandomBytes is the number of random bytes for HMAC secret generation.
+	webhookHMACSecretRandomBytes = 32
 )
 
 // Config holds the configuration for the auth service.
@@ -74,6 +85,10 @@ type Claims struct {
 	UserID   string    `json:"uid"`
 	Username string    `json:"username"`
 	Role     auth.Role `json:"role"`
+	// PasswordChangedAt is the Unix nanosecond timestamp of the user's last password
+	// change at token issuance. Zero means the user had never changed their password.
+	// Tokens issued before a subsequent password change are rejected.
+	PasswordChangedAt int64 `json:"pwd_changed_at_ns,omitempty"`
 }
 
 // Service provides authentication and user management functionality.
@@ -167,15 +182,20 @@ func (s *Service) GenerateToken(user *auth.User) (*TokenResult, error) {
 
 	now := time.Now()
 	expiresAt := now.Add(s.config.TokenTTL)
+	var pwdChangedAt int64
+	if user.PasswordChangedAt != nil {
+		pwdChangedAt = user.PasswordChangedAt.UnixNano()
+	}
 	claims := &Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   user.ID,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
-		UserID:   user.ID,
-		Username: user.Username,
-		Role:     user.Role,
+		UserID:            user.ID,
+		Username:          user.Username,
+		Role:              user.Role,
+		PasswordChangedAt: pwdChangedAt,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -239,14 +259,24 @@ func (s *Service) GetUserFromToken(ctx context.Context, tokenString string) (*au
 		return nil, ErrUserDisabled
 	}
 
+	// Reject tokens issued before the user's last password change.
+	// Zero claim (old tokens without the field) maps to epoch and is treated
+	// as "before any real password change", so changing password invalidates them.
+	if user.PasswordChangedAt != nil {
+		if claims.PasswordChangedAt < user.PasswordChangedAt.UnixNano() {
+			return nil, ErrInvalidToken
+		}
+	}
+
 	return user, nil
 }
 
 // CreateUserInput contains the input for creating a user.
 type CreateUserInput struct {
-	Username string
-	Password string
-	Role     auth.Role
+	Username        string
+	Password        string
+	Role            auth.Role
+	WorkspaceAccess *auth.WorkspaceAccess
 }
 
 // CreateUser creates a new user.
@@ -258,6 +288,9 @@ func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (*auth.
 	if !input.Role.Valid() {
 		return nil, fmt.Errorf("invalid role: %s", input.Role)
 	}
+	if err := auth.ValidateWorkspaceAccess(input.Role, input.WorkspaceAccess, nil); err != nil {
+		return nil, err
+	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(input.Password), s.config.BcryptCost)
 	if err != nil {
@@ -265,6 +298,7 @@ func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (*auth.
 	}
 
 	user := auth.NewUser(input.Username, string(passwordHash), input.Role)
+	user.WorkspaceAccess = auth.CloneWorkspaceAccess(input.WorkspaceAccess)
 	if err := s.store.Create(ctx, user); err != nil {
 		return nil, err
 	}
@@ -287,10 +321,11 @@ func (s *Service) ListUsers(ctx context.Context) ([]*auth.User, error) {
 // but the API handler intentionally omits it - password changes should
 // go through ChangePassword (user self-service) or ResetPassword (admin).
 type UpdateUserInput struct {
-	Username   *string
-	Role       *auth.Role
-	Password   *string
-	IsDisabled *bool
+	Username        *string
+	Role            *auth.Role
+	WorkspaceAccess *auth.WorkspaceAccess
+	Password        *string
+	IsDisabled      *bool
 }
 
 // UpdateUser updates an existing user.
@@ -311,6 +346,16 @@ func (s *Service) UpdateUser(ctx context.Context, id string, input UpdateUserInp
 		user.Role = *input.Role
 	}
 
+	if input.WorkspaceAccess != nil {
+		user.WorkspaceAccess = auth.CloneWorkspaceAccess(input.WorkspaceAccess)
+	}
+
+	if err := auth.ValidateWorkspaceAccess(user.Role, user.WorkspaceAccess, nil); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+
 	if input.Password != nil && *input.Password != "" {
 		if err := s.validatePassword(*input.Password); err != nil {
 			return nil, err
@@ -320,13 +365,14 @@ func (s *Service) UpdateUser(ctx context.Context, id string, input UpdateUserInp
 			return nil, fmt.Errorf("failed to hash password: %w", err)
 		}
 		user.PasswordHash = string(passwordHash)
+		user.PasswordChangedAt = &now
 	}
 
 	if input.IsDisabled != nil {
 		user.IsDisabled = *input.IsDisabled
 	}
 
-	user.UpdatedAt = time.Now().UTC()
+	user.UpdatedAt = now
 
 	if err := s.store.Update(ctx, user); err != nil {
 		return nil, err
@@ -367,8 +413,10 @@ func (s *Service) ChangePassword(ctx context.Context, userID, oldPassword, newPa
 		return fmt.Errorf("failed to hash password: %w", err)
 	}
 
+	now := time.Now().UTC()
 	user.PasswordHash = string(passwordHash)
-	user.UpdatedAt = time.Now().UTC()
+	user.PasswordChangedAt = &now
+	user.UpdatedAt = now
 
 	return s.store.Update(ctx, user)
 }
@@ -391,8 +439,10 @@ func (s *Service) ResetPassword(ctx context.Context, userID, newPassword string)
 		return fmt.Errorf("failed to hash password: %w", err)
 	}
 
+	now := time.Now().UTC()
 	user.PasswordHash = string(passwordHash)
-	user.UpdatedAt = time.Now().UTC()
+	user.PasswordChangedAt = &now
+	user.UpdatedAt = now
 
 	return s.store.Update(ctx, user)
 }
@@ -412,9 +462,14 @@ func (s *Service) validatePassword(password string) error {
 
 // CreateAPIKeyInput contains the input for creating an API key.
 type CreateAPIKeyInput struct {
-	Name        string
-	Description string
-	Role        auth.Role
+	Name               string
+	Description        string
+	Role               auth.Role
+	WorkspaceAccess    *auth.WorkspaceAccess
+	AllowedSurfaces    []auth.APIKeySurface
+	AttributionClass   auth.APIKeyAttributionClass
+	OwnerUserID        string
+	ServiceAccountName string
 }
 
 // CreateAPIKeyResult contains the result of creating an API key.
@@ -436,6 +491,9 @@ func (s *Service) CreateAPIKey(ctx context.Context, input CreateAPIKeyInput, cre
 	if !input.Role.Valid() {
 		return nil, fmt.Errorf("invalid role: %s", input.Role)
 	}
+	if err := auth.ValidateWorkspaceAccess(input.Role, input.WorkspaceAccess, nil); err != nil {
+		return nil, err
+	}
 
 	if creatorID == "" {
 		return nil, ErrInvalidCreatorID
@@ -449,6 +507,10 @@ func (s *Service) CreateAPIKey(ctx context.Context, input CreateAPIKeyInput, cre
 
 	apiKey, err := auth.NewAPIKey(input.Name, input.Description, input.Role, keyParts.keyHash, keyParts.keyPrefix, creatorID)
 	if err != nil {
+		return nil, err
+	}
+	apiKey.WorkspaceAccess = auth.CloneWorkspaceAccess(input.WorkspaceAccess)
+	if err := s.applyAPIKeyCreateMetadata(ctx, apiKey, input); err != nil {
 		return nil, err
 	}
 	if err := s.apiKeyStore.Create(ctx, apiKey); err != nil {
@@ -517,9 +579,14 @@ func (s *Service) ListAPIKeys(ctx context.Context) ([]*auth.APIKey, error) {
 
 // UpdateAPIKeyInput contains the input for updating an API key.
 type UpdateAPIKeyInput struct {
-	Name        *string
-	Description *string
-	Role        *auth.Role
+	Name               *string
+	Description        *string
+	Role               *auth.Role
+	WorkspaceAccess    *auth.WorkspaceAccess
+	AllowedSurfaces    *[]auth.APIKeySurface
+	AttributionClass   *auth.APIKeyAttributionClass
+	OwnerUserID        *string
+	ServiceAccountName *string
 }
 
 // UpdateAPIKey updates an existing API key.
@@ -546,6 +613,32 @@ func (s *Service) UpdateAPIKey(ctx context.Context, id string, input UpdateAPIKe
 			return nil, fmt.Errorf("invalid role: %s", *input.Role)
 		}
 		apiKey.Role = *input.Role
+	}
+
+	if input.WorkspaceAccess != nil {
+		apiKey.WorkspaceAccess = auth.CloneWorkspaceAccess(input.WorkspaceAccess)
+	}
+	if input.AllowedSurfaces != nil {
+		if err := validateAPIKeySurfaces(*input.AllowedSurfaces); err != nil {
+			return nil, err
+		}
+		apiKey.AllowedSurfaces = auth.CloneAPIKeySurfaces(*input.AllowedSurfaces)
+	}
+	if input.AttributionClass != nil {
+		apiKey.AttributionClass = *input.AttributionClass
+	}
+	if input.OwnerUserID != nil {
+		apiKey.OwnerUserID = *input.OwnerUserID
+	}
+	if input.ServiceAccountName != nil {
+		apiKey.ServiceAccountName = *input.ServiceAccountName
+	}
+	if err := s.applyAPIKeyUpdateMetadata(ctx, apiKey); err != nil {
+		return nil, err
+	}
+
+	if err := auth.ValidateWorkspaceAccess(apiKey.Role, apiKey.WorkspaceAccess, nil); err != nil {
+		return nil, err
 	}
 
 	apiKey.UpdatedAt = time.Now().UTC()
@@ -593,6 +686,10 @@ func (s *Service) ValidateAPIKey(ctx context.Context, keySecret string) (*auth.A
 			continue
 		}
 		if err := bcrypt.CompareHashAndPassword([]byte(key.KeyHash), []byte(keySecret)); err == nil {
+			key = auth.NormalizeAPIKeyMetadata(key)
+			if err := s.validateAPIKeyOwner(ctx, key); err != nil {
+				return nil, err
+			}
 			// Update last used timestamp synchronously.
 			// This avoids goroutine leaks and race conditions with Delete.
 			if err := s.apiKeyStore.UpdateLastUsed(ctx, key.ID); err != nil {
@@ -603,6 +700,83 @@ func (s *Service) ValidateAPIKey(ctx context.Context, keySecret string) (*auth.A
 	}
 
 	return nil, ErrInvalidAPIKey
+}
+
+func (s *Service) applyAPIKeyCreateMetadata(ctx context.Context, key *auth.APIKey, input CreateAPIKeyInput) error {
+	if err := validateAPIKeySurfaces(input.AllowedSurfaces); err != nil {
+		return err
+	}
+	key.AllowedSurfaces = auth.CloneAPIKeySurfaces(input.AllowedSurfaces)
+	if input.AttributionClass == "" {
+		input.AttributionClass = auth.APIKeyAttributionServiceAccount
+	}
+	key.AttributionClass = input.AttributionClass
+	key.OwnerUserID = input.OwnerUserID
+	key.ServiceAccountName = input.ServiceAccountName
+	return s.applyAPIKeyUpdateMetadata(ctx, key)
+}
+
+func (s *Service) applyAPIKeyUpdateMetadata(ctx context.Context, key *auth.APIKey) error {
+	if key == nil {
+		return auth.ErrInvalidAPIKeyAttribution
+	}
+	key.AllowedSurfaces = auth.CloneAPIKeySurfaces(key.AllowedSurfaces)
+	switch key.AttributionClass {
+	case "", auth.APIKeyAttributionServiceAccount:
+		key.AttributionClass = auth.APIKeyAttributionServiceAccount
+		key.OwnerUserID = ""
+		key.OwnerUsername = ""
+		if strings.TrimSpace(key.ServiceAccountName) == "" {
+			key.ServiceAccountName = key.Name
+		}
+		key.ServiceAccountID = ""
+		normalized := auth.NormalizeAPIKeyMetadata(key)
+		key.ServiceAccountID = normalized.ServiceAccountID
+		key.ServiceAccountName = normalized.ServiceAccountName
+	case auth.APIKeyAttributionUserOwned:
+		if strings.TrimSpace(key.OwnerUserID) == "" {
+			return auth.ErrInvalidAPIKeyAttribution
+		}
+		if s.store == nil {
+			return auth.ErrInvalidAPIKeyAttribution
+		}
+		owner, err := s.store.GetByID(ctx, key.OwnerUserID)
+		if err != nil || owner == nil || owner.IsDisabled {
+			return auth.ErrInvalidAPIKeyAttribution
+		}
+		key.OwnerUsername = owner.Username
+		key.ServiceAccountID = ""
+		key.ServiceAccountName = ""
+	default:
+		return auth.ErrInvalidAPIKeyAttribution
+	}
+	return nil
+}
+
+func (s *Service) validateAPIKeyOwner(ctx context.Context, key *auth.APIKey) error {
+	if key == nil || key.AttributionClass != auth.APIKeyAttributionUserOwned {
+		return nil
+	}
+	if strings.TrimSpace(key.OwnerUserID) == "" {
+		return ErrInvalidAPIKey
+	}
+	if s.store == nil {
+		return ErrInvalidAPIKey
+	}
+	owner, err := s.store.GetByID(ctx, key.OwnerUserID)
+	if err != nil || owner == nil || owner.IsDisabled {
+		return ErrInvalidAPIKey
+	}
+	return nil
+}
+
+func validateAPIKeySurfaces(surfaces []auth.APIKeySurface) error {
+	for _, surface := range surfaces {
+		if !auth.ValidAPIKeySurface(surface) {
+			return auth.ErrInvalidAPIKeySurface
+		}
+	}
+	return nil
 }
 
 // HasAPIKeyStore returns true if API key management is configured.
@@ -619,6 +793,12 @@ func (s *Service) HasWebhookStore() bool {
 type CreateWebhookResult struct {
 	Webhook   *auth.Webhook
 	FullToken string // Only returned once at creation
+}
+
+// WebhookHMACSecretResult contains the result of enabling or rotating HMAC.
+type WebhookHMACSecretResult struct {
+	Webhook    *auth.Webhook
+	FullSecret string // Only returned once at creation or rotation
 }
 
 // CreateWebhook creates a new webhook for a DAG.
@@ -694,12 +874,32 @@ func generateWebhookToken(bcryptCost int) (*webhookTokenParts, error) {
 	}, nil
 }
 
+func generateWebhookHMACSecret() (string, error) {
+	randomBytes := make([]byte, webhookHMACSecretRandomBytes)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", fmt.Errorf("failed to generate random bytes: %w", err)
+	}
+
+	return stringutil.Base58Encode(randomBytes), nil
+}
+
+func mapWebhookHMACCapabilityError(err error) error {
+	if errors.Is(err, auth.ErrWebhookHMACEncryptorRequired) {
+		return ErrWebhookHMACNotSupported
+	}
+	return err
+}
+
 // GetWebhookByDAGName retrieves the webhook for a specific DAG.
 func (s *Service) GetWebhookByDAGName(ctx context.Context, dagName string) (*auth.Webhook, error) {
 	if s.webhookStore == nil {
 		return nil, ErrWebhookNotConfigured
 	}
-	return s.webhookStore.GetByDAGName(ctx, dagName)
+	webhook, err := s.webhookStore.GetByDAGName(ctx, dagName)
+	if err != nil {
+		return nil, mapWebhookHMACCapabilityError(err)
+	}
+	return webhook, nil
 }
 
 // ListWebhooks returns all webhooks.
@@ -725,7 +925,7 @@ func (s *Service) RegenerateWebhookToken(ctx context.Context, dagName string) (*
 		return nil, ErrWebhookNotConfigured
 	}
 
-	webhook, err := s.webhookStore.GetByDAGName(ctx, dagName)
+	webhook, err := s.GetWebhookByDAGName(ctx, dagName)
 	if err != nil {
 		return nil, err
 	}
@@ -757,7 +957,7 @@ func (s *Service) ToggleWebhook(ctx context.Context, dagName string, enabled boo
 		return nil, ErrWebhookNotConfigured
 	}
 
-	webhook, err := s.webhookStore.GetByDAGName(ctx, dagName)
+	webhook, err := s.GetWebhookByDAGName(ctx, dagName)
 	if err != nil {
 		return nil, err
 	}
@@ -772,6 +972,159 @@ func (s *Service) ToggleWebhook(ctx context.Context, dagName string, enabled boo
 	return webhook, nil
 }
 
+// EnableWebhookHMAC configures HMAC auth for an existing webhook and returns
+// the generated secret exactly once.
+func (s *Service) EnableWebhookHMAC(
+	ctx context.Context,
+	dagName string,
+	authMode auth.WebhookAuthMode,
+	enforcementMode auth.WebhookHMACEnforcementMode,
+) (*WebhookHMACSecretResult, error) {
+	if s.webhookStore == nil {
+		return nil, ErrWebhookNotConfigured
+	}
+	if authMode == auth.WebhookAuthModeTokenOnly {
+		return nil, ErrInvalidWebhookAuthMode
+	}
+
+	enforcementMode, err := validateWebhookHMACMode(authMode, enforcementMode)
+	if err != nil {
+		return nil, err
+	}
+
+	webhook, err := s.GetWebhookByDAGName(ctx, dagName)
+	if err != nil {
+		return nil, err
+	}
+
+	fullSecret, err := generateWebhookHMACSecret()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate webhook HMAC secret: %w", err)
+	}
+
+	now := time.Now().UTC()
+	webhook.AuthMode = authMode
+	webhook.HMACEnforcementMode = enforcementMode
+	webhook.HMACSecret = fullSecret
+	webhook.HMACSecretGeneratedAt = &now
+	webhook.UpdatedAt = now
+
+	if err := s.webhookStore.Update(ctx, webhook); err != nil {
+		if errors.Is(err, auth.ErrWebhookHMACEncryptorRequired) {
+			return nil, ErrWebhookHMACNotSupported
+		}
+		return nil, err
+	}
+
+	return &WebhookHMACSecretResult{
+		Webhook:    webhook,
+		FullSecret: fullSecret,
+	}, nil
+}
+
+// ConfigureWebhookHMAC updates HMAC auth mode or enforcement without rotating the secret.
+func (s *Service) ConfigureWebhookHMAC(
+	ctx context.Context,
+	dagName string,
+	authMode auth.WebhookAuthMode,
+	enforcementMode auth.WebhookHMACEnforcementMode,
+) (*auth.Webhook, error) {
+	if s.webhookStore == nil {
+		return nil, ErrWebhookNotConfigured
+	}
+	if authMode == auth.WebhookAuthModeTokenOnly {
+		return nil, ErrInvalidWebhookAuthMode
+	}
+
+	webhook, err := s.GetWebhookByDAGName(ctx, dagName)
+	if err != nil {
+		return nil, err
+	}
+	if webhook.HMACSecret == "" {
+		return nil, ErrWebhookHMACNotConfigured
+	}
+
+	enforcementMode, err = normalizeWebhookHMACModeForConfigure(webhook, authMode, enforcementMode)
+	if err != nil {
+		return nil, err
+	}
+
+	webhook.AuthMode = authMode
+	webhook.HMACEnforcementMode = enforcementMode
+	webhook.UpdatedAt = time.Now().UTC()
+
+	if err := s.webhookStore.Update(ctx, webhook); err != nil {
+		if errors.Is(err, auth.ErrWebhookHMACEncryptorRequired) {
+			return nil, ErrWebhookHMACNotSupported
+		}
+		return nil, err
+	}
+
+	return webhook, nil
+}
+
+// DisableWebhookHMAC removes HMAC auth from the webhook and returns it to token-only mode.
+func (s *Service) DisableWebhookHMAC(ctx context.Context, dagName string) (*auth.Webhook, error) {
+	if s.webhookStore == nil {
+		return nil, ErrWebhookNotConfigured
+	}
+
+	webhook, err := s.GetWebhookByDAGName(ctx, dagName)
+	if err != nil {
+		return nil, err
+	}
+
+	webhook.AuthMode = auth.WebhookAuthModeTokenOnly
+	webhook.HMACEnforcementMode = ""
+	webhook.HMACSecret = ""
+	webhook.HMACSecretGeneratedAt = nil
+	webhook.UpdatedAt = time.Now().UTC()
+
+	if err := s.webhookStore.Update(ctx, webhook); err != nil {
+		return nil, err
+	}
+
+	return webhook, nil
+}
+
+// RegenerateWebhookHMACSecret rotates the HMAC secret immediately and returns the
+// new secret exactly once.
+func (s *Service) RegenerateWebhookHMACSecret(ctx context.Context, dagName string) (*WebhookHMACSecretResult, error) {
+	if s.webhookStore == nil {
+		return nil, ErrWebhookNotConfigured
+	}
+
+	webhook, err := s.GetWebhookByDAGName(ctx, dagName)
+	if err != nil {
+		return nil, err
+	}
+	if !webhook.HMACEnabled() {
+		return nil, ErrWebhookHMACNotConfigured
+	}
+
+	fullSecret, err := generateWebhookHMACSecret()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate webhook HMAC secret: %w", err)
+	}
+
+	now := time.Now().UTC()
+	webhook.HMACSecret = fullSecret
+	webhook.HMACSecretGeneratedAt = &now
+	webhook.UpdatedAt = now
+
+	if err := s.webhookStore.Update(ctx, webhook); err != nil {
+		if errors.Is(err, auth.ErrWebhookHMACEncryptorRequired) {
+			return nil, ErrWebhookHMACNotSupported
+		}
+		return nil, err
+	}
+
+	return &WebhookHMACSecretResult{
+		Webhook:    webhook,
+		FullSecret: fullSecret,
+	}, nil
+}
+
 // ValidateWebhookToken validates a webhook token for a specific DAG.
 // Returns the webhook if valid and enabled.
 func (s *Service) ValidateWebhookToken(ctx context.Context, dagName, token string) (*auth.Webhook, error) {
@@ -784,7 +1137,7 @@ func (s *Service) ValidateWebhookToken(ctx context.Context, dagName, token strin
 		return nil, ErrInvalidWebhookToken
 	}
 
-	webhook, err := s.webhookStore.GetByDAGName(ctx, dagName)
+	webhook, err := s.GetWebhookByDAGName(ctx, dagName)
 	if err != nil {
 		if errors.Is(err, auth.ErrWebhookNotFound) {
 			return nil, ErrInvalidWebhookToken
@@ -792,8 +1145,7 @@ func (s *Service) ValidateWebhookToken(ctx context.Context, dagName, token strin
 		return nil, err
 	}
 
-	// Validate token hash
-	if err := bcrypt.CompareHashAndPassword([]byte(webhook.TokenHash), []byte(token)); err != nil {
+	if err := validateWebhookTokenAgainst(webhook, token); err != nil {
 		return nil, ErrInvalidWebhookToken
 	}
 
@@ -808,4 +1160,142 @@ func (s *Service) ValidateWebhookToken(ctx context.Context, dagName, token strin
 	}
 
 	return webhook, nil
+}
+
+// AuthorizeWebhookRequest validates the request according to the webhook's auth mode.
+func (s *Service) AuthorizeWebhookRequest(
+	ctx context.Context,
+	dagName, token, signature string,
+	body []byte,
+) (*auth.Webhook, error) {
+	if s.webhookStore == nil {
+		return nil, ErrWebhookNotConfigured
+	}
+
+	webhook, err := s.GetWebhookByDAGName(ctx, dagName)
+	if err != nil {
+		if errors.Is(err, auth.ErrWebhookNotFound) {
+			return nil, ErrInvalidWebhookToken
+		}
+		return nil, err
+	}
+	if !webhook.Enabled {
+		return nil, ErrWebhookDisabled
+	}
+
+	switch webhook.EffectiveAuthMode() {
+	case auth.WebhookAuthModeTokenOnly:
+		if err := validateWebhookTokenAgainst(webhook, token); err != nil {
+			return nil, err
+		}
+	case auth.WebhookAuthModeTokenAndHMAC:
+		if err := validateWebhookTokenAgainst(webhook, token); err != nil {
+			return nil, err
+		}
+		if webhook.HMACEnforcementMode == auth.WebhookHMACEnforcementModeObserve {
+			if err := validateWebhookHMACSignature(webhook, signature, body); err != nil {
+				slog.Warn("webhook HMAC validation observed failure",
+					"dagName", webhook.DAGName,
+					"error", err,
+				)
+			}
+		} else if err := validateWebhookHMACSignature(webhook, signature, body); err != nil {
+			return nil, err
+		}
+	case auth.WebhookAuthModeHMACOnly:
+		if err := validateWebhookHMACSignature(webhook, signature, body); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, ErrInvalidWebhookAuthMode
+	}
+
+	if err := s.webhookStore.UpdateLastUsed(ctx, webhook.ID); err != nil {
+		slog.Error("failed to update webhook last used timestamp", "webhookID", webhook.ID, "error", err)
+	}
+
+	return webhook, nil
+}
+
+func validateWebhookHMACMode(
+	authMode auth.WebhookAuthMode,
+	enforcementMode auth.WebhookHMACEnforcementMode,
+) (auth.WebhookHMACEnforcementMode, error) {
+	switch authMode {
+	case auth.WebhookAuthModeTokenOnly:
+		return "", ErrInvalidWebhookAuthMode
+	case auth.WebhookAuthModeTokenAndHMAC:
+		if enforcementMode == "" {
+			return auth.WebhookHMACEnforcementModeStrict, nil
+		}
+		if enforcementMode != auth.WebhookHMACEnforcementModeStrict && enforcementMode != auth.WebhookHMACEnforcementModeObserve {
+			return "", ErrInvalidWebhookHMACEnforcementMode
+		}
+		return enforcementMode, nil
+	case auth.WebhookAuthModeHMACOnly:
+		if enforcementMode == "" || enforcementMode == auth.WebhookHMACEnforcementModeStrict {
+			return auth.WebhookHMACEnforcementModeStrict, nil
+		}
+		return "", ErrInvalidWebhookHMACEnforcementMode
+	default:
+		return "", ErrInvalidWebhookAuthMode
+	}
+}
+
+func normalizeWebhookHMACModeForConfigure(
+	webhook *auth.Webhook,
+	authMode auth.WebhookAuthMode,
+	enforcementMode auth.WebhookHMACEnforcementMode,
+) (auth.WebhookHMACEnforcementMode, error) {
+	if enforcementMode != "" {
+		return validateWebhookHMACMode(authMode, enforcementMode)
+	}
+	if authMode == auth.WebhookAuthModeHMACOnly {
+		return auth.WebhookHMACEnforcementModeStrict, nil
+	}
+
+	current := webhook.HMACEnforcementMode
+	if current == "" {
+		current = auth.WebhookHMACEnforcementModeStrict
+	}
+	return validateWebhookHMACMode(authMode, current)
+}
+
+func validateWebhookTokenAgainst(webhook *auth.Webhook, token string) error {
+	if !strings.HasPrefix(token, webhookTokenPrefix) {
+		return ErrInvalidWebhookToken
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(webhook.TokenHash), []byte(token)); err != nil {
+		return ErrInvalidWebhookToken
+	}
+	return nil
+}
+
+func validateWebhookHMACSignature(webhook *auth.Webhook, signature string, body []byte) error {
+	if webhook.HMACSecret == "" {
+		return ErrWebhookHMACNotConfigured
+	}
+	if signature == "" {
+		return ErrMissingWebhookHMACSignature
+	}
+
+	providedHex, found := strings.CutPrefix(signature, "sha256=")
+	if !found || providedHex == "" {
+		return ErrInvalidWebhookHMACSignature
+	}
+
+	provided, err := hex.DecodeString(providedHex)
+	if err != nil {
+		return ErrInvalidWebhookHMACSignature
+	}
+
+	mac := hmac.New(sha256.New, []byte(webhook.HMACSecret))
+	_, _ = mac.Write(body)
+	expected := mac.Sum(nil)
+
+	if !hmac.Equal(expected, provided) {
+		return ErrInvalidWebhookHMACSignature
+	}
+
+	return nil
 }

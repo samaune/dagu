@@ -10,6 +10,7 @@ import (
 
 	"github.com/dagucloud/dagu/api/v1"
 	"github.com/dagucloud/dagu/internal/cmn/config"
+	"github.com/dagucloud/dagu/internal/license"
 	"github.com/dagucloud/dagu/internal/service/frontend"
 	"github.com/dagucloud/dagu/internal/test"
 	"github.com/stretchr/testify/assert"
@@ -30,13 +31,16 @@ func getAdminToken(t *testing.T, server test.Server) string {
 	return loginResult.Token
 }
 
-func setupBuiltinAuthServer(t *testing.T) test.Server {
+func setupBuiltinAuthServer(t *testing.T, configMutators ...func(*config.Config)) test.Server {
 	t.Helper()
 	server := test.SetupServer(t,
 		test.WithConfigMutator(func(cfg *config.Config) {
 			cfg.Server.Auth.Mode = config.AuthModeBuiltin
 			cfg.Server.Auth.Builtin.Token.Secret = "jwt-secret-key"
 			cfg.Server.Auth.Builtin.Token.TTL = 24 * time.Hour
+			for _, mutate := range configMutators {
+				mutate(cfg)
+			}
 		}),
 		test.WithServerOptions(frontend.WithLicenseManager(defaultTestLicenseManager())),
 	)
@@ -48,6 +52,62 @@ func setupBuiltinAuthServer(t *testing.T) test.Server {
 	}).ExpectStatus(http.StatusOK).Send(t)
 
 	return server
+}
+
+func setupBuiltinAuthCommunityServer(t *testing.T) test.Server {
+	t.Helper()
+	return setupBuiltinAuthTestServer(t)
+}
+
+func setupBuiltinAuthExpiredLicenseServer(t *testing.T) test.Server {
+	t.Helper()
+	return setupBuiltinAuthTestServer(t, frontend.WithLicenseManager(license.NewExpiredTestManager()))
+}
+
+func setupBuiltinAuthTestServer(t *testing.T, opts ...frontend.ServerOption) test.Server {
+	t.Helper()
+	server := test.SetupServer(t,
+		test.WithConfigMutator(func(cfg *config.Config) {
+			cfg.Server.Auth.Mode = config.AuthModeBuiltin
+			cfg.Server.Auth.Builtin.Token.Secret = "jwt-secret-key"
+			cfg.Server.Auth.Builtin.Token.TTL = 24 * time.Hour
+		}),
+		test.WithServerOptions(opts...),
+	)
+
+	// Create admin via setup endpoint
+	server.Client().Post("/api/v1/auth/setup", api.SetupRequest{
+		Username: "admin",
+		Password: "adminpass",
+	}).ExpectStatus(http.StatusOK).Send(t)
+
+	return server
+}
+
+func newCreateAPIKeyRequest(name string, role api.UserRole) api.CreateAPIKeyRequest {
+	return api.CreateAPIKeyRequest{
+		Name: name,
+		Role: role,
+		AllowedSurfaces: []api.CreateAPIKeyRequestAllowedSurfaces{
+			api.CreateAPIKeyRequestAllowedSurfacesRestApi,
+			api.CreateAPIKeyRequestAllowedSurfacesMcp,
+		},
+		AttributionClass: api.CreateAPIKeyRequestAttributionClassServiceAccount,
+	}
+}
+
+func createAPIKeyForRole(t *testing.T, server test.Server, adminToken, name string, role api.UserRole) string {
+	t.Helper()
+
+	resp := server.Client().Post("/api/v1/api-keys", newCreateAPIKeyRequest(name, role)).
+		WithBearerToken(adminToken).
+		ExpectStatus(http.StatusCreated).
+		Send(t)
+
+	var result api.CreateAPIKeyResponse
+	resp.Unmarshal(t, &result)
+	require.NotEmpty(t, result.Key)
+	return result.Key
 }
 
 // TestAPIKeys_ListEmpty tests listing API keys when none exist
@@ -74,10 +134,8 @@ func TestAPIKeys_RequiresAuth(t *testing.T) {
 	server.Client().Get("/api/v1/api-keys").
 		ExpectStatus(http.StatusUnauthorized).Send(t)
 
-	server.Client().Post("/api/v1/api-keys", api.CreateAPIKeyRequest{
-		Name: "test-key",
-		Role: api.UserRoleViewer,
-	}).ExpectStatus(http.StatusUnauthorized).Send(t)
+	server.Client().Post("/api/v1/api-keys", newCreateAPIKeyRequest("test-key", api.UserRoleViewer)).
+		ExpectStatus(http.StatusUnauthorized).Send(t)
 }
 
 // TestAPIKeys_RequiresAdmin tests that non-admin users cannot access API key endpoints
@@ -107,10 +165,8 @@ func TestAPIKeys_RequiresAdmin(t *testing.T) {
 		WithBearerToken(viewerLogin.Token).
 		ExpectStatus(http.StatusForbidden).Send(t)
 
-	server.Client().Post("/api/v1/api-keys", api.CreateAPIKeyRequest{
-		Name: "test-key",
-		Role: api.UserRoleViewer,
-	}).WithBearerToken(viewerLogin.Token).ExpectStatus(http.StatusForbidden).Send(t)
+	server.Client().Post("/api/v1/api-keys", newCreateAPIKeyRequest("test-key", api.UserRoleViewer)).
+		WithBearerToken(viewerLogin.Token).ExpectStatus(http.StatusForbidden).Send(t)
 }
 
 // TestAPIKeys_CRUD tests the full CRUD lifecycle of API keys
@@ -121,11 +177,10 @@ func TestAPIKeys_CRUD(t *testing.T) {
 
 	// Create an API key
 	description := "Test API key description"
-	createResp := server.Client().Post("/api/v1/api-keys", api.CreateAPIKeyRequest{
-		Name:        "my-test-key",
-		Description: &description,
-		Role:        api.UserRoleManager,
-	}).WithBearerToken(token).ExpectStatus(http.StatusCreated).Send(t)
+	createRequest := newCreateAPIKeyRequest("my-test-key", api.UserRoleManager)
+	createRequest.Description = &description
+	createResp := server.Client().Post("/api/v1/api-keys", createRequest).
+		WithBearerToken(token).ExpectStatus(http.StatusCreated).Send(t)
 
 	var createResult api.CreateAPIKeyResponse
 	createResp.Unmarshal(t, &createResult)
@@ -206,16 +261,64 @@ func TestAPIKeys_CreateDuplicate(t *testing.T) {
 	token := getAdminToken(t, server)
 
 	// Create first key
-	server.Client().Post("/api/v1/api-keys", api.CreateAPIKeyRequest{
-		Name: "duplicate-key",
-		Role: api.UserRoleViewer,
-	}).WithBearerToken(token).ExpectStatus(http.StatusCreated).Send(t)
+	server.Client().Post("/api/v1/api-keys", newCreateAPIKeyRequest("duplicate-key", api.UserRoleViewer)).
+		WithBearerToken(token).ExpectStatus(http.StatusCreated).Send(t)
 
 	// Try to create duplicate
-	server.Client().Post("/api/v1/api-keys", api.CreateAPIKeyRequest{
-		Name: "duplicate-key",
-		Role: api.UserRoleViewer,
-	}).WithBearerToken(token).ExpectStatus(http.StatusConflict).Send(t)
+	server.Client().Post("/api/v1/api-keys", newCreateAPIKeyRequest("duplicate-key", api.UserRoleViewer)).
+		WithBearerToken(token).ExpectStatus(http.StatusConflict).Send(t)
+}
+
+func TestAPIKeys_CreateCommunityLimit(t *testing.T) {
+	t.Parallel()
+	server := setupBuiltinAuthCommunityServer(t)
+	token := getAdminToken(t, server)
+
+	for _, name := range []string{"community-key-1", "community-key-2"} {
+		server.Client().Post("/api/v1/api-keys", newCreateAPIKeyRequest(name, api.UserRoleViewer)).
+			WithBearerToken(token).ExpectStatus(http.StatusCreated).Send(t)
+	}
+
+	resp := server.Client().Post("/api/v1/api-keys", newCreateAPIKeyRequest("community-key-3", api.UserRoleViewer)).
+		WithBearerToken(token).ExpectStatus(http.StatusForbidden).Send(t)
+
+	var errResp api.Error
+	resp.Unmarshal(t, &errResp)
+	assert.Equal(t, api.ErrorCodeForbidden, errResp.Code)
+	assert.Contains(t, errResp.Message, "Community edition supports up to 2 API keys")
+
+	listResp := server.Client().Get("/api/v1/api-keys").
+		WithBearerToken(token).
+		ExpectStatus(http.StatusOK).Send(t)
+
+	var listResult api.APIKeysListResponse
+	listResp.Unmarshal(t, &listResult)
+	assert.Len(t, listResult.ApiKeys, 2)
+}
+
+func TestAPIKeys_CreateExpiredLicenseUsesCommunityLimit(t *testing.T) {
+	t.Parallel()
+	server := setupBuiltinAuthExpiredLicenseServer(t)
+	token := getAdminToken(t, server)
+
+	for _, name := range []string{"expired-key-1", "expired-key-2"} {
+		server.Client().Post("/api/v1/api-keys", newCreateAPIKeyRequest(name, api.UserRoleViewer)).
+			WithBearerToken(token).ExpectStatus(http.StatusCreated).Send(t)
+	}
+
+	server.Client().Post("/api/v1/api-keys", newCreateAPIKeyRequest("expired-key-3", api.UserRoleViewer)).
+		WithBearerToken(token).ExpectStatus(http.StatusForbidden).Send(t)
+}
+
+func TestAPIKeys_CreateLicensedAllowsMoreThanCommunityLimit(t *testing.T) {
+	t.Parallel()
+	server := setupBuiltinAuthServer(t)
+	token := getAdminToken(t, server)
+
+	for _, name := range []string{"licensed-key-1", "licensed-key-2", "licensed-key-3"} {
+		server.Client().Post("/api/v1/api-keys", newCreateAPIKeyRequest(name, api.UserRoleViewer)).
+			WithBearerToken(token).ExpectStatus(http.StatusCreated).Send(t)
+	}
 }
 
 // TestAPIKeys_GetNotFound tests getting a non-existent API key
@@ -259,10 +362,8 @@ func TestAPIKeys_AuthenticateWithAPIKey(t *testing.T) {
 	token := getAdminToken(t, server)
 
 	// Create an API key with manager role
-	createResp := server.Client().Post("/api/v1/api-keys", api.CreateAPIKeyRequest{
-		Name: "auth-test-key",
-		Role: api.UserRoleManager,
-	}).WithBearerToken(token).ExpectStatus(http.StatusCreated).Send(t)
+	createResp := server.Client().Post("/api/v1/api-keys", newCreateAPIKeyRequest("auth-test-key", api.UserRoleManager)).
+		WithBearerToken(token).ExpectStatus(http.StatusCreated).Send(t)
 
 	var createResult api.CreateAPIKeyResponse
 	createResp.Unmarshal(t, &createResult)
@@ -278,7 +379,7 @@ func TestAPIKeys_AuthenticateWithAPIKey(t *testing.T) {
 	spec := `
 steps:
   - name: test
-    command: echo hello
+    run: echo hello
 `
 	server.Client().Post("/api/v1/dags", api.CreateNewDAGJSONRequestBody{
 		Name: "api_key_auth_test",
@@ -293,10 +394,8 @@ func TestAPIKeys_RoleEnforcement(t *testing.T) {
 	token := getAdminToken(t, server)
 
 	// Create an API key with viewer role
-	createResp := server.Client().Post("/api/v1/api-keys", api.CreateAPIKeyRequest{
-		Name: "viewer-key",
-		Role: api.UserRoleViewer,
-	}).WithBearerToken(token).ExpectStatus(http.StatusCreated).Send(t)
+	createResp := server.Client().Post("/api/v1/api-keys", newCreateAPIKeyRequest("viewer-key", api.UserRoleViewer)).
+		WithBearerToken(token).ExpectStatus(http.StatusCreated).Send(t)
 
 	var createResult api.CreateAPIKeyResponse
 	createResp.Unmarshal(t, &createResult)
@@ -312,7 +411,7 @@ func TestAPIKeys_RoleEnforcement(t *testing.T) {
 	spec := `
 steps:
   - name: test
-    command: echo hello
+    run: echo hello
 `
 	server.Client().Post("/api/v1/dags", api.CreateNewDAGJSONRequestBody{
 		Name: "viewer_test_dag",
@@ -334,8 +433,10 @@ func TestAPIKeys_InvalidRole(t *testing.T) {
 	// The schema validation should catch this at the server level
 	// We're using a valid role type but testing the handler's validation
 	server.Client().Post("/api/v1/api-keys", map[string]any{
-		"name": "invalid-role-key",
-		"role": "superadmin", // invalid role
+		"name":             "invalid-role-key",
+		"role":             "superadmin", // invalid role
+		"allowedSurfaces":  []string{"rest_api", "mcp"},
+		"attributionClass": "service_account",
 	}).WithBearerToken(token).ExpectStatus(http.StatusBadRequest).Send(t)
 }
 
@@ -347,11 +448,10 @@ func TestAPIKeys_PartialUpdate(t *testing.T) {
 
 	// Create an API key
 	description := "Original description"
-	createResp := server.Client().Post("/api/v1/api-keys", api.CreateAPIKeyRequest{
-		Name:        "partial-update-key",
-		Description: &description,
-		Role:        api.UserRoleViewer,
-	}).WithBearerToken(token).ExpectStatus(http.StatusCreated).Send(t)
+	createRequest := newCreateAPIKeyRequest("partial-update-key", api.UserRoleViewer)
+	createRequest.Description = &description
+	createResp := server.Client().Post("/api/v1/api-keys", createRequest).
+		WithBearerToken(token).ExpectStatus(http.StatusCreated).Send(t)
 
 	var createResult api.CreateAPIKeyResponse
 	createResp.Unmarshal(t, &createResult)
@@ -381,10 +481,8 @@ func TestAPIKeys_LastUsedAtUpdated(t *testing.T) {
 	token := getAdminToken(t, server)
 
 	// Create an API key
-	createResp := server.Client().Post("/api/v1/api-keys", api.CreateAPIKeyRequest{
-		Name: "lastused-test-key",
-		Role: api.UserRoleManager,
-	}).WithBearerToken(token).ExpectStatus(http.StatusCreated).Send(t)
+	createResp := server.Client().Post("/api/v1/api-keys", newCreateAPIKeyRequest("lastused-test-key", api.UserRoleManager)).
+		WithBearerToken(token).ExpectStatus(http.StatusCreated).Send(t)
 
 	var createResult api.CreateAPIKeyResponse
 	createResp.Unmarshal(t, &createResult)

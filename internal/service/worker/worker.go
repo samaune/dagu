@@ -46,7 +46,7 @@ type Worker struct {
 	stopCancel context.CancelFunc // Cancels the worker's internal context
 	stopDone   chan struct{}      // Signals when all goroutines have stopped
 
-	// For global PostgreSQL connection pool (shared-nothing mode)
+	// For global PostgreSQL connection pool
 	poolManager  *sql.GlobalPoolManager
 	healthServer *healthcheck.Server
 
@@ -59,7 +59,17 @@ type runningTaskState struct {
 	lastOwnerHeartbeatAt time.Time
 }
 
+// TaskHandler defines the interface for executing tasks.
+type TaskHandler interface {
+	Handle(ctx context.Context, task *coordinatorv1.Task) error
+}
+
 var errTaskClaimRejectedBeforeExecution = errors.New("task claim rejected before execution")
+
+const (
+	ownerRunHeartbeatCallTimeout = 10 * time.Second
+	ownerHeartbeatTimeout        = exec.DefaultStaleLeaseThreshold
+)
 
 // SetHandler sets a custom task executor for testing or custom execution logic
 func (w *Worker) SetHandler(executor TaskHandler) {
@@ -76,7 +86,13 @@ func (w *Worker) SetAfterTaskAckHook(hook func(context.Context, *coordinatorv1.T
 }
 
 // NewWorker creates a new worker instance.
-func NewWorker(workerID string, maxActiveRuns int, coordinatorClient coordinator.Client, labels map[string]string, cfg *config.Config) *Worker {
+func NewWorker(
+	workerID string,
+	maxActiveRuns int,
+	coordinatorClient coordinator.Client,
+	labels map[string]string,
+	cfg *config.Config,
+) *Worker {
 	// Generate default worker ID if not provided
 	if workerID == "" {
 		hostname, err := os.Hostname()
@@ -95,7 +111,6 @@ func NewWorker(workerID string, maxActiveRuns int, coordinatorClient coordinator
 		id:             workerID,
 		maxActiveRuns:  maxActiveRuns,
 		coordinatorCli: coordinatorClient,
-		handler:        NewTaskHandler(cfg),
 		labels:         labels,
 		cfg:            cfg,
 		runningTasks:   make(map[string]*runningTaskState),
@@ -111,14 +126,17 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 		tag.WorkerID(w.id),
 		tag.MaxConcurrency(w.maxActiveRuns))
 
+	if w.handler == nil {
+		return fmt.Errorf("worker task handler is not configured")
+	}
+
 	// Create an internal context that can be cancelled by Stop()
 	// This context is cancelled when either the parent context is done OR Stop() is called
 	internalCtx, cancel := context.WithCancel(ctx)
 	w.stopCancel = cancel
 	w.stopDone = make(chan struct{})
 
-	// Initialize global PostgreSQL pool manager if in shared-nothing mode
-	if w.isSharedNothingMode() {
+	if w.cfg != nil {
 		w.poolManager = sql.NewGlobalPoolManager(sql.GlobalPoolConfig{
 			MaxOpenConns:    w.cfg.Worker.PostgresPool.MaxOpenConns,
 			MaxIdleConns:    w.cfg.Worker.PostgresPool.MaxIdleConns,
@@ -247,6 +265,33 @@ func (w *Worker) Stop(ctx context.Context) error {
 	return err
 }
 
+// WaitReady blocks until the worker appears in coordinator registration.
+func (w *Worker) WaitReady(ctx context.Context) error {
+	if w == nil {
+		return fmt.Errorf("worker is not initialized")
+	}
+	if w.coordinatorCli == nil {
+		return fmt.Errorf("worker coordinator client is not configured")
+	}
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		workers, err := w.coordinatorCli.GetWorkers(ctx)
+		if err == nil {
+			for _, item := range workers {
+				if item != nil && item.WorkerId == w.id {
+					return nil
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for worker %q registration: %w", w.id, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
 // trackingHandler wraps a TaskHandler to track running task state
 type trackingHandler struct {
 	worker      *Worker
@@ -346,7 +391,7 @@ func (w *Worker) validateClaimedTask(ctx context.Context, owner exec.HostInfo, t
 		return false, nil
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	callCtx, cancel := context.WithTimeout(ctx, ownerRunHeartbeatCallTimeout)
 	resp, err := w.coordinatorCli.RunHeartbeatTo(callCtx, owner, &coordinatorv1.RunHeartbeatRequest{
 		WorkerId:           w.id,
 		OwnerCoordinatorId: owner.ID,
@@ -464,7 +509,7 @@ func (w *Worker) sendOwnerRunHeartbeats(ctx context.Context) {
 	w.pollersMu.Unlock()
 
 	for _, group := range groups {
-		callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		callCtx, cancel := context.WithTimeout(ctx, ownerRunHeartbeatCallTimeout)
 		resp, err := w.coordinatorCli.RunHeartbeatTo(callCtx, group.owner, &coordinatorv1.RunHeartbeatRequest{
 			WorkerId:           w.id,
 			OwnerCoordinatorId: group.owner.ID,
@@ -499,8 +544,6 @@ func (w *Worker) markOwnerHeartbeatSuccess(tasks []*coordinatorv1.RunningTask, o
 }
 
 func (w *Worker) cancelTasksForOwnerTimeout(ctx context.Context, owner exec.HostInfo, tasks []*coordinatorv1.RunningTask, lastSeen map[string]time.Time) {
-	const ownerHeartbeatTimeout = 15 * time.Second
-
 	now := time.Now().UTC()
 	var timedOut []*coordinatorv1.CancelledRun
 	for _, task := range tasks {
@@ -577,11 +620,4 @@ func (w *Worker) processCancellations(ctx context.Context, cancelledRuns []*coor
 			cancelFunc()
 		}
 	}
-}
-
-// isSharedNothingMode returns true if the worker is running in shared-nothing mode.
-// Shared-nothing mode is detected when static coordinator addresses are configured.
-// In shared-nothing mode, global PostgreSQL pool management is automatically enabled.
-func (w *Worker) isSharedNothingMode() bool {
-	return w.cfg != nil && len(w.cfg.Worker.Coordinators) > 0
 }

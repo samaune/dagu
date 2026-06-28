@@ -140,6 +140,50 @@ func TestValidateSteps(t *testing.T) {
 		assert.NoError(t, ValidateSteps(dag))
 	})
 
+	t.Run("approval rewind_to resolves upstream step IDs", func(t *testing.T) {
+		t.Parallel()
+		dag := &DAG{
+			Steps: []Step{
+				{Name: "prepare", ID: "prepare_id", ExecutorConfig: testExecConfig},
+				{
+					Name:           "review",
+					Depends:        []string{"prepare"},
+					ExecutorConfig: testExecConfig,
+					Approval: &ApprovalConfig{
+						RewindTo: "prepare_id",
+					},
+				},
+			},
+		}
+
+		err := ValidateSteps(dag)
+		require.NoError(t, err)
+		require.NotNil(t, dag.Steps[1].Approval)
+		assert.Equal(t, "prepare", dag.Steps[1].Approval.RewindTo)
+	})
+
+	t.Run("approval rewind_to rejects non-upstream steps", func(t *testing.T) {
+		t.Parallel()
+		dag := &DAG{
+			Steps: []Step{
+				{Name: "prepare", ExecutorConfig: testExecConfig},
+				{
+					Name:           "review",
+					Depends:        []string{"prepare"},
+					ExecutorConfig: testExecConfig,
+					Approval: &ApprovalConfig{
+						RewindTo: "sidecar",
+					},
+				},
+				{Name: "sidecar", Depends: []string{"prepare"}, ExecutorConfig: testExecConfig},
+			},
+		}
+
+		err := ValidateSteps(dag)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "approval.rewind_to")
+	})
+
 	t.Run("empty DAG passes validation", func(t *testing.T) {
 		t.Parallel()
 		dag := &DAG{Steps: []Step{}}
@@ -331,7 +375,7 @@ func TestValidateSteps(t *testing.T) {
 		}
 		err := ValidateSteps(dag)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "only supported for child-DAGs")
+		assert.Contains(t, err.Error(), "parallel currently requires action: dag.run or dag.enqueue")
 	})
 
 	t.Run("parallel config with max_concurrent 0 fails", func(t *testing.T) {
@@ -350,7 +394,7 @@ func TestValidateSteps(t *testing.T) {
 		}
 		err := ValidateSteps(dag)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "max_concurrent must be greater than 0")
+		assert.Contains(t, err.Error(), "max_concurrent must be an integer from 1 through 1000")
 	})
 
 	t.Run("parallel config with negative max_concurrent fails", func(t *testing.T) {
@@ -369,7 +413,7 @@ func TestValidateSteps(t *testing.T) {
 		}
 		err := ValidateSteps(dag)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "max_concurrent must be greater than 0")
+		assert.Contains(t, err.Error(), "max_concurrent must be an integer from 1 through 1000")
 	})
 
 	t.Run("parallel config without items or variable fails", func(t *testing.T) {
@@ -431,7 +475,7 @@ func TestRegisterStepValidator(t *testing.T) {
 
 	t.Run("register validator for new type", func(t *testing.T) {
 		// Clean up after test
-		defer delete(stepValidators, "test-executor")
+		defer UnregisterStepValidator("test-executor")
 
 		validatorCalled := false
 		validator := func(_ Step) error {
@@ -457,7 +501,7 @@ func TestRegisterStepValidator(t *testing.T) {
 	})
 
 	t.Run("validator returning error propagates", func(t *testing.T) {
-		defer delete(stepValidators, "error-executor")
+		defer UnregisterStepValidator("error-executor")
 
 		expectedErr := errors.New("validation failed")
 		validator := func(_ Step) error {
@@ -481,7 +525,7 @@ func TestRegisterStepValidator(t *testing.T) {
 	})
 
 	t.Run("overwrite existing validator", func(t *testing.T) {
-		defer delete(stepValidators, "overwrite-executor")
+		defer UnregisterStepValidator("overwrite-executor")
 
 		firstCalled := false
 		secondCalled := false
@@ -682,8 +726,8 @@ func TestValidateStepWithValidator(t *testing.T) {
 	})
 
 	t.Run("nil validator returns nil", func(t *testing.T) {
-		defer delete(stepValidators, "nil-validator-type")
-		stepValidators["nil-validator-type"] = nil
+		defer UnregisterStepValidator("nil-validator-type")
+		RegisterStepValidator("nil-validator-type", nil)
 
 		step := Step{
 			Name:           "step1",
@@ -693,12 +737,12 @@ func TestValidateStepWithValidator(t *testing.T) {
 	})
 
 	t.Run("validator error is wrapped", func(t *testing.T) {
-		defer delete(stepValidators, "wrap-error-type")
+		defer UnregisterStepValidator("wrap-error-type")
 
 		customErr := errors.New("custom validation error")
-		stepValidators["wrap-error-type"] = func(_ Step) error {
+		RegisterStepValidator("wrap-error-type", func(_ Step) error {
 			return customErr
-		}
+		})
 
 		step := Step{
 			Name:           "step1",
@@ -709,8 +753,33 @@ func TestValidateStepWithValidator(t *testing.T) {
 
 		var ve *ValidationError
 		require.ErrorAs(t, err, &ve)
-		assert.Equal(t, "executor_config", ve.Field)
+		assert.Equal(t, "type", ve.Field)
+		assert.Equal(t, "field 'type': custom validation error", err.Error())
+		assert.NotContains(t, err.Error(), "executor")
+		assert.NotContains(t, err.Error(), "value:")
 		assert.ErrorIs(t, err, customErr)
+	})
+
+	t.Run("validator validation error keeps field context", func(t *testing.T) {
+		defer UnregisterStepValidator("pre-wrapped-error-type")
+
+		RegisterStepValidator("pre-wrapped-error-type", func(_ Step) error {
+			return NewValidationError("command", nil, ErrStepCommandIsRequired)
+		})
+
+		step := Step{
+			Name:           "step1",
+			ExecutorConfig: ExecutorConfig{Type: "pre-wrapped-error-type"},
+		}
+		err := validateStepWithValidator(step)
+		require.Error(t, err)
+
+		var ve *ValidationError
+		require.ErrorAs(t, err, &ve)
+		assert.Equal(t, "command", ve.Field)
+		assert.Equal(t, "field 'command': step command is required", err.Error())
+		assert.NotContains(t, err.Error(), "executor_config")
+		assert.ErrorIs(t, err, ErrStepCommandIsRequired)
 	})
 }
 

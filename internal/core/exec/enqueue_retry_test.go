@@ -43,7 +43,7 @@ func TestEnqueueRetry(t *testing.T) {
 			},
 		},
 		{
-			name: "Success",
+			name: "SuccessPreservesProfile",
 			dag:  &core.DAG{Name: "test-dag"},
 			status: &exec.DAGRunStatus{
 				Name:           "test-dag",
@@ -51,6 +51,7 @@ func TestEnqueueRetry(t *testing.T) {
 				AttemptID:      "att-1",
 				Status:         core.Failed,
 				AutoRetryCount: 2,
+				ProfileName:    "old-profile",
 			},
 			store: &stubDAGRunStore{
 				status: &exec.DAGRunStatus{
@@ -59,6 +60,7 @@ func TestEnqueueRetry(t *testing.T) {
 					AttemptID:      "att-1",
 					Status:         core.Failed,
 					AutoRetryCount: 2,
+					ProfileName:    "old-profile",
 				},
 			},
 			setupQueue: func(qs *exec.MockQueueStore) {
@@ -71,6 +73,7 @@ func TestEnqueueRetry(t *testing.T) {
 				assert.Equal(t, core.TriggerTypeRetry, store.status.TriggerType)
 				assert.NotEmpty(t, store.status.QueuedAt)
 				assert.Equal(t, 2, store.status.AutoRetryCount)
+				assert.Equal(t, "old-profile", store.status.ProfileName)
 				assert.Equal(t, 1, store.casCalls)
 			},
 		},
@@ -342,6 +345,7 @@ func (s *stubDAGRunStore) CompareAndSwapLatestAttemptStatus(
 	expectedAttemptID string,
 	expectedStatus core.Status,
 	mutate func(*exec.DAGRunStatus) error,
+	_ ...exec.CompareAndSwapStatusOption,
 ) (*exec.DAGRunStatus, bool, error) {
 	s.casCalls++
 	if s.casCalls == 1 && s.firstErr != nil {
@@ -398,7 +402,7 @@ func (s *stubDAGRunStore) RenameDAGRuns(context.Context, string, string) error {
 	return nil
 }
 
-func (s *stubDAGRunStore) RemoveDAGRun(context.Context, exec.DAGRunRef) error {
+func (s *stubDAGRunStore) RemoveDAGRun(context.Context, exec.DAGRunRef, ...exec.RemoveDAGRunOption) error {
 	return nil
 }
 

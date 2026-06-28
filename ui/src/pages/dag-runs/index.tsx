@@ -1,20 +1,23 @@
+// Copyright (C) 2026 Yota Hamada
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import dayjs from 'dayjs';
 import { Layers, List, Search } from 'lucide-react';
 import React from 'react';
 import { useLocation } from 'react-router-dom';
 import { Status } from '../../api/v1/schema';
-import { Button } from '../../components/ui/button';
-import { DateRangePicker } from '../../components/ui/date-range-picker';
-import { Input } from '../../components/ui/input';
+import { Button } from '@/components/ui/button';
+import { DateRangePicker } from '@/components/ui/date-range-picker';
+import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '../../components/ui/select';
-import { TagCombobox } from '../../components/ui/tag-combobox';
-import { ToggleButton, ToggleGroup } from '../../components/ui/toggle-group';
+} from '@/components/ui/select';
+import { LabelCombobox } from '@/components/ui/label-combobox';
+import { ToggleButton, ToggleGroup } from '@/components/ui/toggle-group';
 import { AppBarContext } from '../../contexts/AppBarContext';
 import { useConfig } from '../../contexts/ConfigContext';
 import { useSearchState } from '../../contexts/SearchStateContext';
@@ -26,14 +29,19 @@ import DAGRunTable from '../../features/dag-runs/components/dag-run-list/DAGRunT
 import { usePaginatedDAGRuns } from '../../features/dag-runs/hooks/dagRunPagination';
 import { useQuery } from '../../hooks/api';
 import { useBulkDAGRunSelection } from '../../features/dag-runs/hooks/useBulkDAGRunSelection';
-import StatusChip from '../../ui/StatusChip';
-import Title from '../../ui/Title';
+import {
+  withoutWorkspaceLabels,
+  workspaceSelectionKey,
+  workspaceSelectionQuery,
+} from '../../lib/workspace';
+import StatusChip from '@/components/ui/status-chip';
+import Title from '@/components/ui/title';
 
 type DAGRunsFilters = {
   searchText: string;
   dagRunId: string;
   status: string;
-  tags: string[];
+  labels: string[];
   fromDate?: string;
   toDate?: string;
   dateRangeMode: 'preset' | 'specific' | 'custom';
@@ -42,11 +50,11 @@ type DAGRunsFilters = {
   specificValue: string;
 };
 
-const areTagsEqual = (a: string[], b: string[]): boolean => {
+const areLabelsEqual = (a: string[], b: string[]): boolean => {
   if (a.length !== b.length) return false;
   const sortedA = [...a].sort();
   const sortedB = [...b].sort();
-  return sortedA.every((tag, i) => tag === sortedB[i]);
+  return sortedA.every((label, i) => label === sortedB[i]);
 };
 
 const STATUS_CONFIG: Record<Status, string> = {
@@ -63,21 +71,13 @@ const STATUS_CONFIG: Record<Status, string> = {
 
 function StatusSelectDisplay({ status }: { status: string }): React.ReactNode {
   if (status === 'all') {
-    return (
-      <div className="inline-flex items-center rounded-full border bg-muted border-border text-foreground py-0.5 px-2 text-xs font-medium">
-        All
-      </div>
-    );
+    return 'All Statuses';
   }
 
   const statusNum = parseInt(status) as Status;
   const label = STATUS_CONFIG[statusNum];
   if (label) {
-    return (
-      <StatusChip status={statusNum} size="sm">
-        {label}
-      </StatusChip>
-    );
+    return label;
   }
 
   return null;
@@ -87,7 +87,7 @@ const areFiltersEqual = (a: DAGRunsFilters, b: DAGRunsFilters): boolean =>
   a.searchText === b.searchText &&
   a.dagRunId === b.dagRunId &&
   a.status === b.status &&
-  areTagsEqual(a.tags, b.tags) &&
+  areLabelsEqual(a.labels, b.labels) &&
   a.fromDate === b.fromDate &&
   a.toDate === b.toDate &&
   a.dateRangeMode === b.dateRangeMode &&
@@ -130,6 +130,16 @@ function DAGRuns() {
   const { preferences, updatePreference } = useUserPreferences();
   const searchState = useSearchState();
   const remoteKey = appBarContext.selectedRemoteNode || 'local';
+  const workspaceSelection = appBarContext.workspaceSelection;
+  const workspaceQuery = React.useMemo(
+    () => workspaceSelectionQuery(workspaceSelection),
+    [workspaceSelection]
+  );
+  const workspaceKey = workspaceSelectionKey(workspaceSelection);
+  const searchStateScope = JSON.stringify({
+    remoteNode: remoteKey,
+    workspace: workspaceKey,
+  });
 
   // Extract short datetime format from URL if present
   const parseDateFromUrl = React.useCallback(
@@ -198,7 +208,7 @@ function DAGRuns() {
       searchText: '',
       dagRunId: '',
       status: 'all',
-      tags: [],
+      labels: [],
       fromDate: getDefaultFromDate(),
       toDate: undefined,
       dateRangeMode: 'preset',
@@ -209,12 +219,12 @@ function DAGRuns() {
     [getDefaultFromDate]
   );
 
-  // State for search input, dagRun ID, status, tags, and date ranges
+  // State for search input, dagRun ID, status, labels, and date ranges
   const [searchText, setSearchText] = React.useState(defaultFilters.searchText);
   const [dagRunId, setDagRunId] = React.useState(defaultFilters.dagRunId);
   const [status, setStatus] = React.useState<string>(defaultFilters.status);
-  const [selectedTags, setSelectedTags] = React.useState<string[]>(
-    defaultFilters.tags
+  const [selectedLabels, setSelectedLabels] = React.useState<string[]>(
+    defaultFilters.labels
   );
   const [fromDate, setFromDate] = React.useState<string | undefined>(
     defaultFilters.fromDate
@@ -229,7 +239,9 @@ function DAGRuns() {
   );
   const [apiDagRunId, setApiDagRunId] = React.useState(defaultFilters.dagRunId);
   const [apiStatus, setApiStatus] = React.useState(defaultFilters.status);
-  const [apiTags, setApiTags] = React.useState<string[]>(defaultFilters.tags);
+  const [apiLabels, setApiLabels] = React.useState<string[]>(
+    defaultFilters.labels
+  );
   const [apiFromDate, setApiFromDate] = React.useState<string | undefined>(
     defaultFilters.fromDate
   );
@@ -267,7 +279,7 @@ function DAGRuns() {
       searchText,
       dagRunId,
       status,
-      tags: selectedTags,
+      labels: selectedLabels,
       fromDate,
       toDate,
       dateRangeMode,
@@ -279,7 +291,7 @@ function DAGRuns() {
       searchText,
       dagRunId,
       status,
-      selectedTags,
+      selectedLabels,
       fromDate,
       toDate,
       dateRangeMode,
@@ -298,7 +310,10 @@ function DAGRuns() {
 
   React.useEffect(() => {
     const params = new URLSearchParams(location.search);
-    const stored = searchState.readState<DAGRunsFilters>('dagRuns', remoteKey);
+    const stored = searchState.readState<DAGRunsFilters>(
+      'dagRuns',
+      searchStateScope
+    );
     const base: DAGRunsFilters = {
       ...defaultFilters,
       ...(stored ?? {}),
@@ -322,13 +337,14 @@ function DAGRuns() {
       hasUrlFilters = true;
     }
 
-    if (params.has('tags')) {
-      const tagsParam = params.get('tags') ?? '';
-      urlFilters.tags = tagsParam
-        ? tagsParam
+    if (params.has('labels') || params.has('tags')) {
+      const labelsParam = params.get('labels') ?? params.get('tags') ?? '';
+      urlFilters.labels = labelsParam
+        ? labelsParam
             .split(',')
             .map((t) => t.trim().toLowerCase())
             .filter((t) => t !== '')
+            .filter((t) => withoutWorkspaceLabels([t]).length > 0)
         : [];
       hasUrlFilters = true;
     }
@@ -380,7 +396,7 @@ function DAGRuns() {
     if (current && areFiltersEqual(current, next)) {
       if (hasUrlFilters) {
         lastPersistedFiltersRef.current = next;
-        searchState.writeState('dagRuns', remoteKey, next);
+        searchState.writeState('dagRuns', searchStateScope, next);
       }
       return;
     }
@@ -388,7 +404,7 @@ function DAGRuns() {
     setSearchText(next.searchText);
     setDagRunId(next.dagRunId);
     setStatus(next.status);
-    setSelectedTags(next.tags);
+    setSelectedLabels(next.labels);
     setFromDate(next.fromDate);
     setToDate(next.toDate);
     setDateRangeMode(next.dateRangeMode);
@@ -399,18 +415,18 @@ function DAGRuns() {
     setAPISearchText(next.searchText);
     setApiDagRunId(next.dagRunId);
     setApiStatus(next.status);
-    setApiTags(next.tags);
+    setApiLabels(next.labels);
     setApiFromDate(next.fromDate);
     setApiToDate(next.toDate);
 
     lastPersistedFiltersRef.current = next;
-    searchState.writeState('dagRuns', remoteKey, next);
+    searchState.writeState('dagRuns', searchStateScope, next);
   }, [
     defaultFilters,
     location.search,
     parseDateFromUrl,
-    remoteKey,
     searchState,
+    searchStateScope,
   ]);
 
   React.useEffect(() => {
@@ -419,20 +435,21 @@ function DAGRuns() {
       return;
     }
     lastPersistedFiltersRef.current = currentFilters;
-    searchState.writeState('dagRuns', remoteKey, currentFilters);
-  }, [currentFilters, remoteKey, searchState]);
+    searchState.writeState('dagRuns', searchStateScope, currentFilters);
+  }, [currentFilters, searchState, searchStateScope]);
 
   React.useEffect(() => {
-    appBarContext.setTitle('DAG Runs');
+    appBarContext.setTitle('Executions');
   }, [appBarContext]);
 
-  // Fetch available tags for the filter dropdown
-  const { data: tagsData } = useQuery(
-    '/dags/tags',
+  // Fetch available labels for the filter dropdown
+  const { data: labelsData } = useQuery(
+    '/dags/labels',
     {
       params: {
         query: {
           remoteNode: appBarContext.selectedRemoteNode || 'local',
+          ...workspaceQuery,
         },
       },
     },
@@ -441,7 +458,10 @@ function DAGRuns() {
       revalidateIfStale: false,
     }
   );
-  const availableTags = tagsData?.tags ?? [];
+  const availableLabels = React.useMemo(
+    () => withoutWorkspaceLabels(labelsData?.labels ?? []),
+    [labelsData?.labels]
+  );
 
   const dagRunQuery = React.useMemo(
     () => ({
@@ -449,19 +469,21 @@ function DAGRuns() {
       name: apiSearchText || undefined,
       dagRunId: apiDagRunId || undefined,
       status: apiStatus !== 'all' ? [parseInt(apiStatus)] : undefined,
-      tags: apiTags.length > 0 ? apiTags.join(',') : undefined,
+      labels: apiLabels.length > 0 ? apiLabels.join(',') : undefined,
       fromDate: formatDateForApi(apiFromDate),
       toDate: formatDateForApi(apiToDate),
       limit: 100,
+      ...workspaceQuery,
     }),
     [
       apiDagRunId,
       apiFromDate,
       apiSearchText,
       apiStatus,
-      apiTags,
+      apiLabels,
       apiToDate,
       appBarContext.selectedRemoteNode,
+      workspaceQuery,
     ]
   );
   const {
@@ -502,6 +524,9 @@ function DAGRuns() {
 
   const addSearchParam = (key: string, value: string | undefined) => {
     const locationQuery = new URLSearchParams(window.location.search);
+    if (key === 'labels') {
+      locationQuery.delete('tags');
+    }
     if (value && value.length > 0) {
       locationQuery.set(key, value);
     } else {
@@ -522,7 +547,7 @@ function DAGRuns() {
     setAPISearchText(searchText);
     setApiDagRunId(dagRunId);
     setApiStatus(statusToUse);
-    setApiTags(selectedTags);
+    setApiLabels(selectedLabels);
     setApiFromDate(fromDate);
     setApiToDate(toDate);
 
@@ -531,8 +556,8 @@ function DAGRuns() {
     addSearchParam('dagRunId', dagRunId);
     addSearchParam('status', statusToUse);
     addSearchParam(
-      'tags',
-      selectedTags.length > 0 ? selectedTags.join(',') : undefined
+      'labels',
+      selectedLabels.length > 0 ? selectedLabels.join(',') : undefined
     );
     addSearchParam('fromDate', fromDate);
     addSearchParam('toDate', toDate);
@@ -558,10 +583,13 @@ function DAGRuns() {
     handleSearch(value);
   };
 
-  const updateTags = (newTags: string[]) => {
-    setSelectedTags(newTags);
-    setApiTags(newTags);
-    addSearchParam('tags', newTags.length > 0 ? newTags.join(',') : undefined);
+  const updateLabels = (newLabels: string[]) => {
+    setSelectedLabels(newLabels);
+    setApiLabels(newLabels);
+    addSearchParam(
+      'labels',
+      newLabels.length > 0 ? newLabels.join(',') : undefined
+    );
   };
 
   const handleViewModeChange = (value: string) => {
@@ -737,8 +765,8 @@ function DAGRuns() {
   return (
     <div className="max-w-7xl">
       <div className="flex items-center justify-between mb-2">
-        <Title>DAG Runs</Title>
-        <ToggleGroup aria-label="View mode">
+        <Title>Executions</Title>
+        <ToggleGroup aria-label="View mode" className="h-9 p-0.5">
           <ToggleButton
             value="list"
             groupValue={viewMode}
@@ -764,24 +792,24 @@ function DAGRuns() {
         </ToggleGroup>
       </div>
       <div>
-        <div className="bg-muted/50 rounded-lg mb-2 space-y-2">
-          <div className="flex flex-wrap gap-2">
+        <div className="mb-3 space-y-3 rounded-lg border border-border bg-card/50 p-3">
+          <div className="flex flex-wrap items-center gap-2">
             <Input
               placeholder="Filter by DAG name..."
               value={searchText}
               onChange={handleNameInputChange}
               onKeyDown={handleInputKeyPress}
-              className="w-[220px]"
+              className="w-[200px]"
             />
             <Input
               placeholder="Filter by Run ID..."
               value={dagRunId}
               onChange={handleDagRunIdInputChange}
               onKeyDown={handleInputKeyPress}
-              className="w-[200px]"
+              className="w-[180px]"
             />
             <Select value={status} onValueChange={handleStatusChange}>
-              <SelectTrigger className="w-[160px]">
+              <SelectTrigger aria-label="Status" className="w-[150px]">
                 <SelectValue placeholder="Status">
                   <StatusSelectDisplay status={status} />
                 </SelectValue>
@@ -804,31 +832,31 @@ function DAGRuns() {
                 ))}
               </SelectContent>
             </Select>
-            {/* Tags filter */}
-            <TagCombobox
-              selectedTags={selectedTags}
-              onTagsChange={updateTags}
-              availableTags={availableTags}
-              placeholder="Filter by tags..."
-              className="min-w-[180px] max-w-[300px] h-7"
+            {/* Labels filter */}
+            <LabelCombobox
+              selectedLabels={selectedLabels}
+              onLabelsChange={updateLabels}
+              availableLabels={availableLabels}
+              placeholder="Filter by labels..."
+              className="h-9 min-w-[170px] max-w-[220px]"
             />
             <Button
               onClick={() => handleSearch()}
-              size="xs"
-              className="px-6 font-medium"
+              className="px-4 font-medium"
             >
-              <Search size={18} className="mr-2" />
+              <Search className="mr-1.5 h-4 w-4" />
               Search
             </Button>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <ToggleGroup aria-label="Date range mode">
+            <ToggleGroup aria-label="Date range mode" className="h-9 p-0.5">
               <ToggleButton
                 value="preset"
                 groupValue={dateRangeMode}
                 onClick={() => handleDateRangeModeChange('preset')}
                 position="first"
                 aria-label="Quick select"
+                className="h-8 px-3"
               >
                 Quick
               </ToggleButton>
@@ -838,6 +866,7 @@ function DAGRuns() {
                 onClick={() => handleDateRangeModeChange('specific')}
                 position="middle"
                 aria-label="Specific date/month/year"
+                className="h-8 px-3"
               >
                 Specific
               </ToggleButton>
@@ -847,13 +876,14 @@ function DAGRuns() {
                 onClick={() => handleDateRangeModeChange('custom')}
                 position="last"
                 aria-label="Custom range"
+                className="h-8 px-3"
               >
                 Custom
               </ToggleButton>
             </ToggleGroup>
             {dateRangeMode === 'preset' ? (
               <Select value={datePreset} onValueChange={handleDatePresetChange}>
-                <SelectTrigger className="w-[180px]">
+                <SelectTrigger aria-label="Date preset" className="w-[180px]">
                   <SelectValue placeholder="Select period" />
                 </SelectTrigger>
                 <SelectContent>
@@ -893,7 +923,10 @@ function DAGRuns() {
                     handleSpecificPeriodChange(newValue, newPeriod);
                   }}
                 >
-                  <SelectTrigger className="w-[120px]">
+                  <SelectTrigger
+                    aria-label="Specific period"
+                    className="w-[120px]"
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -909,7 +942,7 @@ function DAGRuns() {
                   placeholder={specificPeriod === 'year' ? 'YYYY' : undefined}
                   min={specificPeriod === 'year' ? '2000' : undefined}
                   max={specificPeriod === 'year' ? '2100' : undefined}
-                  className="w-[160px] h-8"
+                  className="h-9 w-[160px]"
                 />
               </>
             ) : (

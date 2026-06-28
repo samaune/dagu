@@ -75,6 +75,10 @@ type Message struct {
 	Role Role `json:"role"`
 	// Content is the text content of the message.
 	Content string `json:"content"`
+	// ReasoningContent holds the model's internal reasoning/thinking text from a
+	// previous assistant turn. Some providers (e.g. Moonshot/KIMI via OpenCode)
+	// require this to be echoed back in subsequent turns when reasoning is enabled.
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 	// Name is an optional identifier for the message sender.
 	// Useful in multi-agent scenarios or for tool messages.
 	Name string `json:"name,omitempty"`
@@ -155,8 +159,11 @@ type Config struct {
 	// OAuthCredentialProvider resolves dynamic bearer credentials on demand.
 	OAuthCredentialProvider OAuthCredentialProvider
 	// Timeout is the maximum time to wait for a response.
-	// Default is 60 seconds if not specified.
+	// Default is 60 seconds if not specified unless DisableRequestTimeout is true.
 	Timeout time.Duration
+	// DisableRequestTimeout leaves the underlying request client without a
+	// response timeout. Callers must cancel through the request context.
+	DisableRequestTimeout bool
 
 	// Retry configuration
 	// MaxRetries is the maximum number of retry attempts for transient errors.
@@ -257,6 +264,10 @@ type ChatRequest struct {
 type ChatResponse struct {
 	// Content is the generated text content.
 	Content string
+	// ReasoningContent holds the model's internal reasoning/thinking text.
+	// Must be preserved and echoed back in the next assistant message when
+	// reasoning is enabled, as required by some providers (e.g. Moonshot/KIMI).
+	ReasoningContent string
 	// FinishReason indicates why the model stopped generating.
 	// Common values: "stop", "length", "content_filter", "tool_calls".
 	FinishReason string

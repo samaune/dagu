@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dagucloud/dagu/internal/cmn/eval"
+	cmnvalue "github.com/dagucloud/dagu/internal/cmn/value"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -77,38 +77,59 @@ func TestExecutorCapabilities_ConcurrentAccess(t *testing.T) {
 	assert.True(t, registry.Get("executor-63").Command)
 }
 
-func TestStep_EvalOptions(t *testing.T) {
+func TestStepResolutionDeclarations(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	t.Run("WithGetEvalOptions", func(t *testing.T) {
-		// Register executor with GetEvalOptions callback
-		RegisterExecutorCapabilities("eval-opts-test", ExecutorCapabilities{
+	t.Run("CommandUsesCommandContextHook", func(t *testing.T) {
+		RegisterExecutorCapabilities("command-resolution-test", ExecutorCapabilities{
 			Command: true,
-			GetEvalOptions: func(_ context.Context, _ Step) []eval.Option {
-				return []eval.Option{eval.WithoutExpandShell()}
+			CommandContext: func(_ context.Context, _ Step) cmnvalue.CommandContext {
+				return cmnvalue.CommandContext{Target: cmnvalue.CommandTargetSSH, ShellConfigured: true}
 			},
 		})
+		t.Cleanup(func() { UnregisterExecutorCapabilities("command-resolution-test") })
 
-		step := Step{ExecutorConfig: ExecutorConfig{Type: "eval-opts-test"}}
-		opts := step.EvalOptions(ctx)
-		assert.Len(t, opts, 1)
+		step := Step{ExecutorConfig: ExecutorConfig{Type: "command-resolution-test"}}
+		command := step.CommandResolution(ctx)
+		assert.Equal(t, cmnvalue.CommandTargetSSH, command.Target)
+		assert.True(t, command.ShellConfigured)
 	})
 
-	t.Run("WithoutGetEvalOptions", func(t *testing.T) {
-		// Register executor without GetEvalOptions
-		RegisterExecutorCapabilities("no-eval-opts-test", ExecutorCapabilities{
+	t.Run("ScriptUsesScriptContextHook", func(t *testing.T) {
+		RegisterExecutorCapabilities("script-resolution-test", ExecutorCapabilities{
 			Command: true,
+			Script:  true,
+			CommandContext: func(_ context.Context, _ Step) cmnvalue.CommandContext {
+				return cmnvalue.CommandContext{Target: cmnvalue.CommandTargetDocker}
+			},
+			ScriptContext: func(_ context.Context, _ Step) cmnvalue.CommandContext {
+				return cmnvalue.CommandContext{Target: cmnvalue.CommandTargetSSH}
+			},
 		})
+		t.Cleanup(func() { UnregisterExecutorCapabilities("script-resolution-test") })
 
-		step := Step{ExecutorConfig: ExecutorConfig{Type: "no-eval-opts-test"}}
-		opts := step.EvalOptions(ctx)
-		assert.Nil(t, opts)
+		step := Step{ExecutorConfig: ExecutorConfig{Type: "script-resolution-test"}}
+		assert.Equal(t, cmnvalue.CommandTargetSSH, step.ScriptResolution(ctx).Target)
 	})
 
-	t.Run("UnregisteredExecutor", func(t *testing.T) {
+	t.Run("ScriptFallsBackToCommandContext", func(t *testing.T) {
+		RegisterExecutorCapabilities("script-command-fallback-test", ExecutorCapabilities{
+			Command: true,
+			Script:  true,
+			CommandContext: func(_ context.Context, _ Step) cmnvalue.CommandContext {
+				return cmnvalue.CommandContext{Target: cmnvalue.CommandTargetDocker}
+			},
+		})
+		t.Cleanup(func() { UnregisterExecutorCapabilities("script-command-fallback-test") })
+
+		step := Step{ExecutorConfig: ExecutorConfig{Type: "script-command-fallback-test"}}
+		assert.Equal(t, cmnvalue.CommandTargetDocker, step.ScriptResolution(ctx).Target)
+	})
+
+	t.Run("UnregisteredExecutorUsesDefaults", func(t *testing.T) {
 		step := Step{ExecutorConfig: ExecutorConfig{Type: "unregistered-executor"}}
-		opts := step.EvalOptions(ctx)
-		assert.Nil(t, opts)
+		assert.Equal(t, cmnvalue.CommandTargetLocal, step.CommandResolution(ctx).Target)
+		assert.False(t, step.CommandResolution(ctx).ShellConfigured)
 	})
 }

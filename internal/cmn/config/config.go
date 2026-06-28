@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -15,6 +16,7 @@ type Config struct {
 	Core            Core
 	Server          Server
 	EventStore      EventStoreConfig
+	Webhooks        WebhooksConfig
 	Paths           PathsConfig
 	Secrets         SecretsConfig
 	UI              UI
@@ -42,6 +44,7 @@ const (
 	BotProviderTelegram BotProvider = "telegram"
 	BotProviderSlack    BotProvider = "slack"
 	BotProviderDiscord  BotProvider = "discord"
+	BotProviderLine     BotProvider = "line"
 )
 
 var DefaultBotInterestedEventTypes = []string{
@@ -52,6 +55,8 @@ var DefaultBotInterestedEventTypes = []string{
 	"dag.run.rejected",
 }
 
+const DefaultWebhookMaxPayloadSize = 1 * 1024 * 1024
+
 // BotsConfig holds the configuration for bot integrations.
 type BotsConfig struct {
 	Provider BotProvider
@@ -59,6 +64,7 @@ type BotsConfig struct {
 	Telegram TelegramBotConfig
 	Slack    SlackBotConfig
 	Discord  DiscordBotConfig
+	Line     LineBotConfig
 }
 
 // TelegramBotConfig holds the Telegram-specific bot configuration.
@@ -83,6 +89,15 @@ type DiscordBotConfig struct {
 	AllowedChannelIDs    []string
 	InterestedEventTypes []string
 	RespondToAll         bool // respond to all channel messages, not just @mentions
+}
+
+// LineBotConfig holds the LINE-specific bot configuration.
+type LineBotConfig struct {
+	ChannelAccessToken   string
+	ChannelSecret        string
+	AllowedSourceIDs     []string
+	InterestedEventTypes []string
+	RespondToAll         bool // respond to all group/room messages, not just mentions
 }
 
 // GitSyncConfig holds the configuration for Git sync functionality.
@@ -186,6 +201,7 @@ type Core struct {
 type Server struct {
 	Host              string
 	Port              int
+	PublicURL         string // Absolute external URL used in generated links
 	BasePath          string // URL path for reverse proxy subpath hosting
 	APIBasePath       string
 	Headless          bool
@@ -197,11 +213,15 @@ type Server struct {
 	RemoteNodes       []RemoteNode
 	Permissions       map[Permission]bool
 	StrictValidation  bool
-	Metrics           MetricsAccess // "private" or "public"
-	Terminal          TerminalConfig
-	Audit             AuditConfig
-	Session           SessionConfig
-	SSE               SSEConfig
+	// CORSAllowedOrigins lists explicit origins for CORS. When empty, all
+	// origins are allowed but AllowCredentials is disabled (spec-compliant).
+	// When set, only listed origins are allowed and AllowCredentials is enabled.
+	CORSAllowedOrigins []string
+	Metrics            MetricsAccess // "private" or "public"
+	Terminal           TerminalConfig
+	Audit              AuditConfig
+	Session            SessionConfig
+	SSE                SSEConfig
 }
 
 // TerminalConfig contains configuration for the web-based terminal feature.
@@ -220,6 +240,11 @@ type AuditConfig struct {
 type EventStoreConfig struct {
 	Enabled       bool // Default: true
 	RetentionDays int  // Default: 1; 0 = keep forever
+}
+
+// WebhooksConfig contains configuration for webhook trigger endpoints.
+type WebhooksConfig struct {
+	MaxPayloadSize int // Default: 1MiB
 }
 
 // SessionConfig contains configuration for agent session cleanup.
@@ -347,7 +372,9 @@ type PathsConfig struct {
 	Executable         string
 	LogDir             string
 	ArtifactDir        string
+	DAGStateDir        string
 	DataDir            string
+	ToolsDir           string
 	SuspendFlagsDir    string
 	AdminLogsDir       string
 	EventStoreDir      string
@@ -364,6 +391,7 @@ type PathsConfig struct {
 	ContextsDir        string
 	RemoteNodesDir     string
 	WorkspacesDir      string
+	ViewsDir           string
 	ConfigFileUsed     string
 }
 
@@ -548,6 +576,9 @@ func (c *Config) Validate() error {
 	if err := c.validateEventStore(); err != nil {
 		return err
 	}
+	if err := c.validateWebhooks(); err != nil {
+		return err
+	}
 	if err := c.validateBots(); err != nil {
 		return err
 	}
@@ -602,6 +633,13 @@ func (c *Config) validateEventStore() error {
 	return nil
 }
 
+func (c *Config) validateWebhooks() error {
+	if c.Webhooks.MaxPayloadSize <= 0 {
+		return fmt.Errorf("webhooks.max_payload_size must be > 0")
+	}
+	return nil
+}
+
 func (c *Config) validateBots() error {
 	if err := validateInterestedEventTypes("bots.telegram.interested_event_types", c.Bots.Telegram.InterestedEventTypes); err != nil {
 		return err
@@ -610,6 +648,9 @@ func (c *Config) validateBots() error {
 		return err
 	}
 	if err := validateInterestedEventTypes("bots.discord.interested_event_types", c.Bots.Discord.InterestedEventTypes); err != nil {
+		return err
+	}
+	if err := validateInterestedEventTypes("bots.line.interested_event_types", c.Bots.Line.InterestedEventTypes); err != nil {
 		return err
 	}
 	return nil
@@ -658,6 +699,13 @@ func (c *Config) validateServer() error {
 	if c.Server.Port < 0 || c.Server.Port > 65535 {
 		return fmt.Errorf("invalid port number: %d", c.Server.Port)
 	}
+	if c.Server.PublicURL != "" {
+		normalized, err := NormalizePublicURL(c.Server.PublicURL)
+		if err != nil {
+			return err
+		}
+		c.Server.PublicURL = normalized
+	}
 
 	if c.Server.TLS != nil {
 		if c.Server.TLS.CertFile == "" || c.Server.TLS.KeyFile == "" {
@@ -697,6 +745,29 @@ func (c *Config) validateServer() error {
 	}
 
 	return nil
+}
+
+// NormalizePublicURL validates and normalizes the externally reachable UI URL.
+func NormalizePublicURL(rawURL string) (string, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid public_url: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("public_url must use http or https")
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("public_url must include a host")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("public_url must not include query or fragment")
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	return parsed.String(), nil
 }
 
 // validateUI validates UI-related configuration.
@@ -851,6 +922,9 @@ func (c *Config) validateRemoteNodes() error {
 		if n.APIBaseURL == "" {
 			return fmt.Errorf("remote_nodes[%d] (%q): api_base_url is required", i, n.Name)
 		}
+		if err := validateRemoteNodeAPIBaseURL(n.APIBaseURL); err != nil {
+			return fmt.Errorf("remote_nodes[%d] (%q): %w", i, n.Name, err)
+		}
 		switch n.AuthType {
 		case "", "none", "basic", "token":
 			// valid
@@ -870,6 +944,26 @@ func (c *Config) validateRemoteNodes() error {
 		if n.Timeout < 0 {
 			return fmt.Errorf("remote_nodes[%d] (%q): timeout must not be negative", i, n.Name)
 		}
+	}
+	return nil
+}
+
+func validateRemoteNodeAPIBaseURL(rawURL string) error {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return fmt.Errorf("invalid api_base_url: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("api_base_url must use http or https")
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("api_base_url must include a host")
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("api_base_url must not include credentials")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("api_base_url must not include query parameters or fragments")
 	}
 	return nil
 }

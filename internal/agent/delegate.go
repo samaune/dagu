@@ -107,7 +107,7 @@ func delegateRun(ctx ToolContext, input json.RawMessage) ToolOut {
 	}
 
 	var args delegateInput
-	if err := json.Unmarshal(input, &args); err != nil {
+	if err := decodeToolInput(input, &args); err != nil {
 		return toolError("Invalid input: %v", err)
 	}
 
@@ -325,6 +325,7 @@ func runSingleDelegate(ctx ToolContext, task delegateTask) singleDelegateResult 
 		Hooks:         dc.Hooks,
 		SafeMode:      ctx.SafeMode,
 		User:          dc.User,
+		SessionStore:  dc.SessionStore,
 		OnWorking: func(working bool) {
 			subMgr.SetWorking(working)
 			if !working {

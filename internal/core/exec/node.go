@@ -8,22 +8,35 @@ import (
 	"github.com/dagucloud/dagu/internal/core"
 )
 
+// PushBackEntry records one push-back event for a step approval cycle.
+type PushBackEntry struct {
+	Iteration int               `json:"iteration"`
+	By        string            `json:"by,omitempty"`
+	At        string            `json:"at,omitempty"`
+	Inputs    map[string]string `json:"inputs,omitempty"`
+}
+
 // Node represents a DAG step with its execution state for persistence
 type Node struct {
-	Step            core.Step            `json:"step,omitzero"`
-	Stdout          string               `json:"stdout"` // standard output log file path
-	Stderr          string               `json:"stderr"` // standard error log file path
-	StartedAt       string               `json:"startedAt"`
-	FinishedAt      string               `json:"finishedAt"`
-	Status          core.NodeStatus      `json:"status"`
-	RetriedAt       string               `json:"retriedAt,omitempty"`
-	RetryCount      int                  `json:"retryCount,omitempty"`
-	DoneCount       int                  `json:"doneCount,omitempty"`
-	Repeated        bool                 `json:"repeated,omitempty"` // indicates if the node has been repeated
-	Error           string               `json:"error,omitempty"`
-	SubRuns         []SubDAGRun          `json:"children,omitempty"`
-	SubRunsRepeated []SubDAGRun          `json:"childrenRepeated,omitempty"` // repeated sub DAG runs
-	OutputVariables *collections.SyncMap `json:"outputVariables,omitempty"`
+	Step             core.Step            `json:"step,omitzero"`
+	Stdout           string               `json:"stdout"` // standard output log file path
+	Stderr           string               `json:"stderr"` // standard error log file path
+	WorkingDir       string               `json:"workingDir,omitempty"`
+	StartedAt        string               `json:"startedAt"`
+	FinishedAt       string               `json:"finishedAt"`
+	Status           core.NodeStatus      `json:"status"`
+	RetriedAt        string               `json:"retriedAt,omitempty"`
+	RetryCount       int                  `json:"retryCount,omitempty"`
+	DoneCount        int                  `json:"doneCount,omitempty"`
+	Repeated         bool                 `json:"repeated,omitempty"` // indicates if the node has been repeated
+	SkippedByRetry   bool                 `json:"skippedByRetry,omitempty"`
+	Error            string               `json:"error,omitempty"`
+	SubRuns          []SubDAGRun          `json:"children,omitempty"`
+	SubRunsRepeated  []SubDAGRun          `json:"childrenRepeated,omitempty"` // repeated sub DAG runs
+	OutputVariables  *collections.SyncMap `json:"outputVariables,omitempty"`
+	OutputValue      *string              `json:"outputValue,omitempty"`
+	OutputsValue     *string              `json:"outputsValue,omitempty"`
+	StepOutputsValue *string              `json:"stepOutputsValue,omitempty"`
 	// ApprovedAt records when this wait step was approved
 	ApprovedAt string `json:"approvedAt,omitempty"`
 	// ApprovalInputs stores key-value parameters provided during approval
@@ -41,9 +54,14 @@ type Node struct {
 	// PushBackInputs stores the inputs from the last push-back.
 	// These are injected as environment variables when the step re-executes.
 	PushBackInputs map[string]string `json:"pushBackInputs,omitempty"`
+	// PushBackHistory stores the chronological push-back inputs for this step.
+	PushBackHistory []PushBackEntry `json:"pushBackHistory,omitempty"`
+	// PushBackPreviousStdout stores the stdout log path from the execution that
+	// was reset by the latest push-back.
+	PushBackPreviousStdout string `json:"pushBackPreviousStdout,omitempty"`
 	// ChatMessages stores the session messages for chat/LLM steps.
 	// This field is populated during execution and synced via status updates
-	// in shared-nothing mode where workers don't have filesystem access.
+	// from workers.
 	ChatMessages []LLMMessage `json:"chatMessages,omitempty"`
 	// ToolDefinitions stores the tool definitions that were available to the LLM.
 	// This enables debugging visibility into what tools and schemas were sent.

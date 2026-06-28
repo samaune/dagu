@@ -64,7 +64,16 @@ func IsFile(path string) bool {
 // It returns the opened *os.File or a non-nil error if the operation fails.
 func OpenOrCreateFile(filepath string) (*os.File, error) {
 	flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND | os.O_SYNC
-	file, err := os.OpenFile(filepath, flags, 0600) // nolint:gosec
+
+	var file *os.File
+	err := retryWindowsFileOp(func() error {
+		opened, err := os.OpenFile(filepath, flags, 0600) // nolint:gosec
+		if err != nil {
+			return err
+		}
+		file = opened
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create/open log file %s: %w", filepath, err)
 	}
@@ -211,7 +220,17 @@ func CreateTempDAGFile(subDir, dagName string, yamlData []byte, extraDocs ...[]b
 	// limit. os.CreateTemp replaces '*' with up to 10 random digits, plus the
 	// '-' separator we add = 11 chars of overhead.
 	const maxTempPrefix = 29 // 40 (DAGNameMaxLen) - 11 (separator + random suffix)
-	pattern := fmt.Sprintf("%s-*.yaml", TruncString(dagName, maxTempPrefix))
+	patternName := strings.TrimSpace(dagName)
+	if patternName != "" {
+		patternName = filepath.Base(patternName)
+		if ext := strings.ToLower(filepath.Ext(patternName)); ext == ".yaml" || ext == ".yml" {
+			patternName = strings.TrimSuffix(patternName, filepath.Ext(patternName))
+		}
+	}
+	if patternName == "" {
+		patternName = "dag"
+	}
+	pattern := fmt.Sprintf("%s-*.yaml", TruncString(patternName, maxTempPrefix))
 	tempFile, err := os.CreateTemp(tempDir, pattern)
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp file: %w", err)
@@ -291,7 +310,7 @@ func WriteFileAtomic(filePath string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("failed to close temp file %s: %w", tempPath, err)
 	}
 
-	if err := ReplaceFileWithRetry(tempPath, filePath); err != nil {
+	if err := ReplaceFile(tempPath, filePath); err != nil {
 		cleanup()
 		return fmt.Errorf("failed to rename %s to %s: %w", tempPath, filePath, err)
 	}

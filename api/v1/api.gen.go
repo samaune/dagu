@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,18 @@ import (
 const (
 	ApiTokenScopes  = "apiToken.Scopes"
 	BasicAuthScopes = "basicAuth.Scopes"
+)
+
+// Defines values for APIKeyAllowedSurfaces.
+const (
+	APIKeyAllowedSurfacesMcp     APIKeyAllowedSurfaces = "mcp"
+	APIKeyAllowedSurfacesRestApi APIKeyAllowedSurfaces = "rest_api"
+)
+
+// Defines values for APIKeyAttributionClass.
+const (
+	APIKeyAttributionClassServiceAccount APIKeyAttributionClass = "service_account"
+	APIKeyAttributionClassUserOwned      APIKeyAttributionClass = "user_owned"
 )
 
 // Defines values for AgentBashPolicyDefaultBehavior.
@@ -62,10 +75,24 @@ const (
 	AgentMessageTypeUserPrompt AgentMessageType = "user_prompt"
 )
 
+// Defines values for AgentTavilyWebToolsConfigSearchDepth.
+const (
+	AgentTavilyWebToolsConfigSearchDepthAdvanced  AgentTavilyWebToolsConfigSearchDepth = "advanced"
+	AgentTavilyWebToolsConfigSearchDepthBasic     AgentTavilyWebToolsConfigSearchDepth = "basic"
+	AgentTavilyWebToolsConfigSearchDepthFast      AgentTavilyWebToolsConfigSearchDepth = "fast"
+	AgentTavilyWebToolsConfigSearchDepthUltraFast AgentTavilyWebToolsConfigSearchDepth = "ultra-fast"
+)
+
 // Defines values for AgentUserPromptPromptType.
 const (
 	AgentUserPromptPromptTypeCommandApproval AgentUserPromptPromptType = "command_approval"
 	AgentUserPromptPromptTypeGeneral         AgentUserPromptPromptType = "general"
+)
+
+// Defines values for AgentWebToolsBackend.
+const (
+	AgentWebToolsBackendFirecrawl AgentWebToolsBackend = "firecrawl"
+	AgentWebToolsBackendTavily    AgentWebToolsBackend = "tavily"
 )
 
 // Defines values for ArtifactNodeType.
@@ -77,6 +104,7 @@ const (
 // Defines values for ArtifactPreviewKind.
 const (
 	ArtifactPreviewKindBinary   ArtifactPreviewKind = "binary"
+	ArtifactPreviewKindHtml     ArtifactPreviewKind = "html"
 	ArtifactPreviewKindImage    ArtifactPreviewKind = "image"
 	ArtifactPreviewKindMarkdown ArtifactPreviewKind = "markdown"
 	ArtifactPreviewKindText     ArtifactPreviewKind = "text"
@@ -97,6 +125,18 @@ const (
 	CoordinatorInstanceStatusUnknown  CoordinatorInstanceStatus = "unknown"
 )
 
+// Defines values for CreateAPIKeyRequestAllowedSurfaces.
+const (
+	CreateAPIKeyRequestAllowedSurfacesMcp     CreateAPIKeyRequestAllowedSurfaces = "mcp"
+	CreateAPIKeyRequestAllowedSurfacesRestApi CreateAPIKeyRequestAllowedSurfaces = "rest_api"
+)
+
+// Defines values for CreateAPIKeyRequestAttributionClass.
+const (
+	CreateAPIKeyRequestAttributionClassServiceAccount CreateAPIKeyRequestAttributionClass = "service_account"
+	CreateAPIKeyRequestAttributionClassUserOwned      CreateAPIKeyRequestAttributionClass = "user_owned"
+)
+
 // Defines values for CreateModelConfigRequestProvider.
 const (
 	CreateModelConfigRequestProviderAnthropic   CreateModelConfigRequestProvider = "anthropic"
@@ -104,6 +144,7 @@ const (
 	CreateModelConfigRequestProviderLocal       CreateModelConfigRequestProvider = "local"
 	CreateModelConfigRequestProviderOpenai      CreateModelConfigRequestProvider = "openai"
 	CreateModelConfigRequestProviderOpenaiCodex CreateModelConfigRequestProvider = "openai-codex"
+	CreateModelConfigRequestProviderOpencode    CreateModelConfigRequestProvider = "opencode"
 	CreateModelConfigRequestProviderOpenrouter  CreateModelConfigRequestProvider = "openrouter"
 	CreateModelConfigRequestProviderZai         CreateModelConfigRequestProvider = "zai"
 )
@@ -121,6 +162,11 @@ const (
 	CreateRemoteNodeRequestAuthTypeBasic CreateRemoteNodeRequestAuthType = "basic"
 	CreateRemoteNodeRequestAuthTypeNone  CreateRemoteNodeRequestAuthType = "none"
 	CreateRemoteNodeRequestAuthTypeToken CreateRemoteNodeRequestAuthType = "token"
+)
+
+// Defines values for CreateSecretRequestProviderType.
+const (
+	CreateSecretRequestProviderTypeDaguManaged CreateSecretRequestProviderType = "dagu-managed"
 )
 
 // Defines values for DocTreeNodeResponseType.
@@ -142,6 +188,7 @@ const (
 	ErrorCodeMaxRunReached    ErrorCode = "max_run_reached"
 	ErrorCodeNotFound         ErrorCode = "not_found"
 	ErrorCodeNotRunning       ErrorCode = "not_running"
+	ErrorCodeRateLimited      ErrorCode = "rate_limited"
 	ErrorCodeRemoteNodeError  ErrorCode = "remote_node_error"
 	ErrorCodeTimeout          ErrorCode = "timeout"
 	ErrorCodeUnauthorized     ErrorCode = "unauthorized"
@@ -153,6 +200,43 @@ const (
 	HealthResponseStatusUnhealthy HealthResponseStatus = "unhealthy"
 )
 
+// Defines values for IncidentPagerDutyProviderInputEnvelopeType.
+const (
+	IncidentPagerDutyProviderInputEnvelopeTypePagerduty IncidentPagerDutyProviderInputEnvelopeType = "pagerduty"
+)
+
+// Defines values for IncidentPolicyScope.
+const (
+	IncidentPolicyScopeDag       IncidentPolicyScope = "dag"
+	IncidentPolicyScopeGlobal    IncidentPolicyScope = "global"
+	IncidentPolicyScopeWorkspace IncidentPolicyScope = "workspace"
+)
+
+// Defines values for IncidentProviderType.
+const (
+	IncidentProviderTypePagerduty                  IncidentProviderType = "pagerduty"
+	IncidentProviderTypeSolarwindsIncidentResponse IncidentProviderType = "solarwinds_incident_response"
+)
+
+// Defines values for IncidentSeverity.
+const (
+	IncidentSeverityCritical IncidentSeverity = "critical"
+	IncidentSeverityError    IncidentSeverity = "error"
+	IncidentSeverityInfo     IncidentSeverity = "info"
+	IncidentSeverityWarning  IncidentSeverity = "warning"
+)
+
+// Defines values for IncidentSolarWindsProviderInputEnvelopeType.
+const (
+	IncidentSolarWindsProviderInputEnvelopeTypeSolarwindsIncidentResponse IncidentSolarWindsProviderInputEnvelopeType = "solarwinds_incident_response"
+)
+
+// Defines values for InheritedRuntimeProfileScope.
+const (
+	InheritedRuntimeProfileScopeGlobal    InheritedRuntimeProfileScope = "global"
+	InheritedRuntimeProfileScopeWorkspace InheritedRuntimeProfileScope = "workspace"
+)
+
 // Defines values for ModelConfigResponseProvider.
 const (
 	ModelConfigResponseProviderAnthropic   ModelConfigResponseProvider = "anthropic"
@@ -160,6 +244,7 @@ const (
 	ModelConfigResponseProviderLocal       ModelConfigResponseProvider = "local"
 	ModelConfigResponseProviderOpenai      ModelConfigResponseProvider = "openai"
 	ModelConfigResponseProviderOpenaiCodex ModelConfigResponseProvider = "openai-codex"
+	ModelConfigResponseProviderOpencode    ModelConfigResponseProvider = "opencode"
 	ModelConfigResponseProviderOpenrouter  ModelConfigResponseProvider = "openrouter"
 	ModelConfigResponseProviderZai         ModelConfigResponseProvider = "zai"
 )
@@ -179,6 +264,7 @@ const (
 	ModelPresetProviderLocal       ModelPresetProvider = "local"
 	ModelPresetProviderOpenai      ModelPresetProvider = "openai"
 	ModelPresetProviderOpenaiCodex ModelPresetProvider = "openai-codex"
+	ModelPresetProviderOpencode    ModelPresetProvider = "opencode"
 	ModelPresetProviderOpenrouter  ModelPresetProvider = "openrouter"
 	ModelPresetProviderZai         ModelPresetProvider = "zai"
 )
@@ -219,6 +305,29 @@ const (
 	NodeStatusLabelWaiting            NodeStatusLabel = "waiting"
 )
 
+// Defines values for NotificationEventType.
+const (
+	NotificationEventTypeDagRunAborted   NotificationEventType = "dag.run.aborted"
+	NotificationEventTypeDagRunFailed    NotificationEventType = "dag.run.failed"
+	NotificationEventTypeDagRunRejected  NotificationEventType = "dag.run.rejected"
+	NotificationEventTypeDagRunSucceeded NotificationEventType = "dag.run.succeeded"
+	NotificationEventTypeDagRunWaiting   NotificationEventType = "dag.run.waiting"
+)
+
+// Defines values for NotificationProviderType.
+const (
+	NotificationProviderTypeEmail    NotificationProviderType = "email"
+	NotificationProviderTypeSlack    NotificationProviderType = "slack"
+	NotificationProviderTypeTelegram NotificationProviderType = "telegram"
+	NotificationProviderTypeWebhook  NotificationProviderType = "webhook"
+)
+
+// Defines values for NotificationRouteScope.
+const (
+	NotificationRouteScopeGlobal    NotificationRouteScope = "global"
+	NotificationRouteScopeWorkspace NotificationRouteScope = "workspace"
+)
+
 // Defines values for ParamDefType.
 const (
 	ParamDefTypeBoolean ParamDefType = "boolean"
@@ -252,6 +361,18 @@ const (
 	RepeatModeWhile RepeatMode = "while"
 )
 
+// Defines values for RuntimeProfileEntryKind.
+const (
+	RuntimeProfileEntryKindSecret   RuntimeProfileEntryKind = "secret"
+	RuntimeProfileEntryKindVariable RuntimeProfileEntryKind = "variable"
+)
+
+// Defines values for RuntimeProfileStatus.
+const (
+	RuntimeProfileStatusActive   RuntimeProfileStatus = "active"
+	RuntimeProfileStatusDisabled RuntimeProfileStatus = "disabled"
+)
+
 // Defines values for ScheduleKind.
 const (
 	ScheduleKindAt   ScheduleKind = "at"
@@ -263,6 +384,22 @@ const (
 	SchedulerInstanceStatusActive   SchedulerInstanceStatus = "active"
 	SchedulerInstanceStatusInactive SchedulerInstanceStatus = "inactive"
 	SchedulerInstanceStatusUnknown  SchedulerInstanceStatus = "unknown"
+)
+
+// Defines values for SecretProviderType.
+const (
+	SecretProviderTypeAwsSecretsManager SecretProviderType = "aws-secrets-manager"
+	SecretProviderTypeAzureKeyVault     SecretProviderType = "azure-key-vault"
+	SecretProviderTypeDaguManaged       SecretProviderType = "dagu-managed"
+	SecretProviderTypeGcpSecretManager  SecretProviderType = "gcp-secret-manager"
+	SecretProviderTypeKubernetes        SecretProviderType = "kubernetes"
+	SecretProviderTypeVault             SecretProviderType = "vault"
+)
+
+// Defines values for SecretStatus.
+const (
+	SecretStatusActive   SecretStatus = "active"
+	SecretStatusDisabled SecretStatus = "disabled"
 )
 
 // Defines values for Status.
@@ -291,6 +428,12 @@ const (
 	StatusLabelWaiting            StatusLabel = "waiting"
 )
 
+// Defines values for StepOutputDeclarationType.
+const (
+	StepOutputDeclarationTypeJson   StepOutputDeclarationType = "json"
+	StepOutputDeclarationTypeString StepOutputDeclarationType = "string"
+)
+
 // Defines values for Stream.
 const (
 	StreamStderr Stream = "stderr"
@@ -305,6 +448,7 @@ const (
 
 // Defines values for SyncItemKind.
 const (
+	SyncItemKindConfig SyncItemKind = "config"
 	SyncItemKindDag    SyncItemKind = "dag"
 	SyncItemKindDoc    SyncItemKind = "doc"
 	SyncItemKindMemory SyncItemKind = "memory"
@@ -355,6 +499,18 @@ const (
 	TunnelStatusResponseStatusReconnecting TunnelStatusResponseStatus = "reconnecting"
 )
 
+// Defines values for UpdateAPIKeyRequestAllowedSurfaces.
+const (
+	UpdateAPIKeyRequestAllowedSurfacesMcp     UpdateAPIKeyRequestAllowedSurfaces = "mcp"
+	UpdateAPIKeyRequestAllowedSurfacesRestApi UpdateAPIKeyRequestAllowedSurfaces = "rest_api"
+)
+
+// Defines values for UpdateAPIKeyRequestAttributionClass.
+const (
+	UpdateAPIKeyRequestAttributionClassServiceAccount UpdateAPIKeyRequestAttributionClass = "service_account"
+	UpdateAPIKeyRequestAttributionClassUserOwned      UpdateAPIKeyRequestAttributionClass = "user_owned"
+)
+
 // Defines values for UpdateModelConfigRequestProvider.
 const (
 	UpdateModelConfigRequestProviderAnthropic   UpdateModelConfigRequestProvider = "anthropic"
@@ -362,6 +518,7 @@ const (
 	UpdateModelConfigRequestProviderLocal       UpdateModelConfigRequestProvider = "local"
 	UpdateModelConfigRequestProviderOpenai      UpdateModelConfigRequestProvider = "openai"
 	UpdateModelConfigRequestProviderOpenaiCodex UpdateModelConfigRequestProvider = "openai-codex"
+	UpdateModelConfigRequestProviderOpencode    UpdateModelConfigRequestProvider = "opencode"
 	UpdateModelConfigRequestProviderOpenrouter  UpdateModelConfigRequestProvider = "openrouter"
 	UpdateModelConfigRequestProviderZai         UpdateModelConfigRequestProvider = "zai"
 )
@@ -396,6 +553,40 @@ const (
 	UserRoleViewer    UserRole = "viewer"
 )
 
+// Defines values for ValueReferenceNoticeReason.
+const (
+	ValueReferenceNoticeReasonMissingDependency    ValueReferenceNoticeReason = "missing_dependency"
+	ValueReferenceNoticeReasonNamespaceUnavailable ValueReferenceNoticeReason = "namespace_unavailable"
+	ValueReferenceNoticeReasonSelfReference        ValueReferenceNoticeReason = "self_reference"
+	ValueReferenceNoticeReasonUnknownContextField  ValueReferenceNoticeReason = "unknown_context_field"
+	ValueReferenceNoticeReasonUnknownOutputName    ValueReferenceNoticeReason = "unknown_output_name"
+	ValueReferenceNoticeReasonUnknownStepId        ValueReferenceNoticeReason = "unknown_step_id"
+)
+
+// Defines values for ViewSpecType.
+const (
+	ViewSpecTypeKanban ViewSpecType = "kanban"
+)
+
+// Defines values for WebhookAuthMode.
+const (
+	WebhookAuthModeHmacOnly     WebhookAuthMode = "hmac_only"
+	WebhookAuthModeTokenAndHmac WebhookAuthMode = "token_and_hmac"
+	WebhookAuthModeTokenOnly    WebhookAuthMode = "token_only"
+)
+
+// Defines values for WebhookHMACConfigureRequestAuthMode.
+const (
+	WebhookHMACConfigureRequestAuthModeHmacOnly     WebhookHMACConfigureRequestAuthMode = "hmac_only"
+	WebhookHMACConfigureRequestAuthModeTokenAndHmac WebhookHMACConfigureRequestAuthMode = "token_and_hmac"
+)
+
+// Defines values for WebhookHMACEnforcementMode.
+const (
+	WebhookHMACEnforcementModeObserve WebhookHMACEnforcementMode = "observe"
+	WebhookHMACEnforcementModeStrict  WebhookHMACEnforcementMode = "strict"
+)
+
 // Defines values for WorkerHealthStatus.
 const (
 	WorkerHealthStatusHealthy   WorkerHealthStatus = "healthy"
@@ -403,10 +594,22 @@ const (
 	WorkerHealthStatusWarning   WorkerHealthStatus = "warning"
 )
 
+// Defines values for AgentSessionPaginationMode.
+const (
+	AgentSessionPaginationModeCursor AgentSessionPaginationMode = "cursor"
+	AgentSessionPaginationModeOffset AgentSessionPaginationMode = "offset"
+)
+
 // Defines values for EventLogPaginationMode.
 const (
 	EventLogPaginationModeCursor EventLogPaginationMode = "cursor"
 	EventLogPaginationModeOffset EventLogPaginationMode = "offset"
+)
+
+// Defines values for ListAgentSessionsParamsPaginationMode.
+const (
+	ListAgentSessionsParamsPaginationModeCursor ListAgentSessionsParamsPaginationMode = "cursor"
+	ListAgentSessionsParamsPaginationModeOffset ListAgentSessionsParamsPaginationMode = "offset"
 )
 
 // Defines values for ListDAGsParamsSort.
@@ -442,6 +645,12 @@ const (
 
 // APIKey API key information
 type APIKey struct {
+	// AllowedSurfaces Interfaces where this API key may be accepted
+	AllowedSurfaces []APIKeyAllowedSurfaces `json:"allowedSurfaces"`
+
+	// AttributionClass Whether this key is owned by a user or represents a service account
+	AttributionClass APIKeyAttributionClass `json:"attributionClass"`
+
 	// CreatedAt Creation timestamp
 	CreatedAt time.Time `json:"createdAt"`
 
@@ -460,15 +669,39 @@ type APIKey struct {
 	// LastUsedAt Last authentication timestamp
 	LastUsedAt *time.Time `json:"lastUsedAt"`
 
+	// MigratedAsServiceAccount True when a legacy key missing attributionClass was defaulted to service_account
+	MigratedAsServiceAccount *bool `json:"migratedAsServiceAccount,omitempty"`
+
 	// Name Human-readable name
 	Name string `json:"name"`
+
+	// OwnerUserId Owner user ID when attributionClass is user_owned
+	OwnerUserId *string `json:"ownerUserId,omitempty"`
+
+	// OwnerUsername Owner username when attributionClass is user_owned
+	OwnerUsername *string `json:"ownerUsername,omitempty"`
 
 	// Role User role determining access permissions. admin: full access including user management, manager: DAG CRUD and execution with audit log access, developer: DAG CRUD and execution, operator: DAG execution only, viewer: read-only
 	Role UserRole `json:"role"`
 
+	// ServiceAccountId Service-account identifier when attributionClass is service_account
+	ServiceAccountId *string `json:"serviceAccountId,omitempty"`
+
+	// ServiceAccountName Service-account display name when attributionClass is service_account
+	ServiceAccountName *string `json:"serviceAccountName,omitempty"`
+
 	// UpdatedAt Last update timestamp
 	UpdatedAt time.Time `json:"updatedAt"`
+
+	// WorkspaceAccess Workspace access policy. all=true grants the top-level role in every workspace. all=false requires explicit workspace grants and a top-level viewer role.
+	WorkspaceAccess WorkspaceAccess `json:"workspaceAccess"`
 }
+
+// APIKeyAllowedSurfaces defines model for APIKey.AllowedSurfaces.
+type APIKeyAllowedSurfaces string
+
+// APIKeyAttributionClass Whether this key is owned by a user or represents a service account
+type APIKeyAttributionClass string
 
 // APIKeyResponse API key response
 type APIKeyResponse struct {
@@ -559,6 +792,9 @@ type AgentConfigResponse struct {
 
 	// WebSearch Provider-native web search configuration for agent sessions
 	WebSearch *AgentWebSearchConfig `json:"webSearch,omitempty"`
+
+	// WebTools First-class web_search and web_extract tool configuration
+	WebTools *AgentWebToolsConfig `json:"webTools,omitempty"`
 }
 
 // AgentDAGContext DAG reference for context-aware agent responses
@@ -588,6 +824,24 @@ type AgentDelegateSnapshot struct {
 
 // AgentDelegateSnapshotStatus defines model for AgentDelegateSnapshot.Status.
 type AgentDelegateSnapshotStatus string
+
+// AgentFirecrawlWebToolsConfig Firecrawl web tool settings
+type AgentFirecrawlWebToolsConfig struct {
+	// ApiKey Firecrawl API key. Write-only; omitted from responses.
+	ApiKey *string `json:"apiKey,omitempty"`
+
+	// ApiKeyConfigured Whether a Firecrawl API key is stored
+	ApiKeyConfigured *bool `json:"apiKeyConfigured,omitempty"`
+
+	// BaseUrl Optional Firecrawl-compatible base URL
+	BaseUrl *string `json:"baseUrl,omitempty"`
+
+	// ClearApiKey Clear the stored Firecrawl API key when true
+	ClearApiKey *bool `json:"clearApiKey,omitempty"`
+
+	// MaxResults Maximum search results allowed per web_search call
+	MaxResults *int `json:"maxResults,omitempty"`
+}
 
 // AgentMemoryResponse Agent memory overview
 type AgentMemoryResponse struct {
@@ -683,6 +937,30 @@ type AgentStatusResponse struct {
 	Status string `json:"status"`
 }
 
+// AgentTavilyWebToolsConfig Tavily web tool settings
+type AgentTavilyWebToolsConfig struct {
+	// ApiKey Tavily API key. Write-only; omitted from responses.
+	ApiKey *string `json:"apiKey,omitempty"`
+
+	// ApiKeyConfigured Whether a Tavily API key is stored
+	ApiKeyConfigured *bool `json:"apiKeyConfigured,omitempty"`
+
+	// BaseUrl Optional Tavily-compatible base URL
+	BaseUrl *string `json:"baseUrl,omitempty"`
+
+	// ClearApiKey Clear the stored Tavily API key when true
+	ClearApiKey *bool `json:"clearApiKey,omitempty"`
+
+	// MaxResults Maximum search results allowed per web_search call
+	MaxResults *int `json:"maxResults,omitempty"`
+
+	// SearchDepth Tavily search depth
+	SearchDepth *AgentTavilyWebToolsConfigSearchDepth `json:"searchDepth,omitempty"`
+}
+
+// AgentTavilyWebToolsConfigSearchDepth Tavily search depth
+type AgentTavilyWebToolsConfigSearchDepth string
+
 // AgentTokenUsage Token usage statistics from LLM
 type AgentTokenUsage struct {
 	CompletionTokens *int `json:"completionTokens,omitempty"`
@@ -773,6 +1051,24 @@ type AgentWebSearchConfig struct {
 	MaxUses *int `json:"maxUses,omitempty"`
 }
 
+// AgentWebToolsBackend Backend provider for agent web tools
+type AgentWebToolsBackend string
+
+// AgentWebToolsConfig First-class web_search and web_extract tool configuration
+type AgentWebToolsConfig struct {
+	// Backend Backend provider for agent web tools
+	Backend *AgentWebToolsBackend `json:"backend,omitempty"`
+
+	// Enabled Whether provider-backed web tools are enabled
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Firecrawl Firecrawl web tool settings
+	Firecrawl *AgentFirecrawlWebToolsConfig `json:"firecrawl,omitempty"`
+
+	// Tavily Tavily web tool settings
+	Tavily *AgentTavilyWebToolsConfig `json:"tavily,omitempty"`
+}
+
 // ApprovalConfig Configuration for a human approval gate on a step
 type ApprovalConfig struct {
 	// Input List of expected input field names from the approver
@@ -783,6 +1079,9 @@ type ApprovalConfig struct {
 
 	// Required Subset of input fields that must be provided
 	Required *[]string `json:"required,omitempty"`
+
+	// RewindTo Optional step name to restart from when the approver pushes the step back. Must reference the step itself or an upstream dependency.
+	RewindTo *string `json:"rewindTo,omitempty"`
 }
 
 // ApproveStepRequest Request body for approving a waiting step
@@ -811,7 +1110,7 @@ type ArtifactPreviewKind string
 
 // ArtifactPreviewResponse Preview metadata and optional inline content for a DAG-run artifact file
 type ArtifactPreviewResponse struct {
-	// Content Inline preview content for markdown or text artifacts
+	// Content Inline preview content for markdown, HTML, or text artifacts
 	Content *string `json:"content,omitempty"`
 
 	// Kind Preview mode for an artifact file
@@ -867,6 +1166,15 @@ type AuditEntry struct {
 	// Category Category of the audit event (e.g., terminal, user, dag)
 	Category string `json:"category"`
 
+	// CorrelationId Correlation ID linking related audit events
+	CorrelationId *string `json:"correlationId,omitempty"`
+
+	// CredentialId Credential ID used for the request
+	CredentialId *string `json:"credentialId,omitempty"`
+
+	// CredentialType Credential type used for the request
+	CredentialType *string `json:"credentialType,omitempty"`
+
 	// Details JSON-encoded action-specific details
 	Details *string `json:"details,omitempty"`
 
@@ -876,6 +1184,24 @@ type AuditEntry struct {
 	// IpAddress Client IP address if available
 	IpAddress *string `json:"ipAddress,omitempty"`
 
+	// McpTool MCP tool name when source is MCP
+	McpTool *string `json:"mcpTool,omitempty"`
+
+	// ResourceId Affected resource ID
+	ResourceId *string `json:"resourceId,omitempty"`
+
+	// ResourceType Affected resource type
+	ResourceType *string `json:"resourceType,omitempty"`
+
+	// Result Event result such as succeeded, failed, or denied
+	Result *string `json:"result,omitempty"`
+
+	// Source Source surface that produced the event
+	Source *string `json:"source,omitempty"`
+
+	// Surface Externally accepted credential surface
+	Surface *string `json:"surface,omitempty"`
+
 	// Timestamp When the event occurred
 	Timestamp time.Time `json:"timestamp"`
 
@@ -884,6 +1210,9 @@ type AuditEntry struct {
 
 	// Username Username of the user who performed the action
 	Username string `json:"username"`
+
+	// Workspace Canonical workspace for filtering
+	Workspace *string `json:"workspace,omitempty"`
 }
 
 // AuditLogsResponse Response containing audit log entries
@@ -1011,13 +1340,13 @@ type CompleteAgentAuthProviderLoginResponse struct {
 
 // Condition Precondition that must be satisfied before running a step or DAG-run
 type Condition struct {
-	// Condition Expression or check to evaluate
+	// Condition Expression or check to evaluate. When `expected` is omitted, the value runs as a command check using the same variable expansion rules as shell `command` steps.
 	Condition string `json:"condition"`
 
 	// Error Error message if the condition is not met
 	Error *string `json:"error,omitempty"`
 
-	// Expected Expected result of the condition evaluation
+	// Expected Expected result of the condition evaluation. When set, Dagu compares the evaluated string output instead of using command exit status.
 	Expected *string `json:"expected,omitempty"`
 
 	// Matched Whether the condition was met
@@ -1056,15 +1385,36 @@ type CoordinatorStatusResponse struct {
 
 // CreateAPIKeyRequest Create API key request
 type CreateAPIKeyRequest struct {
+	// AllowedSurfaces Interfaces where this API key may be accepted
+	AllowedSurfaces []CreateAPIKeyRequestAllowedSurfaces `json:"allowedSurfaces"`
+
+	// AttributionClass Whether this key is owned by a user or represents a service account
+	AttributionClass CreateAPIKeyRequestAttributionClass `json:"attributionClass"`
+
 	// Description Purpose description
 	Description *string `json:"description,omitempty"`
 
 	// Name Human-readable name
 	Name string `json:"name"`
 
+	// OwnerUserId Owner user ID when attributionClass is user_owned
+	OwnerUserId *string `json:"ownerUserId,omitempty"`
+
 	// Role User role determining access permissions. admin: full access including user management, manager: DAG CRUD and execution with audit log access, developer: DAG CRUD and execution, operator: DAG execution only, viewer: read-only
 	Role UserRole `json:"role"`
+
+	// ServiceAccountName Service-account display name when attributionClass is service_account
+	ServiceAccountName *string `json:"serviceAccountName,omitempty"`
+
+	// WorkspaceAccess Workspace access policy. all=true grants the top-level role in every workspace. all=false requires explicit workspace grants and a top-level viewer role.
+	WorkspaceAccess *WorkspaceAccess `json:"workspaceAccess,omitempty"`
 }
+
+// CreateAPIKeyRequestAllowedSurfaces defines model for CreateAPIKeyRequest.AllowedSurfaces.
+type CreateAPIKeyRequestAllowedSurfaces string
+
+// CreateAPIKeyRequestAttributionClass Whether this key is owned by a user or represents a service account
+type CreateAPIKeyRequestAttributionClass string
 
 // CreateAPIKeyResponse Create API key response
 type CreateAPIKeyResponse struct {
@@ -1145,6 +1495,33 @@ type CreateRemoteNodeRequest struct {
 // CreateRemoteNodeRequestAuthType Authentication mode
 type CreateRemoteNodeRequestAuthType string
 
+// CreateRuntimeProfileRequest defines model for CreateRuntimeProfileRequest.
+type CreateRuntimeProfileRequest struct {
+	Description *string `json:"description,omitempty"`
+
+	// Name Runtime profile name.
+	Name      RuntimeProfileName `json:"name"`
+	Protected *bool              `json:"protected,omitempty"`
+}
+
+// CreateSecretRequest defines model for CreateSecretRequest.
+type CreateSecretRequest struct {
+	Description  *string                         `json:"description,omitempty"`
+	ProviderType CreateSecretRequestProviderType `json:"providerType"`
+
+	// Ref Secret ref used from DAG YAML, for example prod/db-password.
+	Ref string `json:"ref"`
+
+	// Value Initial Dagu-managed value. Write-only; never returned by the API.
+	Value *string `json:"value,omitempty"`
+
+	// Workspace Secret scope for management. Use global for workspace-less secrets or a workspace name. Omit for global.
+	Workspace *string `json:"workspace,omitempty"`
+}
+
+// CreateSecretRequestProviderType defines model for CreateSecretRequest.ProviderType.
+type CreateSecretRequestProviderType string
+
 // CreateSoulRequest Request to create a new soul
 type CreateSoulRequest struct {
 	// Content Markdown body content (identity definition)
@@ -1166,12 +1543,17 @@ type CreateUserRequest struct {
 
 	// Username Unique username
 	Username string `json:"username"`
+
+	// WorkspaceAccess Workspace access policy. all=true grants the top-level role in every workspace. all=false requires explicit workspace grants and a top-level viewer role.
+	WorkspaceAccess *WorkspaceAccess `json:"workspaceAccess,omitempty"`
 }
 
 // CreateWorkspaceRequest defines model for CreateWorkspaceRequest.
 type CreateWorkspaceRequest struct {
 	Description *string `json:"description,omitempty"`
-	Name        string  `json:"name"`
+
+	// Name Workspace name. The reserved names all, default, and global are not allowed.
+	Name WorkspaceName `json:"name"`
 }
 
 // DAG Core DAG configuration containing definition and metadata
@@ -1184,6 +1566,9 @@ type DAG struct {
 
 	// Group Logical grouping of related DAGs for organizational purposes
 	Group *string `json:"group,omitempty"`
+
+	// Labels List of labels for categorizing and filtering DAGs
+	Labels *[]string `json:"labels,omitempty"`
 
 	// MaxActiveRuns DEPRECATED: This field is ignored for local (DAG-based) queues. For concurrency control, use global queues
 	// Deprecated: For concurrency control, configure global queues in config.yaml instead
@@ -1198,14 +1583,21 @@ type DAG struct {
 	// Queue Name of the queue this DAG is assigned to. If not specified, the DAG name itself becomes the queue name
 	Queue *string `json:"queue,omitempty"`
 
+	// Resources Resource limits requested for a DAG run
+	Resources *DAGResources `json:"resources,omitempty"`
+
 	// RunConfig Configuration for controlling user interactions when starting DAG runs
 	RunConfig *RunConfig `json:"runConfig,omitempty"`
 
 	// Schedule List of scheduling expressions defining when DAG-runs should be created from this DAG
 	Schedule *[]Schedule `json:"schedule,omitempty"`
 
-	// Tags List of tags for categorizing and filtering DAGs
+	// Tags Deprecated alias for labels. List of labels for categorizing and filtering DAGs
+	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	Tags *[]string `json:"tags,omitempty"`
+
+	// Workspace Workspace label value for the DAG. Omitted for default DAGs and invalid workspace labels.
+	Workspace *string `json:"workspace,omitempty"`
 }
 
 // DAGArtifactsConfig Configuration for DAG run artifact storage
@@ -1243,6 +1635,12 @@ type DAGDetails struct {
 	// HistRetentionDays Number of days to retain historical logs
 	HistRetentionDays *int `json:"histRetentionDays,omitempty"`
 
+	// HistRetentionRuns Number of DAG runs to retain historical logs. Mutually exclusive with histRetentionDays.
+	HistRetentionRuns *int `json:"histRetentionRuns,omitempty"`
+
+	// Labels List of labels for categorizing and filtering DAGs
+	Labels *[]string `json:"labels,omitempty"`
+
 	// LogDir Directory path for storing log files
 	LogDir *string `json:"logDir,omitempty"`
 
@@ -1262,6 +1660,9 @@ type DAGDetails struct {
 	// ParamDefs Ordered parameter definitions derived from DAG params for typed UI rendering and validation
 	ParamDefs *[]ParamDef `json:"paramDefs,omitempty"`
 
+	// ParamSchema Resolved JSON Schema for schema-backed DAG params when safe for direct UI form rendering
+	ParamSchema *map[string]interface{} `json:"paramSchema,omitempty"`
+
 	// Params List of parameter names that can be passed to DAG-runs created from this DAG
 	Params *[]string `json:"params,omitempty"`
 
@@ -1270,6 +1671,9 @@ type DAGDetails struct {
 
 	// Queue Name of the queue this DAG is assigned to. If not specified, the DAG name itself becomes the queue name
 	Queue *string `json:"queue,omitempty"`
+
+	// Resources Resource limits requested for a DAG run
+	Resources *DAGResources `json:"resources,omitempty"`
 
 	// RunConfig Configuration for controlling user interactions when starting DAG runs
 	RunConfig *RunConfig `json:"runConfig,omitempty"`
@@ -1280,14 +1684,18 @@ type DAGDetails struct {
 	// Steps List of steps to execute in DAG-runs created from this DAG
 	Steps *[]Step `json:"steps,omitempty"`
 
-	// Tags List of tags for categorizing and filtering DAGs
+	// Tags Deprecated alias for labels. List of labels for categorizing and filtering DAGs
+	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	Tags *[]string `json:"tags,omitempty"`
 }
 
 // DAGEditorHints Editor-only metadata used to synthesize per-document schema hints
 type DAGEditorHints struct {
-	// InheritedCustomStepTypes Custom step types inherited from base config and available to the current DAG
-	InheritedCustomStepTypes []InheritedCustomStepTypeHint `json:"inheritedCustomStepTypes"`
+	// InheritedCustomActions Custom actions inherited from base config and available to the current DAG
+	InheritedCustomActions *[]InheritedCustomActionHint `json:"inheritedCustomActions,omitempty"`
+
+	// InheritedLegacyDefinitions Deprecated legacy execution definitions inherited from base config and available to the current DAG
+	InheritedLegacyDefinitions []InheritedLegacyDefinitionHint `json:"inheritedLegacyDefinitions"`
 }
 
 // DAGFile DAG file with its status information
@@ -1329,9 +1737,54 @@ type DAGGridItem struct {
 // DAGName Name of the DAG
 type DAGName = string
 
+// DAGNotificationSettings Server-side DAG notification settings
+type DAGNotificationSettings struct {
+	CreatedAt time.Time `json:"createdAt"`
+
+	// DagName Name of the DAG these settings apply to
+	DagName string `json:"dagName"`
+
+	// Enabled Whether notification delivery is enabled for this DAG
+	Enabled bool `json:"enabled"`
+
+	// Events DAG run events that trigger notifications
+	Events []NotificationEventType `json:"events"`
+
+	// Id Stable settings ID
+	Id string `json:"id"`
+
+	// Subscriptions Notification channels subscribed by this DAG
+	Subscriptions []NotificationSubscription `json:"subscriptions"`
+
+	// Targets DAG-local notification targets kept for backward compatibility
+	Targets   []NotificationTarget `json:"targets"`
+	UpdatedAt time.Time            `json:"updatedAt"`
+
+	// UpdatedBy User ID that last updated the settings
+	UpdatedBy *string `json:"updatedBy,omitempty"`
+}
+
+// DAGResourceLimits CPU and memory limits requested for a DAG run
+type DAGResourceLimits struct {
+	// Cpu CPU limit as cores (for example, "2" or "0.5") or millicores (for example, "500m")
+	Cpu *string `json:"cpu,omitempty"`
+
+	// Memory Memory limit in bytes or with a unit suffix (for example, "512Mi", "1Gi", or "2G")
+	Memory *string `json:"memory,omitempty"`
+}
+
+// DAGResources Resource limits requested for a DAG run
+type DAGResources struct {
+	// Limits CPU and memory limits requested for a DAG run
+	Limits *DAGResourceLimits `json:"limits,omitempty"`
+}
+
+// DAGRunCreateId Unique identifier for a newly-created DAG-run. The special value 'latest' is not allowed.
+type DAGRunCreateId = string
+
 // DAGRunDetails defines model for DAGRunDetails.
 type DAGRunDetails struct {
-	// ArtifactsAvailable Whether artifact endpoints are available for this DAG-run
+	// ArtifactsAvailable Whether artifact files are available for this DAG-run
 	ArtifactsAvailable bool `json:"artifactsAvailable"`
 
 	// AutoRetryCount Number of scheduler-issued DAG auto-retries already consumed for this DAG-run
@@ -1345,6 +1798,9 @@ type DAGRunDetails struct {
 
 	// FinishedAt RFC 3339 timestamp when the DAG-run finished
 	FinishedAt string `json:"finishedAt"`
+
+	// Labels List of labels for categorizing and filtering DAG runs
+	Labels *[]string `json:"labels,omitempty"`
 
 	// Log Path to the log file
 	Log string `json:"log"`
@@ -1376,6 +1832,9 @@ type DAGRunDetails struct {
 
 	// Preconditions List of preconditions that must be met before the DAG-run can start
 	Preconditions *[]Condition `json:"preconditions,omitempty"`
+
+	// ProfileName Runtime profile name.
+	ProfileName *RuntimeProfileName `json:"profileName,omitempty"`
 
 	// QueuedAt RFC 3339 timestamp when the DAG-run was queued
 	QueuedAt     *string `json:"queuedAt,omitempty"`
@@ -1411,7 +1870,8 @@ type DAGRunDetails struct {
 	// StatusLabel Human-readable status description for the DAG-run
 	StatusLabel StatusLabel `json:"statusLabel"`
 
-	// Tags List of tags for categorizing and filtering DAG runs
+	// Tags Deprecated alias for labels. List of labels for categorizing and filtering DAG runs
+	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	Tags *[]string `json:"tags,omitempty"`
 
 	// TriggerType How the DAG-run was initiated
@@ -1419,22 +1879,28 @@ type DAGRunDetails struct {
 
 	// WorkerId ID of the worker that executed this DAG-run ('local' for local execution)
 	WorkerId *string `json:"workerId,omitempty"`
+
+	// Workspace Workspace label value for the DAG-run. Omitted for default DAG-runs and invalid workspace labels.
+	Workspace *string `json:"workspace,omitempty"`
 }
 
 // DAGRunId Unique identifier for the DAG-run. The special value 'latest' can be used to reference the most recent DAG-run.
 type DAGRunId = string
 
-// DAGRunOutputs Collected outputs from step executions in a DAG-run, including execution metadata. If the DAG-run completed but no outputs were captured, the outputs object will be empty and metadata fields may be empty strings.
+// DAGRunOutputs Collected outputs from step executions in a DAG-run, including execution metadata. Outputs are populated from string-form output, stdout.outputs, and outputs.write. If the DAG-run completed but no outputs were captured, the outputs object will be empty and metadata fields may be empty strings.
 type DAGRunOutputs struct {
 	// Metadata Execution context metadata for the outputs
 	Metadata OutputsMetadata `json:"metadata"`
 
-	// Outputs Collected step outputs as key-value pairs. Keys are output names (UPPER_CASE converted to camelCase by default, or custom key if specified) and values are the captured output strings. Empty object if no outputs were captured.
+	// Outputs Collected step outputs as key-value pairs. String-form output names are converted from UPPER_CASE to camelCase; stdout.outputs and outputs.write keys are preserved. Values are strings in this API response. Empty object if no outputs were captured.
 	Outputs map[string]string `json:"outputs"`
 }
 
 // DAGRunSummary Current status of a DAG-run
 type DAGRunSummary struct {
+	// ArtifactsAvailable Whether artifact files are available for this DAG-run
+	ArtifactsAvailable bool `json:"artifactsAvailable"`
+
 	// AutoRetryCount Number of scheduler-issued DAG auto-retries already consumed for this DAG-run
 	AutoRetryCount int `json:"autoRetryCount"`
 
@@ -1447,11 +1913,17 @@ type DAGRunSummary struct {
 	// FinishedAt RFC 3339 timestamp when the DAG-run finished
 	FinishedAt string `json:"finishedAt"`
 
+	// Labels List of labels for categorizing and filtering DAG runs
+	Labels *[]string `json:"labels,omitempty"`
+
 	// Name Name of the DAG
 	Name DAGName `json:"name"`
 
 	// Params Runtime parameters passed to the DAG-run in JSON format
 	Params *string `json:"params,omitempty"`
+
+	// ProfileName Runtime profile name.
+	ProfileName *RuntimeProfileName `json:"profileName,omitempty"`
 
 	// QueuedAt RFC 3339 timestamp when the DAG-run was queued
 	QueuedAt *string `json:"queuedAt,omitempty"`
@@ -1477,7 +1949,8 @@ type DAGRunSummary struct {
 	// StatusLabel Human-readable status description for the DAG-run
 	StatusLabel StatusLabel `json:"statusLabel"`
 
-	// Tags List of tags for categorizing and filtering DAG runs
+	// Tags Deprecated alias for labels. List of labels for categorizing and filtering DAG runs
+	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	Tags *[]string `json:"tags,omitempty"`
 
 	// TriggerType How the DAG-run was initiated
@@ -1485,6 +1958,9 @@ type DAGRunSummary struct {
 
 	// WorkerId ID of the worker that executed this DAG-run ('local' for local execution)
 	WorkerId *string `json:"workerId,omitempty"`
+
+	// Workspace Workspace label value for the DAG-run. Omitted for default DAG-runs and invalid workspace labels.
+	Workspace *string `json:"workspace,omitempty"`
 }
 
 // DAGRunsPageResponse Forward-only paginated DAG-run list response
@@ -1519,6 +1995,22 @@ type DAGSearchPageItem struct {
 
 	// NextMatchesCursor Opaque cursor for loading more snippets for this DAG result
 	NextMatchesCursor *string `json:"nextMatchesCursor,omitempty"`
+
+	// Workspace Workspace label value for the matching DAG. Omitted for default DAGs and invalid workspace labels.
+	Workspace *string `json:"workspace,omitempty"`
+}
+
+// DAGSettings Server-side DAG settings
+type DAGSettings struct {
+	// DagName DAG file identifier these settings apply to
+	DagName string `json:"dagName"`
+
+	// Profile Runtime profile name.
+	Profile   *RuntimeProfileName `json:"profile,omitempty"`
+	UpdatedAt *time.Time          `json:"updatedAt,omitempty"`
+
+	// UpdatedBy User ID that last updated the settings
+	UpdatedBy *string `json:"updatedBy,omitempty"`
 }
 
 // DocDeleteBatchFailedItem defines model for DocDeleteBatchFailedItem.
@@ -1554,11 +2046,16 @@ type DocListResponse struct {
 
 // DocMetadataResponse Lightweight document metadata
 type DocMetadataResponse struct {
-	Id string `json:"id"`
+	// Description Short document description from YAML frontmatter
+	Description string `json:"description"`
+	Id          string `json:"id"`
 
 	// ModifiedAt Last modification time of the document file
 	ModifiedAt *time.Time `json:"modifiedAt,omitempty"`
 	Title      string     `json:"title"`
+
+	// Workspace Workspace that owns this document. Omitted for default documents.
+	Workspace *string `json:"workspace,omitempty"`
 }
 
 // DocPath Relative document path (without extension), e.g. runbooks/deploy-guide. Must not start with / or contain ..
@@ -1572,6 +2069,9 @@ type DocResponse struct {
 	// CreatedAt RFC3339 timestamp when the document was created
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
 
+	// Description Short document description from YAML frontmatter
+	Description string `json:"description"`
+
 	// FilePath Absolute file path of the document on disk
 	FilePath *string `json:"filePath,omitempty"`
 	Id       string  `json:"id"`
@@ -1579,6 +2079,9 @@ type DocResponse struct {
 
 	// UpdatedAt RFC3339 timestamp when the document was last updated
 	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
+
+	// Workspace Workspace that owns this document. Omitted for default documents.
+	Workspace *string `json:"workspace,omitempty"`
 }
 
 // DocSearchFeedResponse Cursor-based document search results
@@ -1590,6 +2093,9 @@ type DocSearchFeedResponse struct {
 
 // DocSearchPageItem Lightweight cursor-based search result item for a document
 type DocSearchPageItem struct {
+	// Description Short document description from YAML frontmatter
+	Description string `json:"description"`
+
 	// HasMoreMatches Whether additional snippets are available beyond the preview
 	HasMoreMatches bool   `json:"hasMoreMatches"`
 	Id             string `json:"id"`
@@ -1600,6 +2106,9 @@ type DocSearchPageItem struct {
 	// NextMatchesCursor Opaque cursor for loading more snippets for this document result
 	NextMatchesCursor *string `json:"nextMatchesCursor,omitempty"`
 	Title             string  `json:"title"`
+
+	// Workspace Workspace that owns this document. Omitted for default documents.
+	Workspace *string `json:"workspace,omitempty"`
 }
 
 // DocSearchResponse Search results
@@ -1609,9 +2118,14 @@ type DocSearchResponse struct {
 
 // DocSearchResultItem A search result for a single document
 type DocSearchResultItem struct {
-	Id      string             `json:"id"`
-	Matches *[]SearchMatchItem `json:"matches,omitempty"`
-	Title   string             `json:"title"`
+	// Description Short document description from YAML frontmatter
+	Description string             `json:"description"`
+	Id          string             `json:"id"`
+	Matches     *[]SearchMatchItem `json:"matches,omitempty"`
+	Title       string             `json:"title"`
+
+	// Workspace Workspace that owns this document. Omitted for default documents.
+	Workspace *string `json:"workspace,omitempty"`
 }
 
 // DocTreeNodeResponse A file or directory node in the doc tree
@@ -1624,6 +2138,9 @@ type DocTreeNodeResponse struct {
 	Name       string                  `json:"name"`
 	Title      *string                 `json:"title,omitempty"`
 	Type       DocTreeNodeResponseType `json:"type"`
+
+	// Workspace Workspace that owns this node. Omitted for default nodes.
+	Workspace *string `json:"workspace,omitempty"`
 }
 
 // DocTreeNodeResponseType defines model for DocTreeNodeResponse.Type.
@@ -1740,20 +2257,290 @@ type HealthResponse struct {
 // HealthResponseStatus Overall health status of the server
 type HealthResponseStatus string
 
-// InheritedCustomStepTypeHint Resolved editor hint for an inherited custom step type
-type InheritedCustomStepTypeHint struct {
-	// Description Optional custom step description
-	Description *string `json:"description,omitempty"`
+// IncidentPagerDutyProvider Public PagerDuty provider details
+type IncidentPagerDutyProvider struct {
+	// RoutingKeyConfigured Whether a PagerDuty routing key is configured
+	RoutingKeyConfigured bool `json:"routingKeyConfigured"`
 
-	// InputSchema Resolved JSON Schema object used to validate and document config input
-	InputSchema map[string]interface{} `json:"inputSchema"`
+	// RoutingKeyPreview Redacted routing key preview
+	RoutingKeyPreview *string `json:"routingKeyPreview,omitempty"`
+}
 
-	// Name Custom step type name
+// IncidentPagerDutyProviderInput PagerDuty Events API v2 provider input. The routing key is encrypted at rest.
+type IncidentPagerDutyProviderInput struct {
+	// ClearRoutingKey Clear the stored routing key.
+	ClearRoutingKey *bool `json:"clearRoutingKey,omitempty"`
+
+	// RoutingKey PagerDuty Events API v2 routing key. Omit on updates to preserve the existing key.
+	RoutingKey *string `json:"routingKey,omitempty"`
+}
+
+// IncidentPagerDutyProviderInputEnvelope PagerDuty incident provider input
+type IncidentPagerDutyProviderInputEnvelope struct {
+	// Enabled Whether this provider can receive incident events
+	Enabled bool `json:"enabled"`
+
+	// Name Human-readable provider name
 	Name string `json:"name"`
 
-	// TargetType Builtin executor type that the custom step expands to
+	// PagerDuty PagerDuty Events API v2 provider input. The routing key is encrypted at rest.
+	PagerDuty IncidentPagerDutyProviderInput             `json:"pagerDuty"`
+	Type      IncidentPagerDutyProviderInputEnvelopeType `json:"type"`
+}
+
+// IncidentPagerDutyProviderInputEnvelopeType defines model for IncidentPagerDutyProviderInputEnvelope.Type.
+type IncidentPagerDutyProviderInputEnvelopeType string
+
+// IncidentPolicy Incident route
+type IncidentPolicy struct {
+	// DedupKeyTemplate Deprecated and ignored. Dagu generates stable provider incident keys.
+	DedupKeyTemplate string `json:"dedupKeyTemplate"`
+
+	// DescriptionTemplate Template for the provider incident description/details
+	DescriptionTemplate string `json:"descriptionTemplate"`
+
+	// Enabled Whether this route is enabled
+	Enabled bool `json:"enabled"`
+
+	// Id Stable route ID
+	Id string `json:"id"`
+
+	// MessageTemplate Template for the provider incident summary/message
+	MessageTemplate string `json:"messageTemplate"`
+
+	// ProviderId Incident provider ID
+	ProviderId string `json:"providerId"`
+
+	// ResolveOnRecovery Deprecated. Dagu resolves saved open incidents on recovery.
+	ResolveOnRecovery bool `json:"resolveOnRecovery"`
+
+	// Severity Incident severity
+	Severity IncidentSeverity `json:"severity"`
+}
+
+// IncidentPolicyInput Incident route input. A route opens an incident on final DAG failure and Dagu resolves the saved open incident on later success.
+type IncidentPolicyInput struct {
+	// DedupKeyTemplate Deprecated and ignored. Dagu generates stable provider incident keys.
+	DedupKeyTemplate *string `json:"dedupKeyTemplate,omitempty"`
+
+	// DescriptionTemplate Template for the provider incident description/details.
+	DescriptionTemplate *string `json:"descriptionTemplate,omitempty"`
+
+	// Enabled Whether this route is enabled. Normal incident routing sends true when the route exists.
+	Enabled bool `json:"enabled"`
+
+	// Id Stable route ID. Omit when adding a route.
+	Id *string `json:"id,omitempty"`
+
+	// MessageTemplate Template for the provider incident summary/message.
+	MessageTemplate *string `json:"messageTemplate,omitempty"`
+
+	// ProviderId Incident provider ID
+	ProviderId string `json:"providerId"`
+
+	// ResolveOnRecovery Deprecated. Dagu resolves saved open incidents on recovery.
+	ResolveOnRecovery *bool `json:"resolveOnRecovery,omitempty"`
+
+	// Severity Incident severity
+	Severity IncidentSeverity `json:"severity"`
+}
+
+// IncidentPolicyScope Incident routing scope
+type IncidentPolicyScope string
+
+// IncidentPolicySet Incident routing for a global, workspace, or DAG scope
+type IncidentPolicySet struct {
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+
+	// DagName DAG name for DAG-scoped routing
+	DagName *string `json:"dagName,omitempty"`
+
+	// Enabled Whether this scope can open new incidents
+	Enabled bool `json:"enabled"`
+
+	// Id Stable routing ID, present after routing is saved
+	Id *string `json:"id,omitempty"`
+
+	// InheritParent For workspace and DAG routing, true means inherit the parent scope instead of using local routes
+	InheritParent bool             `json:"inheritParent"`
+	Policies      []IncidentPolicy `json:"policies"`
+
+	// Scope Incident routing scope
+	Scope     IncidentPolicyScope `json:"scope"`
+	UpdatedAt *time.Time          `json:"updatedAt,omitempty"`
+
+	// UpdatedBy User ID that last updated routing
+	UpdatedBy *string `json:"updatedBy,omitempty"`
+
+	// Workspace Workspace name for workspace-scoped routing
+	Workspace *string `json:"workspace,omitempty"`
+}
+
+// IncidentPolicySetInput Replacement incident routing for a global, workspace, or DAG scope
+type IncidentPolicySetInput struct {
+	// Enabled Whether this scope can open new incidents
+	Enabled bool `json:"enabled"`
+
+	// InheritParent For workspace and DAG routing, true means inherit the parent scope instead of using local routes. Ignored for global routing.
+	InheritParent bool                  `json:"inheritParent"`
+	Policies      []IncidentPolicyInput `json:"policies"`
+}
+
+// IncidentPolicySetListResponse Incident routing scopes
+type IncidentPolicySetListResponse struct {
+	PolicySets []IncidentPolicySet `json:"policySets"`
+}
+
+// IncidentProvider Incident provider. Secrets are never returned.
+type IncidentProvider struct {
+	CreatedAt time.Time `json:"createdAt"`
+
+	// Enabled Whether this provider can receive incident events
+	Enabled bool `json:"enabled"`
+
+	// Id Stable provider ID
+	Id string `json:"id"`
+
+	// Name Human-readable provider name
+	Name string `json:"name"`
+
+	// PagerDuty Public PagerDuty provider details
+	PagerDuty *IncidentPagerDutyProvider `json:"pagerDuty,omitempty"`
+
+	// SolarWinds Public SolarWinds Incident Response provider details
+	SolarWinds *IncidentSolarWindsProvider `json:"solarWinds,omitempty"`
+
+	// Type Incident provider type
+	Type      IncidentProviderType `json:"type"`
+	UpdatedAt time.Time            `json:"updatedAt"`
+
+	// UpdatedBy User ID that last updated the provider
+	UpdatedBy *string `json:"updatedBy,omitempty"`
+}
+
+// IncidentProviderInput Incident provider input
+type IncidentProviderInput struct {
+	union json.RawMessage
+}
+
+// IncidentProviderListResponse Incident providers
+type IncidentProviderListResponse struct {
+	Providers []IncidentProvider `json:"providers"`
+}
+
+// IncidentProviderType Incident provider type
+type IncidentProviderType string
+
+// IncidentSeverity Incident severity
+type IncidentSeverity string
+
+// IncidentSolarWindsProvider Public SolarWinds Incident Response provider details
+type IncidentSolarWindsProvider struct {
+	// AllowInsecureHttp Whether this provider allows plain HTTP webhook URLs
+	AllowInsecureHttp *bool `json:"allowInsecureHttp,omitempty"`
+
+	// AllowPrivateNetwork Whether this provider allows loopback or private network webhook targets
+	AllowPrivateNetwork *bool `json:"allowPrivateNetwork,omitempty"`
+
+	// WebhookUrlConfigured Whether an incoming webhook URL is configured
+	WebhookUrlConfigured bool `json:"webhookUrlConfigured"`
+
+	// WebhookUrlPreview Redacted webhook URL preview
+	WebhookUrlPreview *string `json:"webhookUrlPreview,omitempty"`
+}
+
+// IncidentSolarWindsProviderInput SolarWinds Incident Response incoming webhook provider input. The webhook URL is encrypted at rest.
+type IncidentSolarWindsProviderInput struct {
+	// AllowInsecureHttp Allow plain HTTP webhook URLs. Disabled by default.
+	AllowInsecureHttp *bool `json:"allowInsecureHttp,omitempty"`
+
+	// AllowPrivateNetwork Allow loopback or private network webhook targets. Disabled by default.
+	AllowPrivateNetwork *bool `json:"allowPrivateNetwork,omitempty"`
+
+	// ClearWebhookUrl Clear the stored webhook URL.
+	ClearWebhookUrl *bool `json:"clearWebhookUrl,omitempty"`
+
+	// WebhookUrl Incoming webhook URL. Omit on updates to preserve the existing URL.
+	WebhookUrl *string `json:"webhookUrl,omitempty"`
+}
+
+// IncidentSolarWindsProviderInputEnvelope SolarWinds Incident Response provider input
+type IncidentSolarWindsProviderInputEnvelope struct {
+	// Enabled Whether this provider can receive incident events
+	Enabled bool `json:"enabled"`
+
+	// Name Human-readable provider name
+	Name string `json:"name"`
+
+	// SolarWinds SolarWinds Incident Response incoming webhook provider input. The webhook URL is encrypted at rest.
+	SolarWinds IncidentSolarWindsProviderInput             `json:"solarWinds"`
+	Type       IncidentSolarWindsProviderInputEnvelopeType `json:"type"`
+}
+
+// IncidentSolarWindsProviderInputEnvelopeType defines model for IncidentSolarWindsProviderInputEnvelope.Type.
+type IncidentSolarWindsProviderInputEnvelopeType string
+
+// InheritedCustomActionHint Resolved editor hint for an inherited custom action
+type InheritedCustomActionHint struct {
+	// Description Optional custom action description
+	Description *string `json:"description,omitempty"`
+
+	// InputSchema Resolved JSON Schema object used to validate and document with input
+	InputSchema map[string]interface{} `json:"inputSchema"`
+
+	// Name Custom action name
+	Name string `json:"name"`
+
+	// OutputSchema Resolved JSON Schema object used to validate stdout JSON output
+	OutputSchema *map[string]interface{} `json:"outputSchema,omitempty"`
+}
+
+// InheritedLegacyDefinitionHint Resolved editor hint for an inherited deprecated legacy execution definition
+type InheritedLegacyDefinitionHint struct {
+	// Description Optional deprecated legacy execution definition description
+	Description *string `json:"description,omitempty"`
+
+	// InputSchema Resolved JSON Schema object used to validate and document with input
+	InputSchema map[string]interface{} `json:"inputSchema"`
+
+	// Name Deprecated legacy execution definition name
+	Name string `json:"name"`
+
+	// OutputSchema Resolved JSON Schema object used to validate stdout JSON output
+	OutputSchema *map[string]interface{} `json:"outputSchema,omitempty"`
+
+	// TargetType Builtin executor type that the deprecated legacy execution definition expands to
 	TargetType string `json:"targetType"`
 }
+
+// InheritedRuntimeProfileName Non-selectable inherited profile layer name.
+type InheritedRuntimeProfileName = string
+
+// InheritedRuntimeProfileResponse defines model for InheritedRuntimeProfileResponse.
+type InheritedRuntimeProfileResponse struct {
+	CreatedAt   *time.Time                    `json:"createdAt,omitempty"`
+	Description *string                       `json:"description,omitempty"`
+	Entries     []RuntimeProfileEntryResponse `json:"entries"`
+
+	// Id Persistent record ID. Omitted until the inherited layer is first saved.
+	Id *string `json:"id,omitempty"`
+
+	// Name Non-selectable inherited profile layer name.
+	Name      InheritedRuntimeProfileName  `json:"name"`
+	Protected bool                         `json:"protected"`
+	Scope     InheritedRuntimeProfileScope `json:"scope"`
+	Status    RuntimeProfileStatus         `json:"status"`
+	UpdatedAt *time.Time                   `json:"updatedAt,omitempty"`
+
+	// Workspace Workspace name. The reserved names all, default, and global are not allowed.
+	Workspace *WorkspaceName `json:"workspace,omitempty"`
+}
+
+// InheritedRuntimeProfileScope defines model for InheritedRuntimeProfileScope.
+type InheritedRuntimeProfileScope string
+
+// Labels Additional labels to apply to the DAG-run (format: key=value or key-only). Merged with labels defined in the DAG spec. Mutually exclusive with deprecated `tags`; the server returns HTTP 400 if both are set.
+type Labels = []string
 
 // ListAgentAuthProvidersResponse List of subscription-backed auth providers
 type ListAgentAuthProvidersResponse struct {
@@ -1762,6 +2549,8 @@ type ListAgentAuthProvidersResponse struct {
 
 // ListAgentSessionsResponse Paginated list of agent sessions
 type ListAgentSessionsResponse struct {
+	// NextCursor Opaque cursor for loading the next page of older sessions
+	NextCursor *string                 `json:"nextCursor,omitempty"`
 	Pagination Pagination              `json:"pagination"`
 	Sessions   []AgentSessionWithState `json:"sessions"`
 }
@@ -1769,6 +2558,15 @@ type ListAgentSessionsResponse struct {
 // ListAgentToolsResponse List of agent tool metadata
 type ListAgentToolsResponse struct {
 	Tools []AgentToolInfo `json:"tools"`
+}
+
+// ListLabelResponse Response object for listing all labels
+type ListLabelResponse struct {
+	// Errors List of errors encountered during the request
+	Errors []string `json:"errors"`
+
+	// Labels List of unique labels
+	Labels []string `json:"labels"`
 }
 
 // ListModelPresetsResponse List of model presets
@@ -1788,12 +2586,12 @@ type ListSoulsResponse struct {
 	Souls      []SoulResponse `json:"souls"`
 }
 
-// ListTagResponse Response object for listing all tags
+// ListTagResponse Deprecated response object for listing all labels
 type ListTagResponse struct {
 	// Errors List of errors encountered during the request
 	Errors []string `json:"errors"`
 
-	// Tags List of unique tags
+	// Tags List of unique labels
 	Tags []string `json:"tags"`
 }
 
@@ -1921,6 +2719,9 @@ type Node struct {
 	// FinishedAt RFC3339 timestamp when the step finished
 	FinishedAt string `json:"finishedAt"`
 
+	// PushBackHistory Chronological push-back history for this step
+	PushBackHistory *[]PushBackHistoryEntry `json:"pushBackHistory,omitempty"`
+
 	// PushBackInputs Key-value inputs from the last push-back, injected as environment variables during re-execution
 	PushBackInputs *map[string]string `json:"pushBackInputs,omitempty"`
 
@@ -1986,6 +2787,419 @@ type NodeStatus int
 
 // NodeStatusLabel Human-readable status description for the node
 type NodeStatusLabel string
+
+// NotificationChannel Notification channel. Secrets are never returned.
+type NotificationChannel struct {
+	CreatedAt time.Time `json:"createdAt"`
+
+	// Email Email notification target. SMTP transport is configured in workspace notification settings.
+	Email *NotificationEmailTarget `json:"email,omitempty"`
+
+	// Enabled Whether this channel can receive notifications
+	Enabled bool `json:"enabled"`
+
+	// Id Stable channel ID
+	Id string `json:"id"`
+
+	// Name Human-readable channel name
+	Name string `json:"name"`
+
+	// Slack Public Slack target details
+	Slack *NotificationSlackTarget `json:"slack,omitempty"`
+
+	// Telegram Public Telegram target details
+	Telegram *NotificationTelegramTarget `json:"telegram,omitempty"`
+
+	// Type Notification delivery provider
+	Type      NotificationProviderType `json:"type"`
+	UpdatedAt time.Time                `json:"updatedAt"`
+
+	// UpdatedBy User ID that last updated the channel
+	UpdatedBy *string `json:"updatedBy,omitempty"`
+
+	// Webhook Public outbound webhook target details
+	Webhook *NotificationWebhookTarget `json:"webhook,omitempty"`
+}
+
+// NotificationChannelInput Notification channel input
+type NotificationChannelInput struct {
+	// Email Email notification target. SMTP transport is configured in workspace notification settings.
+	Email *NotificationEmailTarget `json:"email,omitempty"`
+
+	// Enabled Whether this channel can receive notifications
+	Enabled bool `json:"enabled"`
+
+	// Name Human-readable channel name
+	Name string `json:"name"`
+
+	// Slack Slack incoming webhook target input. Values are encrypted at rest.
+	Slack *NotificationSlackTargetInput `json:"slack,omitempty"`
+
+	// Telegram Telegram Bot API target input. Bot token is encrypted at rest.
+	Telegram *NotificationTelegramTargetInput `json:"telegram,omitempty"`
+
+	// Type Notification delivery provider
+	Type NotificationProviderType `json:"type"`
+
+	// Webhook Outbound webhook target input. Values are encrypted at rest.
+	Webhook *NotificationWebhookTargetInput `json:"webhook,omitempty"`
+}
+
+// NotificationChannelListResponse Notification channels
+type NotificationChannelListResponse struct {
+	Channels []NotificationChannel `json:"channels"`
+}
+
+// NotificationEmailTarget Email notification target. SMTP transport is configured in workspace notification settings.
+type NotificationEmailTarget struct {
+	// AttachLogs Attach DAG and step logs when available
+	AttachLogs *bool `json:"attachLogs,omitempty"`
+
+	// Bcc BCC recipients
+	Bcc *[]string `json:"bcc,omitempty"`
+
+	// BodyTemplate Optional email body template. When omitted, Dagu sends the default notification body.
+	BodyTemplate *string `json:"bodyTemplate,omitempty"`
+
+	// Cc CC recipients
+	Cc *[]string `json:"cc,omitempty"`
+
+	// From Sender address. Defaults to the workspace SMTP sender.
+	From *string `json:"from,omitempty"`
+
+	// SubjectPrefix Subject prefix. Defaults to [DAGU].
+	SubjectPrefix *string `json:"subjectPrefix,omitempty"`
+
+	// SubjectTemplate Optional email subject template. When set, it replaces the generated subject.
+	SubjectTemplate *string `json:"subjectTemplate,omitempty"`
+
+	// To Primary recipients
+	To []string `json:"to"`
+}
+
+// NotificationEventType DAG run event that can trigger server-side notifications
+type NotificationEventType string
+
+// NotificationProviderType Notification delivery provider
+type NotificationProviderType string
+
+// NotificationRoute Route from notification events to a notification channel
+type NotificationRoute struct {
+	// ChannelId Notification channel ID
+	ChannelId string `json:"channelId"`
+
+	// Enabled Whether this route receives notifications
+	Enabled bool `json:"enabled"`
+
+	// Events Events delivered by this route. Empty is treated as operational defaults for backward compatibility.
+	Events *[]NotificationEventType `json:"events,omitempty"`
+
+	// Id Stable route ID
+	Id string `json:"id"`
+}
+
+// NotificationRouteInput Route from notification events to a notification channel
+type NotificationRouteInput struct {
+	// ChannelId Notification channel ID
+	ChannelId string `json:"channelId"`
+
+	// Enabled Whether this route receives notifications
+	Enabled bool `json:"enabled"`
+
+	// Events Events delivered by this route. Omit only for backward compatibility; new clients should send an explicit event list.
+	Events *[]NotificationEventType `json:"events,omitempty"`
+
+	// Id Stable route ID. Omit when adding a route.
+	Id *string `json:"id,omitempty"`
+}
+
+// NotificationRouteScope Notification route scope
+type NotificationRouteScope string
+
+// NotificationRouteSet Notification routes for a global or workspace scope
+type NotificationRouteSet struct {
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+
+	// Enabled Whether this route set can deliver notifications
+	Enabled bool `json:"enabled"`
+
+	// Id Stable route set ID, present after the route set is saved
+	Id *string `json:"id,omitempty"`
+
+	// InheritGlobal For workspace route sets, true means inherit Global instead of using workspace routes
+	InheritGlobal bool                `json:"inheritGlobal"`
+	Routes        []NotificationRoute `json:"routes"`
+
+	// Scope Notification route scope
+	Scope     NotificationRouteScope `json:"scope"`
+	UpdatedAt *time.Time             `json:"updatedAt,omitempty"`
+
+	// UpdatedBy User ID that last updated the route set
+	UpdatedBy *string `json:"updatedBy,omitempty"`
+
+	// Workspace Workspace name for workspace-scoped route sets
+	Workspace *string `json:"workspace,omitempty"`
+}
+
+// NotificationRouteSetInput Replacement route set for a global or workspace notification scope
+type NotificationRouteSetInput struct {
+	// Enabled Whether this route set can deliver notifications
+	Enabled bool `json:"enabled"`
+
+	// InheritGlobal For workspace route sets, true means inherit Global instead of using workspace routes. Ignored for global route sets.
+	InheritGlobal bool                     `json:"inheritGlobal"`
+	Routes        []NotificationRouteInput `json:"routes"`
+}
+
+// NotificationRouteSetListResponse Notification route sets
+type NotificationRouteSetListResponse struct {
+	RouteSets []NotificationRouteSet `json:"routeSets"`
+}
+
+// NotificationSMTPSettings Public workspace SMTP transport settings. The SMTP password is never returned.
+type NotificationSMTPSettings struct {
+	// From Default sender address for notification email channels
+	From *string `json:"from,omitempty"`
+
+	// Host SMTP server host
+	Host *string `json:"host,omitempty"`
+
+	// PasswordConfigured Whether an SMTP password is configured
+	PasswordConfigured bool `json:"passwordConfigured"`
+
+	// Port SMTP server port
+	Port *string `json:"port,omitempty"`
+
+	// Username SMTP username
+	Username *string `json:"username,omitempty"`
+}
+
+// NotificationSMTPSettingsInput Workspace SMTP transport input for notification email delivery. Values are encrypted at rest where applicable.
+type NotificationSMTPSettingsInput struct {
+	// ClearPassword Clear the stored SMTP password.
+	ClearPassword *bool `json:"clearPassword,omitempty"`
+
+	// From Default sender address for notification email channels
+	From *string `json:"from,omitempty"`
+
+	// Host SMTP server host
+	Host *string `json:"host,omitempty"`
+
+	// Password SMTP password. Omit on updates to preserve the existing password.
+	Password *string `json:"password,omitempty"`
+
+	// Port SMTP server port
+	Port *string `json:"port,omitempty"`
+
+	// Username SMTP username
+	Username *string `json:"username,omitempty"`
+}
+
+// NotificationSlackTarget Public Slack target details
+type NotificationSlackTarget struct {
+	// MessageTemplate Optional Slack message template. When omitted, Dagu sends the default notification text.
+	MessageTemplate *string `json:"messageTemplate,omitempty"`
+
+	// WebhookUrlConfigured Whether a Slack incoming webhook URL is configured
+	WebhookUrlConfigured bool `json:"webhookUrlConfigured"`
+
+	// WebhookUrlPreview Redacted Slack webhook URL preview
+	WebhookUrlPreview *string `json:"webhookUrlPreview,omitempty"`
+}
+
+// NotificationSlackTargetInput Slack incoming webhook target input. Values are encrypted at rest.
+type NotificationSlackTargetInput struct {
+	// MessageTemplate Optional Slack message template. When omitted, Dagu sends the default notification text.
+	MessageTemplate *string `json:"messageTemplate,omitempty"`
+
+	// WebhookUrl Slack incoming webhook URL. Omit on updates to preserve the existing URL.
+	WebhookUrl *string `json:"webhookUrl,omitempty"`
+}
+
+// NotificationSubscription DAG subscription to a notification channel
+type NotificationSubscription struct {
+	// ChannelId Notification channel ID
+	ChannelId string `json:"channelId"`
+
+	// Enabled Whether this DAG subscription receives notifications
+	Enabled bool `json:"enabled"`
+
+	// Events Subscription-level event filter. Empty means the subscription inherits DAG-level events.
+	Events *[]NotificationEventType `json:"events,omitempty"`
+
+	// Id Stable subscription ID
+	Id string `json:"id"`
+}
+
+// NotificationSubscriptionInput DAG subscription to a notification channel
+type NotificationSubscriptionInput struct {
+	// ChannelId Notification channel ID
+	ChannelId string `json:"channelId"`
+
+	// Enabled Whether this DAG subscription receives notifications
+	Enabled bool `json:"enabled"`
+
+	// Events Optional subscription-level event filter. When omitted or empty, the subscription inherits DAG-level events.
+	Events *[]NotificationEventType `json:"events,omitempty"`
+
+	// Id Stable subscription ID. Omit when creating a new subscription.
+	Id *string `json:"id,omitempty"`
+}
+
+// NotificationTarget Public notification target details. Secrets are never returned.
+type NotificationTarget struct {
+	// Email Email notification target. SMTP transport is configured in workspace notification settings.
+	Email *NotificationEmailTarget `json:"email,omitempty"`
+
+	// Enabled Whether this target receives notifications
+	Enabled bool `json:"enabled"`
+
+	// Events Target-level event filter. Empty means the target inherits DAG-level events.
+	Events *[]NotificationEventType `json:"events,omitempty"`
+
+	// Id Stable target ID
+	Id string `json:"id"`
+
+	// Name Human-readable target name
+	Name *string `json:"name,omitempty"`
+
+	// Slack Public Slack target details
+	Slack *NotificationSlackTarget `json:"slack,omitempty"`
+
+	// Telegram Public Telegram target details
+	Telegram *NotificationTelegramTarget `json:"telegram,omitempty"`
+
+	// Type Notification delivery provider
+	Type NotificationProviderType `json:"type"`
+
+	// Webhook Public outbound webhook target details
+	Webhook *NotificationWebhookTarget `json:"webhook,omitempty"`
+}
+
+// NotificationTargetInput Notification target input
+type NotificationTargetInput struct {
+	// Email Email notification target. SMTP transport is configured in workspace notification settings.
+	Email *NotificationEmailTarget `json:"email,omitempty"`
+
+	// Enabled Whether this target receives notifications
+	Enabled bool `json:"enabled"`
+
+	// Events Optional target-level event filter. When omitted or empty, the target inherits DAG-level events.
+	Events *[]NotificationEventType `json:"events,omitempty"`
+
+	// Id Stable target ID. Omit when creating a new target.
+	Id *string `json:"id,omitempty"`
+
+	// Name Human-readable target name
+	Name *string `json:"name,omitempty"`
+
+	// Slack Slack incoming webhook target input. Values are encrypted at rest.
+	Slack *NotificationSlackTargetInput `json:"slack,omitempty"`
+
+	// Telegram Telegram Bot API target input. Bot token is encrypted at rest.
+	Telegram *NotificationTelegramTargetInput `json:"telegram,omitempty"`
+
+	// Type Notification delivery provider
+	Type NotificationProviderType `json:"type"`
+
+	// Webhook Outbound webhook target input. Values are encrypted at rest.
+	Webhook *NotificationWebhookTargetInput `json:"webhook,omitempty"`
+}
+
+// NotificationTelegramTarget Public Telegram target details
+type NotificationTelegramTarget struct {
+	// BotTokenConfigured Whether a Telegram bot token is configured
+	BotTokenConfigured bool `json:"botTokenConfigured"`
+
+	// BotTokenPreview Redacted Telegram bot token preview
+	BotTokenPreview *string `json:"botTokenPreview,omitempty"`
+
+	// ChatId Telegram chat ID
+	ChatId *string `json:"chatId,omitempty"`
+
+	// MessageTemplate Optional Telegram message template. When omitted, Dagu sends the default notification text.
+	MessageTemplate *string `json:"messageTemplate,omitempty"`
+}
+
+// NotificationTelegramTargetInput Telegram Bot API target input. Bot token is encrypted at rest.
+type NotificationTelegramTargetInput struct {
+	// BotToken Telegram bot token. Omit on updates to preserve the existing token.
+	BotToken *string `json:"botToken,omitempty"`
+
+	// ChatId Telegram chat ID
+	ChatId *string `json:"chatId,omitempty"`
+
+	// MessageTemplate Optional Telegram message template. When omitted, Dagu sends the default notification text.
+	MessageTemplate *string `json:"messageTemplate,omitempty"`
+}
+
+// NotificationWebhookTarget Public outbound webhook target details
+type NotificationWebhookTarget struct {
+	// AllowInsecureHttp Whether this target allows plain HTTP webhook URLs
+	AllowInsecureHttp *bool `json:"allowInsecureHttp,omitempty"`
+
+	// AllowPrivateNetwork Whether this target allows loopback or private network webhook targets
+	AllowPrivateNetwork *bool `json:"allowPrivateNetwork,omitempty"`
+
+	// Headers Header names with redacted values
+	Headers *map[string]string `json:"headers,omitempty"`
+
+	// HmacSecretConfigured Whether an HMAC secret is configured
+	HmacSecretConfigured bool `json:"hmacSecretConfigured"`
+
+	// MessageTemplate Optional rendered message added to the webhook JSON payload as message.
+	MessageTemplate *string `json:"messageTemplate,omitempty"`
+
+	// UrlConfigured Whether a webhook URL is configured
+	UrlConfigured bool `json:"urlConfigured"`
+
+	// UrlPreview Redacted URL preview
+	UrlPreview *string `json:"urlPreview,omitempty"`
+}
+
+// NotificationWebhookTargetInput Outbound webhook target input. Values are encrypted at rest.
+type NotificationWebhookTargetInput struct {
+	// AllowInsecureHttp Allow plain HTTP webhook URLs. Disabled by default.
+	AllowInsecureHttp *bool `json:"allowInsecureHttp,omitempty"`
+
+	// AllowPrivateNetwork Allow loopback or private network webhook targets. Disabled by default.
+	AllowPrivateNetwork *bool `json:"allowPrivateNetwork,omitempty"`
+
+	// ClearHeaders Clear all stored webhook headers.
+	ClearHeaders *bool `json:"clearHeaders,omitempty"`
+
+	// ClearHmacSecret Clear the stored HMAC secret.
+	ClearHmacSecret *bool `json:"clearHmacSecret,omitempty"`
+
+	// Headers Additional request headers. Values are encrypted at rest. When provided, this replaces the stored header set.
+	Headers *map[string]string `json:"headers,omitempty"`
+
+	// HmacSecret Optional HMAC secret for X-Dagu-Signature. Omit on updates to preserve the existing secret.
+	HmacSecret *string `json:"hmacSecret,omitempty"`
+
+	// MessageTemplate Optional rendered message added to the webhook JSON payload as message.
+	MessageTemplate *string `json:"messageTemplate,omitempty"`
+
+	// Url HTTP or HTTPS endpoint to POST notification payloads to. Omit on updates to preserve the existing URL.
+	Url *string `json:"url,omitempty"`
+}
+
+// NotificationWorkspaceSettings Workspace-level notification settings
+type NotificationWorkspaceSettings struct {
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+
+	// Smtp Public workspace SMTP transport settings. The SMTP password is never returned.
+	Smtp      *NotificationSMTPSettings `json:"smtp,omitempty"`
+	UpdatedAt *time.Time                `json:"updatedAt,omitempty"`
+
+	// UpdatedBy User ID that last updated the workspace notification settings
+	UpdatedBy *string `json:"updatedBy,omitempty"`
+}
+
+// NotificationWorkspaceSettingsInput Workspace-level notification settings input
+type NotificationWorkspaceSettingsInput struct {
+	Smtp *NotificationSMTPSettingsInput `json:"smtp"`
+}
 
 // OutputsMetadata Execution context metadata for the outputs
 type OutputsMetadata struct {
@@ -2065,6 +3279,21 @@ type ParamScalar2 = float64
 
 // ParamScalar3 defines model for .
 type ParamScalar3 = bool
+
+// PushBackHistoryEntry One push-back event recorded for an approval step
+type PushBackHistoryEntry struct {
+	// At RFC3339 timestamp when the push-back was recorded
+	At *time.Time `json:"at,omitempty"`
+
+	// By Authenticated user who pushed the step back
+	By *string `json:"by,omitempty"`
+
+	// Inputs Inputs provided for this push-back event
+	Inputs *map[string]string `json:"inputs,omitempty"`
+
+	// Iteration Push-back iteration number
+	Iteration int `json:"iteration"`
+}
 
 // PushBackStepRequest Request body for pushing back a waiting step for re-execution with feedback
 type PushBackStepRequest struct {
@@ -2296,6 +3525,56 @@ type RunningTask struct {
 	StartedAt string `json:"startedAt"`
 }
 
+// RuntimeProfileEntryKind defines model for RuntimeProfileEntryKind.
+type RuntimeProfileEntryKind string
+
+// RuntimeProfileEntryResponse defines model for RuntimeProfileEntryResponse.
+type RuntimeProfileEntryResponse struct {
+	CreatedAt time.Time `json:"createdAt"`
+
+	// Key Environment variable key stored in a runtime profile. Keys with the DAGU_ prefix are reserved.
+	Key  RuntimeProfileKey       `json:"key"`
+	Kind RuntimeProfileEntryKind `json:"kind"`
+
+	// SecretId Managed secret ID for secret entries. The secret value is never returned.
+	SecretId  *string   `json:"secretId,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
+
+	// Value Stored value for non-secret variables. Omitted for secret entries.
+	Value *string `json:"value,omitempty"`
+}
+
+// RuntimeProfileKey Environment variable key stored in a runtime profile. Keys with the DAGU_ prefix are reserved.
+type RuntimeProfileKey = string
+
+// RuntimeProfileListResponse defines model for RuntimeProfileListResponse.
+type RuntimeProfileListResponse struct {
+	Profiles []RuntimeProfileResponse `json:"profiles"`
+}
+
+// RuntimeProfileName Runtime profile name.
+type RuntimeProfileName = string
+
+// RuntimeProfileOverride Runtime profile override. Empty string means no profile.
+type RuntimeProfileOverride = string
+
+// RuntimeProfileResponse defines model for RuntimeProfileResponse.
+type RuntimeProfileResponse struct {
+	CreatedAt   time.Time                     `json:"createdAt"`
+	Description *string                       `json:"description,omitempty"`
+	Entries     []RuntimeProfileEntryResponse `json:"entries"`
+	Id          string                        `json:"id"`
+
+	// Name Runtime profile name.
+	Name      RuntimeProfileName   `json:"name"`
+	Protected bool                 `json:"protected"`
+	Status    RuntimeProfileStatus `json:"status"`
+	UpdatedAt time.Time            `json:"updatedAt"`
+}
+
+// RuntimeProfileStatus defines model for RuntimeProfileStatus.
+type RuntimeProfileStatus string
+
 // Schedule Schedule configuration for DAG-run creation
 type Schedule struct {
 	// At RFC 3339 timestamp with explicit offset for one-off schedules
@@ -2366,6 +3645,42 @@ type SearchResultItem struct {
 	Name string `json:"name"`
 }
 
+// SecretListResponse defines model for SecretListResponse.
+type SecretListResponse struct {
+	Secrets []SecretResponse `json:"secrets"`
+	Total   int              `json:"total"`
+}
+
+// SecretProviderType defines model for SecretProviderType.
+type SecretProviderType string
+
+// SecretResponse defines model for SecretResponse.
+type SecretResponse struct {
+	CreatedAt              time.Time          `json:"createdAt"`
+	CurrentVersion         int                `json:"currentVersion"`
+	Description            *string            `json:"description,omitempty"`
+	HasValue               bool               `json:"hasValue"`
+	Id                     string             `json:"id"`
+	LastCheckedAt          *time.Time         `json:"lastCheckedAt,omitempty"`
+	LastResolvedAt         *time.Time         `json:"lastResolvedAt,omitempty"`
+	LastRotatedAt          *time.Time         `json:"lastRotatedAt,omitempty"`
+	ProviderConnectionId   *string            `json:"providerConnectionId,omitempty"`
+	ProviderRef            *string            `json:"providerRef,omitempty"`
+	ProviderRefFingerprint *string            `json:"providerRefFingerprint,omitempty"`
+	ProviderType           SecretProviderType `json:"providerType"`
+
+	// Ref Secret ref used from DAG YAML, for example prod/db-password.
+	Ref       string       `json:"ref"`
+	Status    SecretStatus `json:"status"`
+	UpdatedAt time.Time    `json:"updatedAt"`
+
+	// Workspace global for workspace-less secrets, otherwise the workspace name.
+	Workspace string `json:"workspace"`
+}
+
+// SecretStatus defines model for SecretStatus.
+type SecretStatus string
+
 // SetDefaultModelRequest Request to set the default model
 type SetDefaultModelRequest struct {
 	// ModelId Model ID to set as default
@@ -2375,6 +3690,16 @@ type SetDefaultModelRequest struct {
 // SetDefaultModelResponse Response after setting the default model
 type SetDefaultModelResponse struct {
 	DefaultModelId *string `json:"defaultModelId,omitempty"`
+}
+
+// SetRuntimeProfileSecretRequest defines model for SetRuntimeProfileSecretRequest.
+type SetRuntimeProfileSecretRequest struct {
+	Value *string `json:"value,omitempty"`
+}
+
+// SetRuntimeProfileVariableRequest defines model for SetRuntimeProfileVariableRequest.
+type SetRuntimeProfileVariableRequest struct {
+	Value string `json:"value"`
 }
 
 // SetupRequest Request body for initial admin account setup
@@ -2458,6 +3783,9 @@ type Step struct {
 	// Output Variable name to store the step's output
 	Output *string `json:"output,omitempty"`
 
+	// Outputs Declared file-based step outputs published through DAGU_OUTPUT_FILE for ${steps.<id>.outputs.<name>} references. Steps that declare outputs must also define id.
+	Outputs *[]StepOutputDeclaration `json:"outputs,omitempty"`
+
 	// Parallel Configuration for parallel execution of the step
 	Parallel *struct {
 		// Items Array of items to process in parallel. Can be a static array or a reference to a variable containing an array
@@ -2513,6 +3841,18 @@ type StepParallelItems1 = string
 type Step_Parallel_Items struct {
 	union json.RawMessage
 }
+
+// StepOutputDeclaration One file-based step output declaration published through DAGU_OUTPUT_FILE
+type StepOutputDeclaration struct {
+	// Name Published output name scoped to the declaring step
+	Name string `json:"name"`
+
+	// Type Output value type. JSON outputs must contain valid JSON text.
+	Type *StepOutputDeclarationType `json:"type,omitempty"`
+}
+
+// StepOutputDeclarationType Output value type. JSON outputs must contain valid JSON text.
+type StepOutputDeclarationType string
 
 // Stream defines model for Stream.
 type Stream string
@@ -2827,8 +4167,50 @@ type SyncStatusResponse struct {
 // SyncSummary Summary status for the sync badge
 type SyncSummary string
 
-// Tags Additional tags to apply to the DAG-run (format: key=value or key-only). Merged with tags defined in the DAG spec.
+// Tags Deprecated alias for Labels. Additional labels to apply to the DAG-run (format: key=value or key-only). Merged with labels defined in the DAG spec. Mutually exclusive with `labels`; the server returns HTTP 400 if both are set.
 type Tags = []string
+
+// TestDAGNotificationRequest Request to send a test notification
+type TestDAGNotificationRequest struct {
+	// EventType DAG run event that can trigger server-side notifications
+	EventType *NotificationEventType `json:"eventType,omitempty"`
+
+	// TargetId Optional DAG-local target ID, subscription ID, or channel ID. When omitted, every enabled target and subscription is tested.
+	TargetId *string `json:"targetId,omitempty"`
+}
+
+// TestDAGNotificationResponse Result of test notification delivery
+type TestDAGNotificationResponse struct {
+	Results []TestDAGNotificationResult `json:"results"`
+}
+
+// TestDAGNotificationResult Delivery result for one notification target
+type TestDAGNotificationResult struct {
+	Delivered bool    `json:"delivered"`
+	Error     *string `json:"error,omitempty"`
+
+	// Provider Notification delivery provider
+	Provider   NotificationProviderType `json:"provider"`
+	TargetId   string                   `json:"targetId"`
+	TargetName string                   `json:"targetName"`
+}
+
+// TestIncidentProviderResponse Result of test incident delivery
+type TestIncidentProviderResponse struct {
+	// Result Delivery result for one incident provider
+	Result TestIncidentProviderResult `json:"result"`
+}
+
+// TestIncidentProviderResult Delivery result for one incident provider
+type TestIncidentProviderResult struct {
+	Delivered    bool    `json:"delivered"`
+	Error        *string `json:"error,omitempty"`
+	ProviderId   string  `json:"providerId"`
+	ProviderName string  `json:"providerName"`
+
+	// ProviderType Incident provider type
+	ProviderType IncidentProviderType `json:"providerType"`
+}
 
 // TestRemoteNodeConnectionResponse defines model for TestRemoteNodeConnectionResponse.
 type TestRemoteNodeConnectionResponse struct {
@@ -2903,15 +4285,36 @@ type UnixTimestamp = int64
 
 // UpdateAPIKeyRequest Update API key request
 type UpdateAPIKeyRequest struct {
+	// AllowedSurfaces Interfaces where this API key may be accepted
+	AllowedSurfaces *[]UpdateAPIKeyRequestAllowedSurfaces `json:"allowedSurfaces,omitempty"`
+
+	// AttributionClass Whether this key is owned by a user or represents a service account
+	AttributionClass *UpdateAPIKeyRequestAttributionClass `json:"attributionClass,omitempty"`
+
 	// Description New description
 	Description *string `json:"description,omitempty"`
 
 	// Name New name
 	Name *string `json:"name,omitempty"`
 
+	// OwnerUserId Owner user ID when attributionClass is user_owned
+	OwnerUserId *string `json:"ownerUserId,omitempty"`
+
 	// Role User role determining access permissions. admin: full access including user management, manager: DAG CRUD and execution with audit log access, developer: DAG CRUD and execution, operator: DAG execution only, viewer: read-only
 	Role *UserRole `json:"role,omitempty"`
+
+	// ServiceAccountName Service-account display name when attributionClass is service_account
+	ServiceAccountName *string `json:"serviceAccountName,omitempty"`
+
+	// WorkspaceAccess Workspace access policy. all=true grants the top-level role in every workspace. all=false requires explicit workspace grants and a top-level viewer role.
+	WorkspaceAccess *WorkspaceAccess `json:"workspaceAccess,omitempty"`
 }
+
+// UpdateAPIKeyRequestAllowedSurfaces defines model for UpdateAPIKeyRequest.AllowedSurfaces.
+type UpdateAPIKeyRequestAllowedSurfaces string
+
+// UpdateAPIKeyRequestAttributionClass Whether this key is owned by a user or represents a service account
+type UpdateAPIKeyRequestAttributionClass string
 
 // UpdateAgentConfigRequest Request to update AI agent configuration
 type UpdateAgentConfigRequest struct {
@@ -2929,6 +4332,9 @@ type UpdateAgentConfigRequest struct {
 
 	// WebSearch Provider-native web search configuration for agent sessions
 	WebSearch *AgentWebSearchConfig `json:"webSearch,omitempty"`
+
+	// WebTools First-class web_search and web_extract tool configuration
+	WebTools *AgentWebToolsConfig `json:"webTools,omitempty"`
 }
 
 // UpdateAgentMemoryRequest Request to update memory content
@@ -2937,10 +4343,30 @@ type UpdateAgentMemoryRequest struct {
 	Content string `json:"content"`
 }
 
+// UpdateDAGNotificationsRequest Request to replace DAG notification settings
+type UpdateDAGNotificationsRequest struct {
+	// Enabled Whether notification delivery is enabled for this DAG
+	Enabled       bool                             `json:"enabled"`
+	Events        []NotificationEventType          `json:"events"`
+	Subscriptions *[]NotificationSubscriptionInput `json:"subscriptions,omitempty"`
+	Targets       []NotificationTargetInput        `json:"targets"`
+}
+
+// UpdateDAGSettingsRequest Request to replace DAG settings. Omit `profile` to clear the DAG default profile.
+type UpdateDAGSettingsRequest struct {
+	// Profile Runtime profile name.
+	Profile *RuntimeProfileName `json:"profile,omitempty"`
+}
+
 // UpdateDocRequest Request to update document content
 type UpdateDocRequest struct {
 	// Content Full file content including optional YAML frontmatter
 	Content string `json:"content"`
+}
+
+// UpdateInheritedRuntimeProfileRequest defines model for UpdateInheritedRuntimeProfileRequest.
+type UpdateInheritedRuntimeProfileRequest struct {
+	Description *string `json:"description,omitempty"`
 }
 
 // UpdateModelConfigRequest Request to update a model configuration
@@ -2980,6 +4406,20 @@ type UpdateRemoteNodeRequest struct {
 // UpdateRemoteNodeRequestAuthType defines model for UpdateRemoteNodeRequest.AuthType.
 type UpdateRemoteNodeRequestAuthType string
 
+// UpdateRuntimeProfileRequest defines model for UpdateRuntimeProfileRequest.
+type UpdateRuntimeProfileRequest struct {
+	Description *string               `json:"description,omitempty"`
+	Protected   *bool                 `json:"protected,omitempty"`
+	Status      *RuntimeProfileStatus `json:"status,omitempty"`
+}
+
+// UpdateSecretRequest defines model for UpdateSecretRequest.
+type UpdateSecretRequest struct {
+	Description          *string `json:"description,omitempty"`
+	ProviderConnectionId *string `json:"providerConnectionId,omitempty"`
+	ProviderRef          *string `json:"providerRef,omitempty"`
+}
+
 // UpdateSoulRequest Request to update a soul (partial update)
 type UpdateSoulRequest struct {
 	// Content Markdown body content (identity definition)
@@ -2998,12 +4438,17 @@ type UpdateUserRequest struct {
 
 	// Username New username (must be unique)
 	Username *string `json:"username,omitempty"`
+
+	// WorkspaceAccess Workspace access policy. all=true grants the top-level role in every workspace. all=false requires explicit workspace grants and a top-level viewer role.
+	WorkspaceAccess *WorkspaceAccess `json:"workspaceAccess,omitempty"`
 }
 
 // UpdateWorkspaceRequest defines model for UpdateWorkspaceRequest.
 type UpdateWorkspaceRequest struct {
 	Description *string `json:"description,omitempty"`
-	Name        *string `json:"name,omitempty"`
+
+	// Name Workspace name. The reserved names all, default, and global are not allowed.
+	Name *WorkspaceName `json:"name,omitempty"`
 }
 
 // User User information
@@ -3028,6 +4473,9 @@ type User struct {
 
 	// Username User's username
 	Username string `json:"username"`
+
+	// WorkspaceAccess Workspace access policy. all=true grants the top-level role in every workspace. all=false requires explicit workspace grants and a top-level viewer role.
+	WorkspaceAccess WorkspaceAccess `json:"workspaceAccess"`
 }
 
 // UserAuthProvider Authentication provider (builtin or oidc)
@@ -3047,6 +4495,76 @@ type UsersListResponse struct {
 	Users []User `json:"users"`
 }
 
+// ValueReferenceNotice A passive notice for a supported value reference left unresolved while loading a spec.
+type ValueReferenceNotice struct {
+	// FieldPath DAG field path associated with the unresolved reference.
+	FieldPath *string `json:"fieldPath,omitempty"`
+
+	// Message Human-readable explanation of the unresolved reference.
+	Message string `json:"message"`
+
+	// Reason Machine-readable reason why the reference was preserved.
+	Reason *ValueReferenceNoticeReason `json:"reason,omitempty"`
+
+	// Token Original value-reference token that was preserved.
+	Token *string `json:"token,omitempty"`
+}
+
+// ValueReferenceNoticeReason Machine-readable reason why the reference was preserved.
+type ValueReferenceNoticeReason string
+
+// View defines model for View.
+type View struct {
+	CreatedAt time.Time `json:"createdAt"`
+
+	// CreatedBy Username of the creator, for display only.
+	CreatedBy    *string   `json:"createdBy,omitempty"`
+	DagName      *string   `json:"dagName,omitempty"`
+	Id           string    `json:"id"`
+	IntervalDays int       `json:"intervalDays"`
+	Labels       *[]string `json:"labels,omitempty"`
+	Name         string    `json:"name"`
+	Pinned       *bool     `json:"pinned,omitempty"`
+	Type         string    `json:"type"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+	Workspace    *string   `json:"workspace,omitempty"`
+}
+
+// ViewListResponse defines model for ViewListResponse.
+type ViewListResponse struct {
+	Views []View `json:"views"`
+}
+
+// ViewSpec defines model for ViewSpec.
+type ViewSpec struct {
+	// DagName DAG name substring filter. Empty matches any.
+	DagName *string `json:"dagName,omitempty"`
+
+	// IntervalDays Required number of days each row (bucket) groups. Rows scroll back in time by this unit.
+	IntervalDays int `json:"intervalDays"`
+
+	// Labels Label filter (AND logic), each item key or key=value.
+	Labels *[]string `json:"labels,omitempty"`
+
+	// Name Display name for the view.
+	Name string `json:"name"`
+
+	// Pinned Whether the view is pinned to the left sidebar.
+	Pinned *bool `json:"pinned,omitempty"`
+
+	// Type Render type. Currently only kanban is supported.
+	Type *ViewSpecType `json:"type,omitempty"`
+
+	// Workspace Workspace filter. Empty string means all workspaces; otherwise use a workspace name.
+	Workspace *string `json:"workspace,omitempty"`
+}
+
+// ViewSpecType Render type. Currently only kanban is supported.
+type ViewSpecType string
+
+// WebhookAuthMode Authentication mode for a webhook trigger endpoint
+type WebhookAuthMode string
+
 // WebhookCreateResponse Response when creating or regenerating a webhook (includes full token)
 type WebhookCreateResponse struct {
 	// Token Full webhook token (only shown once, store securely!)
@@ -3058,6 +4576,9 @@ type WebhookCreateResponse struct {
 
 // WebhookDetails Webhook configuration details (token not included)
 type WebhookDetails struct {
+	// AuthMode Authentication mode for a webhook trigger endpoint
+	AuthMode WebhookAuthMode `json:"authMode"`
+
 	// CreatedAt When the webhook was created
 	CreatedAt time.Time `json:"createdAt"`
 
@@ -3070,6 +4591,9 @@ type WebhookDetails struct {
 	// Enabled Whether the webhook is active
 	Enabled bool `json:"enabled"`
 
+	// Hmac Public webhook HMAC configuration details
+	Hmac WebhookHMACDetails `json:"hmac"`
+
 	// Id Unique identifier for the webhook
 	Id openapi_types.UUID `json:"id"`
 
@@ -3081,6 +4605,58 @@ type WebhookDetails struct {
 
 	// UpdatedAt When the webhook was last modified
 	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// WebhookHMACConfigureRequest Request to configure webhook HMAC auth mode and enforcement.
+// If enforcementMode is omitted when enabling HMAC, it defaults to strict.
+// If omitted when configuring an existing webhook, the current enforcement
+// mode is preserved for token_and_hmac, while hmac_only always uses strict.
+// Clients should omit enforcementMode when authMode is hmac_only; the
+// server enforces strict mode and rejects observe.
+type WebhookHMACConfigureRequest struct {
+	AuthMode WebhookHMACConfigureRequestAuthMode `json:"authMode"`
+
+	// EnforcementMode How HMAC validation is enforced when HMAC is enabled
+	EnforcementMode *WebhookHMACEnforcementMode `json:"enforcementMode,omitempty"`
+}
+
+// WebhookHMACConfigureRequestAuthMode defines model for WebhookHMACConfigureRequest.AuthMode.
+type WebhookHMACConfigureRequestAuthMode string
+
+// WebhookHMACDetails Public webhook HMAC configuration details
+type WebhookHMACDetails struct {
+	// Algorithm Fixed HMAC algorithm for v1
+	Algorithm *string `json:"algorithm,omitempty"`
+
+	// Enabled Whether HMAC authentication is currently enabled
+	Enabled bool `json:"enabled"`
+
+	// EnforcementMode How HMAC validation is enforced when HMAC is enabled
+	EnforcementMode *WebhookHMACEnforcementMode `json:"enforcementMode,omitempty"`
+
+	// Format Expected signature header value format
+	Format *string `json:"format,omitempty"`
+
+	// HeaderName Header containing the HMAC signature
+	HeaderName *string `json:"headerName,omitempty"`
+
+	// SecretConfigured Whether an HMAC secret is configured for the webhook
+	SecretConfigured bool `json:"secretConfigured"`
+
+	// UpdatedAt When the HMAC secret was last generated
+	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
+}
+
+// WebhookHMACEnforcementMode How HMAC validation is enforced when HMAC is enabled
+type WebhookHMACEnforcementMode string
+
+// WebhookHMACSecretResponse Response when enabling or regenerating webhook HMAC (includes full secret)
+type WebhookHMACSecretResponse struct {
+	// HmacSecret Full HMAC secret (only shown once, store securely!)
+	HmacSecret string `json:"hmacSecret"`
+
+	// Webhook Webhook configuration details (token not included)
+	Webhook WebhookDetails `json:"webhook"`
 }
 
 // WebhookListResponse List of all webhooks
@@ -3147,25 +4723,59 @@ type WorkersListResponse struct {
 	Workers []Worker `json:"workers"`
 }
 
+// WorkspaceAccess Workspace access policy. all=true grants the top-level role in every workspace. all=false requires explicit workspace grants and a top-level viewer role.
+type WorkspaceAccess struct {
+	// All Whether this identity can access all workspaces
+	All bool `json:"all"`
+
+	// Grants Workspace-specific grants used when all=false
+	Grants []WorkspaceGrant `json:"grants"`
+}
+
+// WorkspaceGrant Role granted for a specific workspace
+type WorkspaceGrant struct {
+	// Role User role determining access permissions. admin: full access including user management, manager: DAG CRUD and execution with audit log access, developer: DAG CRUD and execution, operator: DAG execution only, viewer: read-only
+	Role UserRole `json:"role"`
+
+	// Workspace Workspace name. The reserved names all, default, and global are not allowed.
+	Workspace WorkspaceName `json:"workspace"`
+}
+
 // WorkspaceListResponse defines model for WorkspaceListResponse.
 type WorkspaceListResponse struct {
 	Workspaces []WorkspaceResponse `json:"workspaces"`
 }
+
+// WorkspaceName Workspace name. The reserved names all, default, and global are not allowed.
+type WorkspaceName = string
 
 // WorkspaceResponse defines model for WorkspaceResponse.
 type WorkspaceResponse struct {
 	CreatedAt   *time.Time `json:"createdAt,omitempty"`
 	Description *string    `json:"description,omitempty"`
 	Id          string     `json:"id"`
-	Name        string     `json:"name"`
-	UpdatedAt   *time.Time `json:"updatedAt,omitempty"`
+
+	// Name Workspace name. The reserved names all, default, and global are not allowed.
+	Name      WorkspaceName `json:"name"`
+	UpdatedAt *time.Time    `json:"updatedAt,omitempty"`
+}
+
+// WriteSecretVersionRequest defines model for WriteSecretVersionRequest.
+type WriteSecretVersionRequest struct {
+	Value *string `json:"value,omitempty"`
 }
 
 // APIKeyId defines model for APIKeyId.
 type APIKeyId = string
 
+// AgentSessionCursor defines model for AgentSessionCursor.
+type AgentSessionCursor = string
+
 // AgentSessionId defines model for AgentSessionId.
 type AgentSessionId = string
+
+// AgentSessionPaginationMode defines model for AgentSessionPaginationMode.
+type AgentSessionPaginationMode string
 
 // ArtifactPath defines model for ArtifactPath.
 type ArtifactPath = string
@@ -3175,6 +4785,9 @@ type ArtifactRecursive = bool
 
 // AuditLogLimit defines model for AuditLogLimit.
 type AuditLogLimit = int
+
+// DAGRunConcreteId defines model for DAGRunConcreteId.
+type DAGRunConcreteId = string
 
 // DAGRunIdSearch Unique identifier for the DAG-run. The special value 'latest' can be used to reference the most recent DAG-run.
 type DAGRunIdSearch = DAGRunId
@@ -3263,10 +4876,19 @@ type Tail = int
 // UserId defines model for UserId.
 type UserId = string
 
+// Workspace defines model for Workspace.
+type Workspace = string
+
 // ListAgentSessionsParams defines parameters for ListAgentSessions.
 type ListAgentSessionsParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+
+	// PaginationMode Pagination mode. Use `cursor` for the agent session sidebar infinite-loading flow; omit or use `offset` for compatibility pagination.
+	PaginationMode *ListAgentSessionsParamsPaginationMode `form:"paginationMode,omitempty" json:"paginationMode,omitempty"`
+
+	// Cursor Opaque cursor for loading the next page of older agent sessions
+	Cursor *AgentSessionCursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 
 	// Page page number of items to fetch (default is 1)
 	Page *Page `form:"page,omitempty" json:"page,omitempty"`
@@ -3274,6 +4896,9 @@ type ListAgentSessionsParams struct {
 	// PerPage number of items per page (default is 30, max is 100)
 	PerPage *PerPage `form:"perPage,omitempty" json:"perPage,omitempty"`
 }
+
+// ListAgentSessionsParamsPaginationMode defines parameters for ListAgentSessions.
+type ListAgentSessionsParamsPaginationMode string
 
 // CreateAgentSessionParams defines parameters for CreateAgentSession.
 type CreateAgentSessionParams struct {
@@ -3312,6 +4937,42 @@ type ListAuditLogsParams struct {
 
 	// Category Filter by audit category (e.g., terminal, user, dag)
 	Category *string `form:"category,omitempty" json:"category,omitempty"`
+
+	// Action Filter by audit action
+	Action *string `form:"action,omitempty" json:"action,omitempty"`
+
+	// Source Filter by audit source (e.g., mcp, ui, rest, cli)
+	Source *string `form:"source,omitempty" json:"source,omitempty"`
+
+	// Surface Filter by accepted credential surface (e.g., mcp, rest_api)
+	Surface *string `form:"surface,omitempty" json:"surface,omitempty"`
+
+	// Result Filter by result (succeeded, failed, denied)
+	Result *string `form:"result,omitempty" json:"result,omitempty"`
+
+	// CorrelationId Filter by correlation ID
+	CorrelationId *string `form:"correlationId,omitempty" json:"correlationId,omitempty"`
+
+	// ResourceType Filter by resource type
+	ResourceType *string `form:"resourceType,omitempty" json:"resourceType,omitempty"`
+
+	// ResourceId Filter by resource ID
+	ResourceId *string `form:"resourceId,omitempty" json:"resourceId,omitempty"`
+
+	// Workspace Filter by canonical workspace
+	Workspace *string `form:"workspace,omitempty" json:"workspace,omitempty"`
+
+	// CredentialId Filter by credential ID
+	CredentialId *string `form:"credentialId,omitempty" json:"credentialId,omitempty"`
+
+	// CredentialType Filter by credential type
+	CredentialType *string `form:"credentialType,omitempty" json:"credentialType,omitempty"`
+
+	// McpTool Filter by MCP tool name
+	McpTool *string `form:"mcpTool,omitempty" json:"mcpTool,omitempty"`
+
+	// IpAddress Filter by client IP address
+	IpAddress *string `form:"ipAddress,omitempty" json:"ipAddress,omitempty"`
 
 	// UserId Filter by user ID
 	UserId *string `form:"userId,omitempty" json:"userId,omitempty"`
@@ -3358,10 +5019,16 @@ type ListDAGRunsParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
+
 	// Name Filter DAG-runs by name
 	Name *string `form:"name,omitempty" json:"name,omitempty"`
 
-	// Tags Filter DAG-runs by DAG tags (comma-separated). Returns runs from DAGs that have ALL specified tags.
+	// Labels Filter DAG-runs by DAG labels (comma-separated). Returns runs from DAGs that have ALL specified labels. Mutually exclusive with `tags`; the server returns HTTP 400 if both are set.
+	Labels *string `form:"labels,omitempty" json:"labels,omitempty"`
+
+	// Tags Deprecated alias for `labels`; mutually exclusive with `labels`. Filter DAG-runs by DAG labels (comma-separated).
 	Tags *string `form:"tags,omitempty" json:"tags,omitempty"`
 }
 
@@ -3369,11 +5036,17 @@ type ListDAGRunsParams struct {
 type ExecuteDAGRunFromSpecJSONBody struct {
 	DagRunId *string `json:"dagRunId,omitempty"`
 
+	// Labels Additional labels to apply to the DAG-run (format: key=value or key-only). Merged with labels defined in the DAG spec. Mutually exclusive with deprecated `tags`; the server returns HTTP 400 if both are set.
+	Labels *Labels `json:"labels,omitempty"`
+
 	// Name Optional name to use when the spec omits a name
 	Name *string `json:"name,omitempty"`
 
 	// Params Parameters to pass to the DAG-run in JSON format
 	Params *string `json:"params,omitempty"`
+
+	// Profile Runtime profile override. Empty string means no profile.
+	Profile *RuntimeProfileOverride `json:"profile,omitempty"`
 
 	// Singleton If true, prevent starting if a DAG with the same name is already running (returns 409)
 	Singleton *bool `json:"singleton,omitempty"`
@@ -3381,7 +5054,8 @@ type ExecuteDAGRunFromSpecJSONBody struct {
 	// Spec DAG specification in YAML format
 	Spec string `json:"spec"`
 
-	// Tags Additional tags to apply to the DAG-run (format: key=value or key-only). Merged with tags defined in the DAG spec.
+	// Tags Deprecated alias for Labels. Additional labels to apply to the DAG-run (format: key=value or key-only). Merged with labels defined in the DAG spec. Mutually exclusive with `labels`; the server returns HTTP 400 if both are set.
+	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	Tags *Tags `json:"tags,omitempty"`
 }
 
@@ -3395,11 +5069,17 @@ type ExecuteDAGRunFromSpecParams struct {
 type EnqueueDAGRunFromSpecJSONBody struct {
 	DagRunId *string `json:"dagRunId,omitempty"`
 
+	// Labels Additional labels to apply to the DAG-run (format: key=value or key-only). Merged with labels defined in the DAG spec. Mutually exclusive with deprecated `tags`; the server returns HTTP 400 if both are set.
+	Labels *Labels `json:"labels,omitempty"`
+
 	// Name Optional name to use when the spec omits a name
 	Name *string `json:"name,omitempty"`
 
 	// Params Parameters to persist with the queued DAG-run in JSON format
 	Params *string `json:"params,omitempty"`
+
+	// Profile Runtime profile override. Empty string means no profile.
+	Profile *RuntimeProfileOverride `json:"profile,omitempty"`
 
 	// Queue Override the queue to use for this DAG-run
 	Queue *string `json:"queue,omitempty"`
@@ -3410,7 +5090,8 @@ type EnqueueDAGRunFromSpecJSONBody struct {
 	// Spec DAG specification in YAML format
 	Spec string `json:"spec"`
 
-	// Tags Additional tags to apply to the DAG-run (format: key=value or key-only). Merged with tags defined in the DAG spec.
+	// Tags Deprecated alias for Labels. Additional labels to apply to the DAG-run (format: key=value or key-only). Merged with labels defined in the DAG spec. Mutually exclusive with `labels`; the server returns HTTP 400 if both are set.
+	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	Tags *Tags `json:"tags,omitempty"`
 }
 
@@ -3440,6 +5121,15 @@ type ListDAGRunsByNameParams struct {
 	// Cursor Opaque cursor for loading the next page of older DAG-runs
 	Cursor *DAGRunListCursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
+}
+
+// DeleteDAGRunParams defines parameters for DeleteDAGRun.
+type DeleteDAGRunParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 }
@@ -3479,6 +5169,40 @@ type GetDAGRunArtifactPreviewParams struct {
 
 // DequeueDAGRunParams defines parameters for DequeueDAGRun.
 type DequeueDAGRunParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// EditRetryDAGRunJSONBody defines parameters for EditRetryDAGRun.
+type EditRetryDAGRunJSONBody struct {
+	// DagName Optional DAG name override for the edited retry run.
+	DagName  *string `json:"dagName,omitempty"`
+	DagRunId *string `json:"dagRunId,omitempty"`
+
+	// SkipSteps Steps to mark skipped while preserving their previous output variables.
+	SkipSteps *[]string `json:"skipSteps,omitempty"`
+
+	// Spec Edited DAG specification in YAML format.
+	Spec string `json:"spec"`
+}
+
+// EditRetryDAGRunParams defines parameters for EditRetryDAGRun.
+type EditRetryDAGRunParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// PreviewEditRetryDAGRunJSONBody defines parameters for PreviewEditRetryDAGRun.
+type PreviewEditRetryDAGRunJSONBody struct {
+	// DagName Optional DAG name override for the edited retry run.
+	DagName *string `json:"dagName,omitempty"`
+
+	// Spec Edited DAG specification in YAML format.
+	Spec string `json:"spec"`
+}
+
+// PreviewEditRetryDAGRunParams defines parameters for PreviewEditRetryDAGRun.
+type PreviewEditRetryDAGRunParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 }
@@ -3790,10 +5514,16 @@ type ListDAGsParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
+
 	// Name Filter DAGs by name
 	Name *string `form:"name,omitempty" json:"name,omitempty"`
 
-	// Tags Filter DAGs by tags (comma-separated). Returns DAGs that have ALL specified tags.
+	// Labels Filter DAGs by labels (comma-separated). Returns DAGs that have ALL specified labels. Mutually exclusive with `tags`; the server returns HTTP 400 if both are set.
+	Labels *string `form:"labels,omitempty" json:"labels,omitempty"`
+
+	// Tags Deprecated alias for `labels`; mutually exclusive with `labels`. Filter DAGs by labels (comma-separated).
 	Tags *string `form:"tags,omitempty" json:"tags,omitempty"`
 
 	// Sort Field to sort by:
@@ -3826,6 +5556,15 @@ type CreateNewDAGParams struct {
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 }
 
+// GetAllDAGLabelsParams defines parameters for GetAllDAGLabels.
+type GetAllDAGLabelsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
+}
+
 // SearchDAGsParams defines parameters for SearchDAGs.
 type SearchDAGsParams struct {
 	// RemoteNode name of the remote node
@@ -3839,6 +5578,9 @@ type SearchDAGsParams struct {
 type GetAllDAGTagsParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
 }
 
 // ValidateDAGSpecJSONBody defines parameters for ValidateDAGSpec.
@@ -3886,8 +5628,14 @@ type EnqueueDAGDAGRunJSONBody struct {
 	DagName  *string `json:"dagName,omitempty"`
 	DagRunId *string `json:"dagRunId,omitempty"`
 
+	// Labels Additional labels to apply to the DAG-run (format: key=value or key-only). Merged with labels defined in the DAG spec. Mutually exclusive with deprecated `tags`; the server returns HTTP 400 if both are set.
+	Labels *Labels `json:"labels,omitempty"`
+
 	// Params Parameters to pass to the DAG-run in JSON format
 	Params *string `json:"params,omitempty"`
+
+	// Profile Runtime profile override. Empty string means no profile.
+	Profile *RuntimeProfileOverride `json:"profile,omitempty"`
 
 	// Queue Override the DAG-level queue definition
 	Queue *string `json:"queue,omitempty"`
@@ -3895,12 +5643,55 @@ type EnqueueDAGDAGRunJSONBody struct {
 	// Singleton If true, prevent enqueuing if DAG is already running or queued (returns 409 conflict)
 	Singleton *bool `json:"singleton,omitempty"`
 
-	// Tags Additional tags to apply to the DAG-run (format: key=value or key-only). Merged with tags defined in the DAG spec.
+	// Tags Deprecated alias for Labels. Additional labels to apply to the DAG-run (format: key=value or key-only). Merged with labels defined in the DAG spec. Mutually exclusive with `labels`; the server returns HTTP 400 if both are set.
+	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	Tags *Tags `json:"tags,omitempty"`
 }
 
 // EnqueueDAGDAGRunParams defines parameters for EnqueueDAGDAGRun.
 type EnqueueDAGDAGRunParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// DeleteDAGIncidentsParams defines parameters for DeleteDAGIncidents.
+type DeleteDAGIncidentsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// GetDAGIncidentsParams defines parameters for GetDAGIncidents.
+type GetDAGIncidentsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// UpdateDAGIncidentsParams defines parameters for UpdateDAGIncidents.
+type UpdateDAGIncidentsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// DeleteDAGNotificationsParams defines parameters for DeleteDAGNotifications.
+type DeleteDAGNotificationsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// GetDAGNotificationsParams defines parameters for GetDAGNotifications.
+type GetDAGNotificationsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// UpdateDAGNotificationsParams defines parameters for UpdateDAGNotifications.
+type UpdateDAGNotificationsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// TestDAGNotificationsParams defines parameters for TestDAGNotifications.
+type TestDAGNotificationsParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 }
@@ -3913,6 +5704,24 @@ type RenameDAGJSONBody struct {
 
 // RenameDAGParams defines parameters for RenameDAG.
 type RenameDAGParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// DeleteDAGSettingsParams defines parameters for DeleteDAGSettings.
+type DeleteDAGSettingsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// GetDAGSettingsParams defines parameters for GetDAGSettings.
+type GetDAGSettingsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// UpdateDAGSettingsParams defines parameters for UpdateDAGSettings.
+type UpdateDAGSettingsParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 }
@@ -3941,13 +5750,20 @@ type ExecuteDAGJSONBody struct {
 	DagName  *string `json:"dagName,omitempty"`
 	DagRunId *string `json:"dagRunId,omitempty"`
 
+	// Labels Additional labels to apply to the DAG-run (format: key=value or key-only). Merged with labels defined in the DAG spec. Mutually exclusive with deprecated `tags`; the server returns HTTP 400 if both are set.
+	Labels *Labels `json:"labels,omitempty"`
+
 	// Params Parameters to pass to the DAG-run in JSON format
 	Params *string `json:"params,omitempty"`
+
+	// Profile Runtime profile override. Empty string means no profile.
+	Profile *RuntimeProfileOverride `json:"profile,omitempty"`
 
 	// Singleton If true, prevent starting if DAG is already running (returns 409 conflict)
 	Singleton *bool `json:"singleton,omitempty"`
 
-	// Tags Additional tags to apply to the DAG-run (format: key=value or key-only). Merged with tags defined in the DAG spec.
+	// Tags Deprecated alias for Labels. Additional labels to apply to the DAG-run (format: key=value or key-only). Merged with labels defined in the DAG spec. Mutually exclusive with `labels`; the server returns HTTP 400 if both are set.
+	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	Tags *Tags `json:"tags,omitempty"`
 }
 
@@ -3963,13 +5779,20 @@ type ExecuteDAGSyncJSONBody struct {
 	DagName  *string `json:"dagName,omitempty"`
 	DagRunId *string `json:"dagRunId,omitempty"`
 
+	// Labels Additional labels to apply to the DAG-run (format: key=value or key-only). Merged with labels defined in the DAG spec. Mutually exclusive with deprecated `tags`; the server returns HTTP 400 if both are set.
+	Labels *Labels `json:"labels,omitempty"`
+
 	// Params Parameters to pass to the DAG-run in JSON format
 	Params *string `json:"params,omitempty"`
+
+	// Profile Runtime profile override. Empty string means no profile.
+	Profile *RuntimeProfileOverride `json:"profile,omitempty"`
 
 	// Singleton If true, prevent starting if DAG is already running (returns 409 conflict)
 	Singleton *bool `json:"singleton,omitempty"`
 
-	// Tags Additional tags to apply to the DAG-run (format: key=value or key-only). Merged with tags defined in the DAG spec.
+	// Tags Deprecated alias for Labels. Additional labels to apply to the DAG-run (format: key=value or key-only). Merged with labels defined in the DAG spec. Mutually exclusive with `labels`; the server returns HTTP 400 if both are set.
+	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	Tags *Tags `json:"tags,omitempty"`
 
 	// Timeout Maximum seconds to wait for DAG execution to complete (required)
@@ -4018,6 +5841,30 @@ type CreateDAGWebhookParams struct {
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 }
 
+// ConfigureDAGWebhookHMACParams defines parameters for ConfigureDAGWebhookHMAC.
+type ConfigureDAGWebhookHMACParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// DisableDAGWebhookHMACParams defines parameters for DisableDAGWebhookHMAC.
+type DisableDAGWebhookHMACParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// EnableDAGWebhookHMACParams defines parameters for EnableDAGWebhookHMAC.
+type EnableDAGWebhookHMACParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// RegenerateDAGWebhookHMACSecretParams defines parameters for RegenerateDAGWebhookHMACSecret.
+type RegenerateDAGWebhookHMACSecretParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
 // RegenerateDAGWebhookTokenParams defines parameters for RegenerateDAGWebhookToken.
 type RegenerateDAGWebhookTokenParams struct {
 	// RemoteNode name of the remote node
@@ -4034,6 +5881,9 @@ type ToggleDAGWebhookParams struct {
 type ListDocsParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
 
 	// Page page number of items to fetch (default is 1)
 	Page *Page `form:"page,omitempty" json:"page,omitempty"`
@@ -4064,18 +5914,27 @@ type ListDocsParamsOrder string
 type CreateDocParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
 }
 
 // DeleteDocBatchParams defines parameters for DeleteDocBatch.
 type DeleteDocBatchParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
 }
 
 // DeleteDocParams defines parameters for DeleteDoc.
 type DeleteDocParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
 
 	// Path Document path (may include slashes for nested docs)
 	Path DocPath `form:"path" json:"path"`
@@ -4086,6 +5945,9 @@ type GetDocParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
+
 	// Path Document path (may include slashes for nested docs)
 	Path DocPath `form:"path" json:"path"`
 }
@@ -4094,6 +5956,9 @@ type GetDocParams struct {
 type UpdateDocParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
 
 	// Path Document path (may include slashes for nested docs)
 	Path DocPath `form:"path" json:"path"`
@@ -4104,6 +5969,9 @@ type RenameDocParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
+
 	// Path Current document or directory path (may include slashes for nested docs)
 	Path DocPath `form:"path" json:"path"`
 }
@@ -4112,6 +5980,9 @@ type RenameDocParams struct {
 type SearchDocsParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
 
 	// Q Search query
 	Q string `form:"q" json:"q"`
@@ -4168,6 +6039,72 @@ type ListEventLogsParams struct {
 // ListEventLogsParamsPaginationMode defines parameters for ListEventLogs.
 type ListEventLogsParamsPaginationMode string
 
+// ListIncidentPoliciesParams defines parameters for ListIncidentPolicies.
+type ListIncidentPoliciesParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// GetGlobalIncidentPoliciesParams defines parameters for GetGlobalIncidentPolicies.
+type GetGlobalIncidentPoliciesParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// UpdateGlobalIncidentPoliciesParams defines parameters for UpdateGlobalIncidentPolicies.
+type UpdateGlobalIncidentPoliciesParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// GetWorkspaceIncidentPoliciesParams defines parameters for GetWorkspaceIncidentPolicies.
+type GetWorkspaceIncidentPoliciesParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// UpdateWorkspaceIncidentPoliciesParams defines parameters for UpdateWorkspaceIncidentPolicies.
+type UpdateWorkspaceIncidentPoliciesParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// ListIncidentProvidersParams defines parameters for ListIncidentProviders.
+type ListIncidentProvidersParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// CreateIncidentProviderParams defines parameters for CreateIncidentProvider.
+type CreateIncidentProviderParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// DeleteIncidentProviderParams defines parameters for DeleteIncidentProvider.
+type DeleteIncidentProviderParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// GetIncidentProviderParams defines parameters for GetIncidentProvider.
+type GetIncidentProviderParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// UpdateIncidentProviderParams defines parameters for UpdateIncidentProvider.
+type UpdateIncidentProviderParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// TestIncidentProviderParams defines parameters for TestIncidentProvider.
+type TestIncidentProviderParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
 // ActivateLicenseJSONBody defines parameters for ActivateLicense.
 type ActivateLicenseJSONBody struct {
 	// Key License key (e.g. DAGU-XXXX-XXXX-XXXX-XXXX)
@@ -4182,6 +6119,186 @@ type ActivateLicenseParams struct {
 
 // DeactivateLicenseParams defines parameters for DeactivateLicense.
 type DeactivateLicenseParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// ListNotificationChannelsParams defines parameters for ListNotificationChannels.
+type ListNotificationChannelsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// CreateNotificationChannelParams defines parameters for CreateNotificationChannel.
+type CreateNotificationChannelParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// DeleteNotificationChannelParams defines parameters for DeleteNotificationChannel.
+type DeleteNotificationChannelParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// GetNotificationChannelParams defines parameters for GetNotificationChannel.
+type GetNotificationChannelParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// UpdateNotificationChannelParams defines parameters for UpdateNotificationChannel.
+type UpdateNotificationChannelParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// ListNotificationRoutesParams defines parameters for ListNotificationRoutes.
+type ListNotificationRoutesParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// GetGlobalNotificationRoutesParams defines parameters for GetGlobalNotificationRoutes.
+type GetGlobalNotificationRoutesParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// UpdateGlobalNotificationRoutesParams defines parameters for UpdateGlobalNotificationRoutes.
+type UpdateGlobalNotificationRoutesParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// GetWorkspaceNotificationRoutesParams defines parameters for GetWorkspaceNotificationRoutes.
+type GetWorkspaceNotificationRoutesParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// UpdateWorkspaceNotificationRoutesParams defines parameters for UpdateWorkspaceNotificationRoutes.
+type UpdateWorkspaceNotificationRoutesParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// GetNotificationSettingsParams defines parameters for GetNotificationSettings.
+type GetNotificationSettingsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// UpdateNotificationSettingsParams defines parameters for UpdateNotificationSettings.
+type UpdateNotificationSettingsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// ListRuntimeProfilesParams defines parameters for ListRuntimeProfiles.
+type ListRuntimeProfilesParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// CreateRuntimeProfileParams defines parameters for CreateRuntimeProfile.
+type CreateRuntimeProfileParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// GetGlobalRuntimeProfileDefaultsParams defines parameters for GetGlobalRuntimeProfileDefaults.
+type GetGlobalRuntimeProfileDefaultsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// UpdateGlobalRuntimeProfileDefaultsParams defines parameters for UpdateGlobalRuntimeProfileDefaults.
+type UpdateGlobalRuntimeProfileDefaultsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// DeleteGlobalRuntimeProfileDefaultEntryParams defines parameters for DeleteGlobalRuntimeProfileDefaultEntry.
+type DeleteGlobalRuntimeProfileDefaultEntryParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// SetGlobalRuntimeProfileDefaultSecretParams defines parameters for SetGlobalRuntimeProfileDefaultSecret.
+type SetGlobalRuntimeProfileDefaultSecretParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// SetGlobalRuntimeProfileDefaultVariableParams defines parameters for SetGlobalRuntimeProfileDefaultVariable.
+type SetGlobalRuntimeProfileDefaultVariableParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// GetWorkspaceRuntimeProfileDefaultsParams defines parameters for GetWorkspaceRuntimeProfileDefaults.
+type GetWorkspaceRuntimeProfileDefaultsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// UpdateWorkspaceRuntimeProfileDefaultsParams defines parameters for UpdateWorkspaceRuntimeProfileDefaults.
+type UpdateWorkspaceRuntimeProfileDefaultsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// DeleteWorkspaceRuntimeProfileDefaultEntryParams defines parameters for DeleteWorkspaceRuntimeProfileDefaultEntry.
+type DeleteWorkspaceRuntimeProfileDefaultEntryParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// SetWorkspaceRuntimeProfileDefaultSecretParams defines parameters for SetWorkspaceRuntimeProfileDefaultSecret.
+type SetWorkspaceRuntimeProfileDefaultSecretParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// SetWorkspaceRuntimeProfileDefaultVariableParams defines parameters for SetWorkspaceRuntimeProfileDefaultVariable.
+type SetWorkspaceRuntimeProfileDefaultVariableParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// DeleteRuntimeProfileParams defines parameters for DeleteRuntimeProfile.
+type DeleteRuntimeProfileParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// GetRuntimeProfileParams defines parameters for GetRuntimeProfile.
+type GetRuntimeProfileParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// UpdateRuntimeProfileParams defines parameters for UpdateRuntimeProfile.
+type UpdateRuntimeProfileParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// DeleteRuntimeProfileEntryParams defines parameters for DeleteRuntimeProfileEntry.
+type DeleteRuntimeProfileEntryParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// SetRuntimeProfileSecretParams defines parameters for SetRuntimeProfileSecret.
+type SetRuntimeProfileSecretParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// SetRuntimeProfileVariableParams defines parameters for SetRuntimeProfileVariable.
+type SetRuntimeProfileVariableParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 }
@@ -4251,8 +6368,14 @@ type SearchDAGFeedParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
+
 	// Q A search query string
 	Q string `form:"q" json:"q"`
+
+	// Labels Filter DAGs by labels (comma-separated). Returns DAGs that have ALL specified labels.
+	Labels *string `form:"labels,omitempty" json:"labels,omitempty"`
 
 	// Cursor Opaque cursor returned by the previous search response
 	Cursor *SearchCursor `form:"cursor,omitempty" json:"cursor,omitempty"`
@@ -4269,6 +6392,12 @@ type SearchDagMatchesParams struct {
 	// Q A search query string
 	Q string `form:"q" json:"q"`
 
+	// Labels Filter DAG matches by labels (comma-separated). Returns matches only when the DAG has ALL specified labels.
+	Labels *string `form:"labels,omitempty" json:"labels,omitempty"`
+
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
+
 	// Cursor Opaque cursor returned by the previous search response
 	Cursor *SearchCursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 
@@ -4280,6 +6409,9 @@ type SearchDagMatchesParams struct {
 type SearchDocFeedParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
 
 	// Q A search query string
 	Q string `form:"q" json:"q"`
@@ -4296,6 +6428,9 @@ type SearchDocMatchesParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 
+	// Workspace Workspace selector. For list and search APIs, use all, default, or a workspace name. Omitted means all. For document target APIs, use default or a workspace name; omitted means default.
+	Workspace *Workspace `form:"workspace,omitempty" json:"workspace,omitempty"`
+
 	// Path Document path (may include slashes for nested docs)
 	Path DocPath `form:"path" json:"path"`
 
@@ -4307,6 +6442,59 @@ type SearchDocMatchesParams struct {
 
 	// Limit Number of search match snippets to return (default 5, max 50)
 	Limit *SearchMatchLimit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListSecretsParams defines parameters for ListSecrets.
+type ListSecretsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+
+	// Workspace Single secret scope. Use global for workspace-less secrets or a workspace name. Omit for global. all and default are not supported for secrets.
+	Workspace *string `form:"workspace,omitempty" json:"workspace,omitempty"`
+	Limit     *int    `form:"limit,omitempty" json:"limit,omitempty"`
+	Offset    *int    `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
+// CreateSecretParams defines parameters for CreateSecret.
+type CreateSecretParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// DeleteSecretParams defines parameters for DeleteSecret.
+type DeleteSecretParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// GetSecretParams defines parameters for GetSecret.
+type GetSecretParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// UpdateSecretParams defines parameters for UpdateSecret.
+type UpdateSecretParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// DisableSecretParams defines parameters for DisableSecret.
+type DisableSecretParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// EnableSecretParams defines parameters for EnableSecret.
+type EnableSecretParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// WriteSecretVersionParams defines parameters for WriteSecretVersion.
+type WriteSecretVersionParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 }
 
 // GetCoordinatorStatusParams defines parameters for GetCoordinatorStatus.
@@ -4507,6 +6695,24 @@ type UpdateBaseConfigParams struct {
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 }
 
+// GetWorkspaceBaseConfigParams defines parameters for GetWorkspaceBaseConfig.
+type GetWorkspaceBaseConfigParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// UpdateWorkspaceBaseConfigJSONBody defines parameters for UpdateWorkspaceBaseConfig.
+type UpdateWorkspaceBaseConfigJSONBody struct {
+	// Spec The workspace base configuration in YAML format
+	Spec string `json:"spec"`
+}
+
+// UpdateWorkspaceBaseConfigParams defines parameters for UpdateWorkspaceBaseConfig.
+type UpdateWorkspaceBaseConfigParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
 // SyncCleanupParams defines parameters for SyncCleanup.
 type SyncCleanupParams struct {
 	// RemoteNode name of the remote node
@@ -4624,6 +6830,36 @@ type SyncTestConnectionParams struct {
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 }
 
+// ListViewsParams defines parameters for ListViews.
+type ListViewsParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// CreateViewParams defines parameters for CreateView.
+type CreateViewParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// DeleteViewParams defines parameters for DeleteView.
+type DeleteViewParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// GetViewParams defines parameters for GetView.
+type GetViewParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
+// UpdateViewParams defines parameters for UpdateView.
+type UpdateViewParams struct {
+	// RemoteNode name of the remote node
+	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
+}
+
 // ListWebhooksParams defines parameters for ListWebhooks.
 type ListWebhooksParams struct {
 	// RemoteNode name of the remote node
@@ -4635,8 +6871,11 @@ type TriggerWebhookParams struct {
 	// RemoteNode name of the remote node
 	RemoteNode *RemoteNode `form:"remoteNode,omitempty" json:"remoteNode,omitempty"`
 
-	// Authorization Bearer token for webhook authentication (e.g., 'Bearer dagu_wh_...'). Required for authentication but marked optional in schema so the handler can return proper 401 responses.
+	// Authorization Bearer token for webhook authentication (e.g., 'Bearer dagu_wh_...'). Required only when the webhook auth mode includes token authentication.
 	Authorization *string `json:"Authorization,omitempty"`
+
+	// XDaguSignature HMAC webhook signature in the format 'sha256=<hex>'. Required only when the webhook auth mode includes HMAC authentication with strict enforcement.
+	XDaguSignature *string `json:"X-Dagu-Signature,omitempty"`
 }
 
 // GetWorkersParams defines parameters for GetWorkers.
@@ -4705,6 +6944,12 @@ type ExecuteDAGRunFromSpecJSONRequestBody ExecuteDAGRunFromSpecJSONBody
 // EnqueueDAGRunFromSpecJSONRequestBody defines body for EnqueueDAGRunFromSpec for application/json ContentType.
 type EnqueueDAGRunFromSpecJSONRequestBody EnqueueDAGRunFromSpecJSONBody
 
+// EditRetryDAGRunJSONRequestBody defines body for EditRetryDAGRun for application/json ContentType.
+type EditRetryDAGRunJSONRequestBody EditRetryDAGRunJSONBody
+
+// PreviewEditRetryDAGRunJSONRequestBody defines body for PreviewEditRetryDAGRun for application/json ContentType.
+type PreviewEditRetryDAGRunJSONRequestBody PreviewEditRetryDAGRunJSONBody
+
 // RescheduleDAGRunJSONRequestBody defines body for RescheduleDAGRun for application/json ContentType.
 type RescheduleDAGRunJSONRequestBody RescheduleDAGRunJSONBody
 
@@ -4744,8 +6989,20 @@ type ValidateDAGSpecJSONRequestBody ValidateDAGSpecJSONBody
 // EnqueueDAGDAGRunJSONRequestBody defines body for EnqueueDAGDAGRun for application/json ContentType.
 type EnqueueDAGDAGRunJSONRequestBody EnqueueDAGDAGRunJSONBody
 
+// UpdateDAGIncidentsJSONRequestBody defines body for UpdateDAGIncidents for application/json ContentType.
+type UpdateDAGIncidentsJSONRequestBody = IncidentPolicySetInput
+
+// UpdateDAGNotificationsJSONRequestBody defines body for UpdateDAGNotifications for application/json ContentType.
+type UpdateDAGNotificationsJSONRequestBody = UpdateDAGNotificationsRequest
+
+// TestDAGNotificationsJSONRequestBody defines body for TestDAGNotifications for application/json ContentType.
+type TestDAGNotificationsJSONRequestBody = TestDAGNotificationRequest
+
 // RenameDAGJSONRequestBody defines body for RenameDAG for application/json ContentType.
 type RenameDAGJSONRequestBody RenameDAGJSONBody
+
+// UpdateDAGSettingsJSONRequestBody defines body for UpdateDAGSettings for application/json ContentType.
+type UpdateDAGSettingsJSONRequestBody = UpdateDAGSettingsRequest
 
 // UpdateDAGSpecJSONRequestBody defines body for UpdateDAGSpec for application/json ContentType.
 type UpdateDAGSpecJSONRequestBody UpdateDAGSpecJSONBody
@@ -4758,6 +7015,12 @@ type ExecuteDAGSyncJSONRequestBody ExecuteDAGSyncJSONBody
 
 // UpdateDAGSuspensionStateJSONRequestBody defines body for UpdateDAGSuspensionState for application/json ContentType.
 type UpdateDAGSuspensionStateJSONRequestBody UpdateDAGSuspensionStateJSONBody
+
+// ConfigureDAGWebhookHMACJSONRequestBody defines body for ConfigureDAGWebhookHMAC for application/json ContentType.
+type ConfigureDAGWebhookHMACJSONRequestBody = WebhookHMACConfigureRequest
+
+// EnableDAGWebhookHMACJSONRequestBody defines body for EnableDAGWebhookHMAC for application/json ContentType.
+type EnableDAGWebhookHMACJSONRequestBody = WebhookHMACConfigureRequest
 
 // ToggleDAGWebhookJSONRequestBody defines body for ToggleDAGWebhook for application/json ContentType.
 type ToggleDAGWebhookJSONRequestBody = WebhookToggleRequest
@@ -4774,14 +7037,80 @@ type UpdateDocJSONRequestBody = UpdateDocRequest
 // RenameDocJSONRequestBody defines body for RenameDoc for application/json ContentType.
 type RenameDocJSONRequestBody = RenameDocRequest
 
+// UpdateGlobalIncidentPoliciesJSONRequestBody defines body for UpdateGlobalIncidentPolicies for application/json ContentType.
+type UpdateGlobalIncidentPoliciesJSONRequestBody = IncidentPolicySetInput
+
+// UpdateWorkspaceIncidentPoliciesJSONRequestBody defines body for UpdateWorkspaceIncidentPolicies for application/json ContentType.
+type UpdateWorkspaceIncidentPoliciesJSONRequestBody = IncidentPolicySetInput
+
+// CreateIncidentProviderJSONRequestBody defines body for CreateIncidentProvider for application/json ContentType.
+type CreateIncidentProviderJSONRequestBody = IncidentProviderInput
+
+// UpdateIncidentProviderJSONRequestBody defines body for UpdateIncidentProvider for application/json ContentType.
+type UpdateIncidentProviderJSONRequestBody = IncidentProviderInput
+
 // ActivateLicenseJSONRequestBody defines body for ActivateLicense for application/json ContentType.
 type ActivateLicenseJSONRequestBody ActivateLicenseJSONBody
+
+// CreateNotificationChannelJSONRequestBody defines body for CreateNotificationChannel for application/json ContentType.
+type CreateNotificationChannelJSONRequestBody = NotificationChannelInput
+
+// UpdateNotificationChannelJSONRequestBody defines body for UpdateNotificationChannel for application/json ContentType.
+type UpdateNotificationChannelJSONRequestBody = NotificationChannelInput
+
+// UpdateGlobalNotificationRoutesJSONRequestBody defines body for UpdateGlobalNotificationRoutes for application/json ContentType.
+type UpdateGlobalNotificationRoutesJSONRequestBody = NotificationRouteSetInput
+
+// UpdateWorkspaceNotificationRoutesJSONRequestBody defines body for UpdateWorkspaceNotificationRoutes for application/json ContentType.
+type UpdateWorkspaceNotificationRoutesJSONRequestBody = NotificationRouteSetInput
+
+// UpdateNotificationSettingsJSONRequestBody defines body for UpdateNotificationSettings for application/json ContentType.
+type UpdateNotificationSettingsJSONRequestBody = NotificationWorkspaceSettingsInput
+
+// CreateRuntimeProfileJSONRequestBody defines body for CreateRuntimeProfile for application/json ContentType.
+type CreateRuntimeProfileJSONRequestBody = CreateRuntimeProfileRequest
+
+// UpdateGlobalRuntimeProfileDefaultsJSONRequestBody defines body for UpdateGlobalRuntimeProfileDefaults for application/json ContentType.
+type UpdateGlobalRuntimeProfileDefaultsJSONRequestBody = UpdateInheritedRuntimeProfileRequest
+
+// SetGlobalRuntimeProfileDefaultSecretJSONRequestBody defines body for SetGlobalRuntimeProfileDefaultSecret for application/json ContentType.
+type SetGlobalRuntimeProfileDefaultSecretJSONRequestBody = SetRuntimeProfileSecretRequest
+
+// SetGlobalRuntimeProfileDefaultVariableJSONRequestBody defines body for SetGlobalRuntimeProfileDefaultVariable for application/json ContentType.
+type SetGlobalRuntimeProfileDefaultVariableJSONRequestBody = SetRuntimeProfileVariableRequest
+
+// UpdateWorkspaceRuntimeProfileDefaultsJSONRequestBody defines body for UpdateWorkspaceRuntimeProfileDefaults for application/json ContentType.
+type UpdateWorkspaceRuntimeProfileDefaultsJSONRequestBody = UpdateInheritedRuntimeProfileRequest
+
+// SetWorkspaceRuntimeProfileDefaultSecretJSONRequestBody defines body for SetWorkspaceRuntimeProfileDefaultSecret for application/json ContentType.
+type SetWorkspaceRuntimeProfileDefaultSecretJSONRequestBody = SetRuntimeProfileSecretRequest
+
+// SetWorkspaceRuntimeProfileDefaultVariableJSONRequestBody defines body for SetWorkspaceRuntimeProfileDefaultVariable for application/json ContentType.
+type SetWorkspaceRuntimeProfileDefaultVariableJSONRequestBody = SetRuntimeProfileVariableRequest
+
+// UpdateRuntimeProfileJSONRequestBody defines body for UpdateRuntimeProfile for application/json ContentType.
+type UpdateRuntimeProfileJSONRequestBody = UpdateRuntimeProfileRequest
+
+// SetRuntimeProfileSecretJSONRequestBody defines body for SetRuntimeProfileSecret for application/json ContentType.
+type SetRuntimeProfileSecretJSONRequestBody = SetRuntimeProfileSecretRequest
+
+// SetRuntimeProfileVariableJSONRequestBody defines body for SetRuntimeProfileVariable for application/json ContentType.
+type SetRuntimeProfileVariableJSONRequestBody = SetRuntimeProfileVariableRequest
 
 // CreateRemoteNodeJSONRequestBody defines body for CreateRemoteNode for application/json ContentType.
 type CreateRemoteNodeJSONRequestBody = CreateRemoteNodeRequest
 
 // UpdateRemoteNodeJSONRequestBody defines body for UpdateRemoteNode for application/json ContentType.
 type UpdateRemoteNodeJSONRequestBody = UpdateRemoteNodeRequest
+
+// CreateSecretJSONRequestBody defines body for CreateSecret for application/json ContentType.
+type CreateSecretJSONRequestBody = CreateSecretRequest
+
+// UpdateSecretJSONRequestBody defines body for UpdateSecret for application/json ContentType.
+type UpdateSecretJSONRequestBody = UpdateSecretRequest
+
+// WriteSecretVersionJSONRequestBody defines body for WriteSecretVersion for application/json ContentType.
+type WriteSecretVersionJSONRequestBody = WriteSecretVersionRequest
 
 // UpdateAgentConfigJSONRequestBody defines body for UpdateAgentConfig for application/json ContentType.
 type UpdateAgentConfigJSONRequestBody = UpdateAgentConfigRequest
@@ -4813,6 +7142,9 @@ type UpdateAgentSoulJSONRequestBody = UpdateSoulRequest
 // UpdateBaseConfigJSONRequestBody defines body for UpdateBaseConfig for application/json ContentType.
 type UpdateBaseConfigJSONRequestBody UpdateBaseConfigJSONBody
 
+// UpdateWorkspaceBaseConfigJSONRequestBody defines body for UpdateWorkspaceBaseConfig for application/json ContentType.
+type UpdateWorkspaceBaseConfigJSONRequestBody UpdateWorkspaceBaseConfigJSONBody
+
 // UpdateSyncConfigJSONRequestBody defines body for UpdateSyncConfig for application/json ContentType.
 type UpdateSyncConfigJSONRequestBody = SyncConfigUpdateRequest
 
@@ -4842,6 +7174,12 @@ type UpdateUserJSONRequestBody = UpdateUserRequest
 
 // ResetUserPasswordJSONRequestBody defines body for ResetUserPassword for application/json ContentType.
 type ResetUserPasswordJSONRequestBody = ResetPasswordRequest
+
+// CreateViewJSONRequestBody defines body for CreateView for application/json ContentType.
+type CreateViewJSONRequestBody = ViewSpec
+
+// UpdateViewJSONRequestBody defines body for UpdateView for application/json ContentType.
+type UpdateViewJSONRequestBody = ViewSpec
 
 // TriggerWebhookJSONRequestBody defines body for TriggerWebhook for application/json ContentType.
 type TriggerWebhookJSONRequestBody = WebhookRequest
@@ -4971,6 +7309,95 @@ func (t *CompleteAgentAuthProviderLoginRequest) UnmarshalJSON(b []byte) error {
 		}
 	}
 
+	return err
+}
+
+// AsIncidentPagerDutyProviderInputEnvelope returns the union data inside the IncidentProviderInput as a IncidentPagerDutyProviderInputEnvelope
+func (t IncidentProviderInput) AsIncidentPagerDutyProviderInputEnvelope() (IncidentPagerDutyProviderInputEnvelope, error) {
+	var body IncidentPagerDutyProviderInputEnvelope
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromIncidentPagerDutyProviderInputEnvelope overwrites any union data inside the IncidentProviderInput as the provided IncidentPagerDutyProviderInputEnvelope
+func (t *IncidentProviderInput) FromIncidentPagerDutyProviderInputEnvelope(v IncidentPagerDutyProviderInputEnvelope) error {
+	v.Type = "pagerduty"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeIncidentPagerDutyProviderInputEnvelope performs a merge with any union data inside the IncidentProviderInput, using the provided IncidentPagerDutyProviderInputEnvelope
+func (t *IncidentProviderInput) MergeIncidentPagerDutyProviderInputEnvelope(v IncidentPagerDutyProviderInputEnvelope) error {
+	v.Type = "pagerduty"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsIncidentSolarWindsProviderInputEnvelope returns the union data inside the IncidentProviderInput as a IncidentSolarWindsProviderInputEnvelope
+func (t IncidentProviderInput) AsIncidentSolarWindsProviderInputEnvelope() (IncidentSolarWindsProviderInputEnvelope, error) {
+	var body IncidentSolarWindsProviderInputEnvelope
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromIncidentSolarWindsProviderInputEnvelope overwrites any union data inside the IncidentProviderInput as the provided IncidentSolarWindsProviderInputEnvelope
+func (t *IncidentProviderInput) FromIncidentSolarWindsProviderInputEnvelope(v IncidentSolarWindsProviderInputEnvelope) error {
+	v.Type = "solarwinds_incident_response"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeIncidentSolarWindsProviderInputEnvelope performs a merge with any union data inside the IncidentProviderInput, using the provided IncidentSolarWindsProviderInputEnvelope
+func (t *IncidentProviderInput) MergeIncidentSolarWindsProviderInputEnvelope(v IncidentSolarWindsProviderInputEnvelope) error {
+	v.Type = "solarwinds_incident_response"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t IncidentProviderInput) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"type"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t IncidentProviderInput) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "pagerduty":
+		return t.AsIncidentPagerDutyProviderInputEnvelope()
+	case "solarwinds_incident_response":
+		return t.AsIncidentSolarWindsProviderInputEnvelope()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t IncidentProviderInput) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *IncidentProviderInput) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
 	return err
 }
 
@@ -5274,6 +7701,9 @@ type ServerInterface interface {
 	// List all DAG-runs with a specific name
 	// (GET /dag-runs/{name})
 	ListDAGRunsByName(w http.ResponseWriter, r *http.Request, name DAGRunName, params ListDAGRunsByNameParams)
+	// Delete a DAG-run
+	// (DELETE /dag-runs/{name}/{dagRunId})
+	DeleteDAGRun(w http.ResponseWriter, r *http.Request, name DAGName, dagRunId DAGRunConcreteId, params DeleteDAGRunParams)
 	// Retrieve detailed status of a DAG-run
 	// (GET /dag-runs/{name}/{dagRunId})
 	GetDAGRunDetails(w http.ResponseWriter, r *http.Request, name DAGName, dagRunId DAGRunId, params GetDAGRunDetailsParams)
@@ -5289,6 +7719,12 @@ type ServerInterface interface {
 	// Dequeue a queued DAG-run
 	// (GET /dag-runs/{name}/{dagRunId}/dequeue)
 	DequeueDAGRun(w http.ResponseWriter, r *http.Request, name DAGName, dagRunId DAGRunId, params DequeueDAGRunParams)
+	// Run edited DAG retry
+	// (POST /dag-runs/{name}/{dagRunId}/edit-retry)
+	EditRetryDAGRun(w http.ResponseWriter, r *http.Request, name DAGName, dagRunId DAGRunId, params EditRetryDAGRunParams)
+	// Preview edited DAG-run retry
+	// (POST /dag-runs/{name}/{dagRunId}/edit-retry/preview)
+	PreviewEditRetryDAGRun(w http.ResponseWriter, r *http.Request, name DAGName, dagRunId DAGRunId, params PreviewEditRetryDAGRunParams)
 	// Retrieve full execution log of a DAG-run
 	// (GET /dag-runs/{name}/{dagRunId}/log)
 	GetDAGRunLog(w http.ResponseWriter, r *http.Request, name DAGName, dagRunId DAGRunId, params GetDAGRunLogParams)
@@ -5382,6 +7818,9 @@ type ServerInterface interface {
 	// Create a new DAG definition
 	// (POST /dags)
 	CreateNewDAG(w http.ResponseWriter, r *http.Request, params CreateNewDAGParams)
+	// List all available DAG labels
+	// (GET /dags/labels)
+	GetAllDAGLabels(w http.ResponseWriter, r *http.Request, params GetAllDAGLabelsParams)
 	// Search DAGs
 	// (GET /dags/search)
 	SearchDAGs(w http.ResponseWriter, r *http.Request, params SearchDAGsParams)
@@ -5406,9 +7845,39 @@ type ServerInterface interface {
 	// Enqueue a DAG-run from DAG
 	// (POST /dags/{fileName}/enqueue)
 	EnqueueDAGDAGRun(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params EnqueueDAGDAGRunParams)
+	// Delete DAG incident routing
+	// (DELETE /dags/{fileName}/incidents)
+	DeleteDAGIncidents(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params DeleteDAGIncidentsParams)
+	// Get DAG incident routing
+	// (GET /dags/{fileName}/incidents)
+	GetDAGIncidents(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params GetDAGIncidentsParams)
+	// Update DAG incident routing
+	// (PUT /dags/{fileName}/incidents)
+	UpdateDAGIncidents(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params UpdateDAGIncidentsParams)
+	// Delete DAG notification settings
+	// (DELETE /dags/{fileName}/notifications)
+	DeleteDAGNotifications(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params DeleteDAGNotificationsParams)
+	// Get DAG notification settings
+	// (GET /dags/{fileName}/notifications)
+	GetDAGNotifications(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params GetDAGNotificationsParams)
+	// Update DAG notification settings
+	// (PUT /dags/{fileName}/notifications)
+	UpdateDAGNotifications(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params UpdateDAGNotificationsParams)
+	// Send a test DAG notification
+	// (POST /dags/{fileName}/notifications/test)
+	TestDAGNotifications(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params TestDAGNotificationsParams)
 	// Change DAG file ID
 	// (POST /dags/{fileName}/rename)
 	RenameDAG(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params RenameDAGParams)
+	// Delete DAG settings
+	// (DELETE /dags/{fileName}/settings)
+	DeleteDAGSettings(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params DeleteDAGSettingsParams)
+	// Get DAG settings
+	// (GET /dags/{fileName}/settings)
+	GetDAGSettings(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params GetDAGSettingsParams)
+	// Update DAG settings
+	// (PUT /dags/{fileName}/settings)
+	UpdateDAGSettings(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params UpdateDAGSettingsParams)
 	// Retrieve DAG specification
 	// (GET /dags/{fileName}/spec)
 	GetDAGSpec(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params GetDAGSpecParams)
@@ -5436,6 +7905,18 @@ type ServerInterface interface {
 	// Create webhook for DAG
 	// (POST /dags/{fileName}/webhook)
 	CreateDAGWebhook(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params CreateDAGWebhookParams)
+	// Configure webhook HMAC
+	// (POST /dags/{fileName}/webhook/hmac/configure)
+	ConfigureDAGWebhookHMAC(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params ConfigureDAGWebhookHMACParams)
+	// Disable webhook HMAC
+	// (POST /dags/{fileName}/webhook/hmac/disable)
+	DisableDAGWebhookHMAC(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params DisableDAGWebhookHMACParams)
+	// Enable webhook HMAC
+	// (POST /dags/{fileName}/webhook/hmac/enable)
+	EnableDAGWebhookHMAC(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params EnableDAGWebhookHMACParams)
+	// Regenerate webhook HMAC secret
+	// (POST /dags/{fileName}/webhook/hmac/regenerate)
+	RegenerateDAGWebhookHMACSecret(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params RegenerateDAGWebhookHMACSecretParams)
 	// Regenerate webhook token
 	// (POST /dags/{fileName}/webhook/regenerate)
 	RegenerateDAGWebhookToken(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params RegenerateDAGWebhookTokenParams)
@@ -5472,6 +7953,39 @@ type ServerInterface interface {
 	// Check server health status
 	// (GET /health)
 	GetHealthStatus(w http.ResponseWriter, r *http.Request)
+	// List incident routing
+	// (GET /incident-policies)
+	ListIncidentPolicies(w http.ResponseWriter, r *http.Request, params ListIncidentPoliciesParams)
+	// Get global incident routing
+	// (GET /incident-policies/global)
+	GetGlobalIncidentPolicies(w http.ResponseWriter, r *http.Request, params GetGlobalIncidentPoliciesParams)
+	// Update global incident routing
+	// (PUT /incident-policies/global)
+	UpdateGlobalIncidentPolicies(w http.ResponseWriter, r *http.Request, params UpdateGlobalIncidentPoliciesParams)
+	// Get workspace incident routing
+	// (GET /incident-policies/workspaces/{workspaceName})
+	GetWorkspaceIncidentPolicies(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params GetWorkspaceIncidentPoliciesParams)
+	// Update workspace incident routing
+	// (PUT /incident-policies/workspaces/{workspaceName})
+	UpdateWorkspaceIncidentPolicies(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params UpdateWorkspaceIncidentPoliciesParams)
+	// List incident providers
+	// (GET /incident-providers)
+	ListIncidentProviders(w http.ResponseWriter, r *http.Request, params ListIncidentProvidersParams)
+	// Create incident provider
+	// (POST /incident-providers)
+	CreateIncidentProvider(w http.ResponseWriter, r *http.Request, params CreateIncidentProviderParams)
+	// Delete incident provider
+	// (DELETE /incident-providers/{providerId})
+	DeleteIncidentProvider(w http.ResponseWriter, r *http.Request, providerId string, params DeleteIncidentProviderParams)
+	// Get incident provider
+	// (GET /incident-providers/{providerId})
+	GetIncidentProvider(w http.ResponseWriter, r *http.Request, providerId string, params GetIncidentProviderParams)
+	// Update incident provider
+	// (PUT /incident-providers/{providerId})
+	UpdateIncidentProvider(w http.ResponseWriter, r *http.Request, providerId string, params UpdateIncidentProviderParams)
+	// Send a test incident
+	// (POST /incident-providers/{providerId}/test)
+	TestIncidentProvider(w http.ResponseWriter, r *http.Request, providerId string, params TestIncidentProviderParams)
 	// Activate a license key
 	// (POST /license/activate)
 	ActivateLicense(w http.ResponseWriter, r *http.Request, params ActivateLicenseParams)
@@ -5481,9 +7995,99 @@ type ServerInterface interface {
 	// Get Prometheus metrics
 	// (GET /metrics)
 	GetMetrics(w http.ResponseWriter, r *http.Request)
+	// List notification channels
+	// (GET /notification-channels)
+	ListNotificationChannels(w http.ResponseWriter, r *http.Request, params ListNotificationChannelsParams)
+	// Create notification channel
+	// (POST /notification-channels)
+	CreateNotificationChannel(w http.ResponseWriter, r *http.Request, params CreateNotificationChannelParams)
+	// Delete notification channel
+	// (DELETE /notification-channels/{channelId})
+	DeleteNotificationChannel(w http.ResponseWriter, r *http.Request, channelId string, params DeleteNotificationChannelParams)
+	// Get notification channel
+	// (GET /notification-channels/{channelId})
+	GetNotificationChannel(w http.ResponseWriter, r *http.Request, channelId string, params GetNotificationChannelParams)
+	// Update notification channel
+	// (PUT /notification-channels/{channelId})
+	UpdateNotificationChannel(w http.ResponseWriter, r *http.Request, channelId string, params UpdateNotificationChannelParams)
+	// List notification routes
+	// (GET /notification-routes)
+	ListNotificationRoutes(w http.ResponseWriter, r *http.Request, params ListNotificationRoutesParams)
+	// Get global notification routes
+	// (GET /notification-routes/global)
+	GetGlobalNotificationRoutes(w http.ResponseWriter, r *http.Request, params GetGlobalNotificationRoutesParams)
+	// Update global notification routes
+	// (PUT /notification-routes/global)
+	UpdateGlobalNotificationRoutes(w http.ResponseWriter, r *http.Request, params UpdateGlobalNotificationRoutesParams)
+	// Get workspace notification routes
+	// (GET /notification-routes/workspaces/{workspaceName})
+	GetWorkspaceNotificationRoutes(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params GetWorkspaceNotificationRoutesParams)
+	// Update workspace notification routes
+	// (PUT /notification-routes/workspaces/{workspaceName})
+	UpdateWorkspaceNotificationRoutes(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params UpdateWorkspaceNotificationRoutesParams)
+	// Get notification settings
+	// (GET /notification-settings)
+	GetNotificationSettings(w http.ResponseWriter, r *http.Request, params GetNotificationSettingsParams)
+	// Update notification settings
+	// (PUT /notification-settings)
+	UpdateNotificationSettings(w http.ResponseWriter, r *http.Request, params UpdateNotificationSettingsParams)
 	// Get the OpenAPI document
 	// (GET /openapi.json)
 	GetOpenapiJson(w http.ResponseWriter, r *http.Request)
+	// List runtime profiles
+	// (GET /profiles)
+	ListRuntimeProfiles(w http.ResponseWriter, r *http.Request, params ListRuntimeProfilesParams)
+	// Create runtime profile
+	// (POST /profiles)
+	CreateRuntimeProfile(w http.ResponseWriter, r *http.Request, params CreateRuntimeProfileParams)
+	// Get global runtime profile defaults
+	// (GET /profiles/_global)
+	GetGlobalRuntimeProfileDefaults(w http.ResponseWriter, r *http.Request, params GetGlobalRuntimeProfileDefaultsParams)
+	// Update global runtime profile defaults
+	// (PATCH /profiles/_global)
+	UpdateGlobalRuntimeProfileDefaults(w http.ResponseWriter, r *http.Request, params UpdateGlobalRuntimeProfileDefaultsParams)
+	// Delete global runtime profile default entry
+	// (DELETE /profiles/_global/entries/{key})
+	DeleteGlobalRuntimeProfileDefaultEntry(w http.ResponseWriter, r *http.Request, key RuntimeProfileKey, params DeleteGlobalRuntimeProfileDefaultEntryParams)
+	// Set global runtime profile default secret
+	// (PUT /profiles/_global/secrets/{key})
+	SetGlobalRuntimeProfileDefaultSecret(w http.ResponseWriter, r *http.Request, key RuntimeProfileKey, params SetGlobalRuntimeProfileDefaultSecretParams)
+	// Set global runtime profile default variable
+	// (PUT /profiles/_global/variables/{key})
+	SetGlobalRuntimeProfileDefaultVariable(w http.ResponseWriter, r *http.Request, key RuntimeProfileKey, params SetGlobalRuntimeProfileDefaultVariableParams)
+	// Get workspace runtime profile defaults
+	// (GET /profiles/_workspaces/{workspaceName})
+	GetWorkspaceRuntimeProfileDefaults(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params GetWorkspaceRuntimeProfileDefaultsParams)
+	// Update workspace runtime profile defaults
+	// (PATCH /profiles/_workspaces/{workspaceName})
+	UpdateWorkspaceRuntimeProfileDefaults(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params UpdateWorkspaceRuntimeProfileDefaultsParams)
+	// Delete workspace runtime profile default entry
+	// (DELETE /profiles/_workspaces/{workspaceName}/entries/{key})
+	DeleteWorkspaceRuntimeProfileDefaultEntry(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, key RuntimeProfileKey, params DeleteWorkspaceRuntimeProfileDefaultEntryParams)
+	// Set workspace runtime profile default secret
+	// (PUT /profiles/_workspaces/{workspaceName}/secrets/{key})
+	SetWorkspaceRuntimeProfileDefaultSecret(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, key RuntimeProfileKey, params SetWorkspaceRuntimeProfileDefaultSecretParams)
+	// Set workspace runtime profile default variable
+	// (PUT /profiles/_workspaces/{workspaceName}/variables/{key})
+	SetWorkspaceRuntimeProfileDefaultVariable(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, key RuntimeProfileKey, params SetWorkspaceRuntimeProfileDefaultVariableParams)
+	// Delete runtime profile
+	// (DELETE /profiles/{profileName})
+	DeleteRuntimeProfile(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, params DeleteRuntimeProfileParams)
+	// Get runtime profile
+	// (GET /profiles/{profileName})
+	GetRuntimeProfile(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, params GetRuntimeProfileParams)
+	// Update runtime profile metadata
+	// (PATCH /profiles/{profileName})
+	UpdateRuntimeProfile(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, params UpdateRuntimeProfileParams)
+	// Delete runtime profile entry
+	// (DELETE /profiles/{profileName}/entries/{key})
+	DeleteRuntimeProfileEntry(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, key RuntimeProfileKey, params DeleteRuntimeProfileEntryParams)
+	// Set runtime profile secret
+	// (PUT /profiles/{profileName}/secrets/{key})
+	SetRuntimeProfileSecret(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, key RuntimeProfileKey, params SetRuntimeProfileSecretParams)
+	// Set runtime profile variable
+	// (PUT /profiles/{profileName}/variables/{key})
+	SetRuntimeProfileVariable(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, key RuntimeProfileKey, params SetRuntimeProfileVariableParams)
 	// List all execution queues with summary statistics
 	// (GET /queues)
 	ListQueues(w http.ResponseWriter, r *http.Request, params ListQueuesParams)
@@ -5523,6 +8127,30 @@ type ServerInterface interface {
 	// Search document match snippets
 	// (GET /search/docs/matches)
 	SearchDocMatches(w http.ResponseWriter, r *http.Request, params SearchDocMatchesParams)
+	// List secrets
+	// (GET /secrets)
+	ListSecrets(w http.ResponseWriter, r *http.Request, params ListSecretsParams)
+	// Create a secret
+	// (POST /secrets)
+	CreateSecret(w http.ResponseWriter, r *http.Request, params CreateSecretParams)
+	// Delete secret
+	// (DELETE /secrets/{secretId})
+	DeleteSecret(w http.ResponseWriter, r *http.Request, secretId string, params DeleteSecretParams)
+	// Get secret
+	// (GET /secrets/{secretId})
+	GetSecret(w http.ResponseWriter, r *http.Request, secretId string, params GetSecretParams)
+	// Update secret metadata
+	// (PATCH /secrets/{secretId})
+	UpdateSecret(w http.ResponseWriter, r *http.Request, secretId string, params UpdateSecretParams)
+	// Disable secret
+	// (POST /secrets/{secretId}/disable)
+	DisableSecret(w http.ResponseWriter, r *http.Request, secretId string, params DisableSecretParams)
+	// Enable secret
+	// (POST /secrets/{secretId}/enable)
+	EnableSecret(w http.ResponseWriter, r *http.Request, secretId string, params EnableSecretParams)
+	// Write a new secret value version
+	// (POST /secrets/{secretId}/versions)
+	WriteSecretVersion(w http.ResponseWriter, r *http.Request, secretId string, params WriteSecretVersionParams)
 	// Get coordinator service status
 	// (GET /services/coordinator)
 	GetCoordinatorStatus(w http.ResponseWriter, r *http.Request, params GetCoordinatorStatusParams)
@@ -5613,6 +8241,12 @@ type ServerInterface interface {
 	// Update base configuration
 	// (PUT /settings/base-config)
 	UpdateBaseConfig(w http.ResponseWriter, r *http.Request, params UpdateBaseConfigParams)
+	// Get workspace base configuration
+	// (GET /settings/workspaces/{workspaceName}/base-config)
+	GetWorkspaceBaseConfig(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params GetWorkspaceBaseConfigParams)
+	// Update workspace base configuration
+	// (PUT /settings/workspaces/{workspaceName}/base-config)
+	UpdateWorkspaceBaseConfig(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params UpdateWorkspaceBaseConfigParams)
 	// Cleanup missing sync items
 	// (POST /sync/cleanup)
 	SyncCleanup(w http.ResponseWriter, r *http.Request, params SyncCleanupParams)
@@ -5676,6 +8310,21 @@ type ServerInterface interface {
 	// Reset user's password
 	// (POST /users/{userId}/reset-password)
 	ResetUserPassword(w http.ResponseWriter, r *http.Request, userId UserId)
+	// List saved views
+	// (GET /views)
+	ListViews(w http.ResponseWriter, r *http.Request, params ListViewsParams)
+	// Create a view
+	// (POST /views)
+	CreateView(w http.ResponseWriter, r *http.Request, params CreateViewParams)
+	// Delete a view
+	// (DELETE /views/{viewId})
+	DeleteView(w http.ResponseWriter, r *http.Request, viewId string, params DeleteViewParams)
+	// Get a view
+	// (GET /views/{viewId})
+	GetView(w http.ResponseWriter, r *http.Request, viewId string, params GetViewParams)
+	// Update a view
+	// (PUT /views/{viewId})
+	UpdateView(w http.ResponseWriter, r *http.Request, viewId string, params UpdateViewParams)
 	// List all webhooks
 	// (GET /webhooks)
 	ListWebhooks(w http.ResponseWriter, r *http.Request, params ListWebhooksParams)
@@ -5826,6 +8475,12 @@ func (_ Unimplemented) ListDAGRunsByName(w http.ResponseWriter, r *http.Request,
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// Delete a DAG-run
+// (DELETE /dag-runs/{name}/{dagRunId})
+func (_ Unimplemented) DeleteDAGRun(w http.ResponseWriter, r *http.Request, name DAGName, dagRunId DAGRunConcreteId, params DeleteDAGRunParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // Retrieve detailed status of a DAG-run
 // (GET /dag-runs/{name}/{dagRunId})
 func (_ Unimplemented) GetDAGRunDetails(w http.ResponseWriter, r *http.Request, name DAGName, dagRunId DAGRunId, params GetDAGRunDetailsParams) {
@@ -5853,6 +8508,18 @@ func (_ Unimplemented) GetDAGRunArtifactPreview(w http.ResponseWriter, r *http.R
 // Dequeue a queued DAG-run
 // (GET /dag-runs/{name}/{dagRunId}/dequeue)
 func (_ Unimplemented) DequeueDAGRun(w http.ResponseWriter, r *http.Request, name DAGName, dagRunId DAGRunId, params DequeueDAGRunParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Run edited DAG retry
+// (POST /dag-runs/{name}/{dagRunId}/edit-retry)
+func (_ Unimplemented) EditRetryDAGRun(w http.ResponseWriter, r *http.Request, name DAGName, dagRunId DAGRunId, params EditRetryDAGRunParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Preview edited DAG-run retry
+// (POST /dag-runs/{name}/{dagRunId}/edit-retry/preview)
+func (_ Unimplemented) PreviewEditRetryDAGRun(w http.ResponseWriter, r *http.Request, name DAGName, dagRunId DAGRunId, params PreviewEditRetryDAGRunParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -6042,6 +8709,12 @@ func (_ Unimplemented) CreateNewDAG(w http.ResponseWriter, r *http.Request, para
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// List all available DAG labels
+// (GET /dags/labels)
+func (_ Unimplemented) GetAllDAGLabels(w http.ResponseWriter, r *http.Request, params GetAllDAGLabelsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // Search DAGs
 // (GET /dags/search)
 func (_ Unimplemented) SearchDAGs(w http.ResponseWriter, r *http.Request, params SearchDAGsParams) {
@@ -6090,9 +8763,69 @@ func (_ Unimplemented) EnqueueDAGDAGRun(w http.ResponseWriter, r *http.Request, 
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// Delete DAG incident routing
+// (DELETE /dags/{fileName}/incidents)
+func (_ Unimplemented) DeleteDAGIncidents(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params DeleteDAGIncidentsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get DAG incident routing
+// (GET /dags/{fileName}/incidents)
+func (_ Unimplemented) GetDAGIncidents(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params GetDAGIncidentsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update DAG incident routing
+// (PUT /dags/{fileName}/incidents)
+func (_ Unimplemented) UpdateDAGIncidents(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params UpdateDAGIncidentsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Delete DAG notification settings
+// (DELETE /dags/{fileName}/notifications)
+func (_ Unimplemented) DeleteDAGNotifications(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params DeleteDAGNotificationsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get DAG notification settings
+// (GET /dags/{fileName}/notifications)
+func (_ Unimplemented) GetDAGNotifications(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params GetDAGNotificationsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update DAG notification settings
+// (PUT /dags/{fileName}/notifications)
+func (_ Unimplemented) UpdateDAGNotifications(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params UpdateDAGNotificationsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Send a test DAG notification
+// (POST /dags/{fileName}/notifications/test)
+func (_ Unimplemented) TestDAGNotifications(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params TestDAGNotificationsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // Change DAG file ID
 // (POST /dags/{fileName}/rename)
 func (_ Unimplemented) RenameDAG(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params RenameDAGParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Delete DAG settings
+// (DELETE /dags/{fileName}/settings)
+func (_ Unimplemented) DeleteDAGSettings(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params DeleteDAGSettingsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get DAG settings
+// (GET /dags/{fileName}/settings)
+func (_ Unimplemented) GetDAGSettings(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params GetDAGSettingsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update DAG settings
+// (PUT /dags/{fileName}/settings)
+func (_ Unimplemented) UpdateDAGSettings(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params UpdateDAGSettingsParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -6147,6 +8880,30 @@ func (_ Unimplemented) GetDAGWebhook(w http.ResponseWriter, r *http.Request, fil
 // Create webhook for DAG
 // (POST /dags/{fileName}/webhook)
 func (_ Unimplemented) CreateDAGWebhook(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params CreateDAGWebhookParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Configure webhook HMAC
+// (POST /dags/{fileName}/webhook/hmac/configure)
+func (_ Unimplemented) ConfigureDAGWebhookHMAC(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params ConfigureDAGWebhookHMACParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Disable webhook HMAC
+// (POST /dags/{fileName}/webhook/hmac/disable)
+func (_ Unimplemented) DisableDAGWebhookHMAC(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params DisableDAGWebhookHMACParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Enable webhook HMAC
+// (POST /dags/{fileName}/webhook/hmac/enable)
+func (_ Unimplemented) EnableDAGWebhookHMAC(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params EnableDAGWebhookHMACParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Regenerate webhook HMAC secret
+// (POST /dags/{fileName}/webhook/hmac/regenerate)
+func (_ Unimplemented) RegenerateDAGWebhookHMACSecret(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params RegenerateDAGWebhookHMACSecretParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -6222,6 +8979,72 @@ func (_ Unimplemented) GetHealthStatus(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// List incident routing
+// (GET /incident-policies)
+func (_ Unimplemented) ListIncidentPolicies(w http.ResponseWriter, r *http.Request, params ListIncidentPoliciesParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get global incident routing
+// (GET /incident-policies/global)
+func (_ Unimplemented) GetGlobalIncidentPolicies(w http.ResponseWriter, r *http.Request, params GetGlobalIncidentPoliciesParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update global incident routing
+// (PUT /incident-policies/global)
+func (_ Unimplemented) UpdateGlobalIncidentPolicies(w http.ResponseWriter, r *http.Request, params UpdateGlobalIncidentPoliciesParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get workspace incident routing
+// (GET /incident-policies/workspaces/{workspaceName})
+func (_ Unimplemented) GetWorkspaceIncidentPolicies(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params GetWorkspaceIncidentPoliciesParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update workspace incident routing
+// (PUT /incident-policies/workspaces/{workspaceName})
+func (_ Unimplemented) UpdateWorkspaceIncidentPolicies(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params UpdateWorkspaceIncidentPoliciesParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// List incident providers
+// (GET /incident-providers)
+func (_ Unimplemented) ListIncidentProviders(w http.ResponseWriter, r *http.Request, params ListIncidentProvidersParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Create incident provider
+// (POST /incident-providers)
+func (_ Unimplemented) CreateIncidentProvider(w http.ResponseWriter, r *http.Request, params CreateIncidentProviderParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Delete incident provider
+// (DELETE /incident-providers/{providerId})
+func (_ Unimplemented) DeleteIncidentProvider(w http.ResponseWriter, r *http.Request, providerId string, params DeleteIncidentProviderParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get incident provider
+// (GET /incident-providers/{providerId})
+func (_ Unimplemented) GetIncidentProvider(w http.ResponseWriter, r *http.Request, providerId string, params GetIncidentProviderParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update incident provider
+// (PUT /incident-providers/{providerId})
+func (_ Unimplemented) UpdateIncidentProvider(w http.ResponseWriter, r *http.Request, providerId string, params UpdateIncidentProviderParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Send a test incident
+// (POST /incident-providers/{providerId}/test)
+func (_ Unimplemented) TestIncidentProvider(w http.ResponseWriter, r *http.Request, providerId string, params TestIncidentProviderParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // Activate a license key
 // (POST /license/activate)
 func (_ Unimplemented) ActivateLicense(w http.ResponseWriter, r *http.Request, params ActivateLicenseParams) {
@@ -6240,9 +9063,189 @@ func (_ Unimplemented) GetMetrics(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// List notification channels
+// (GET /notification-channels)
+func (_ Unimplemented) ListNotificationChannels(w http.ResponseWriter, r *http.Request, params ListNotificationChannelsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Create notification channel
+// (POST /notification-channels)
+func (_ Unimplemented) CreateNotificationChannel(w http.ResponseWriter, r *http.Request, params CreateNotificationChannelParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Delete notification channel
+// (DELETE /notification-channels/{channelId})
+func (_ Unimplemented) DeleteNotificationChannel(w http.ResponseWriter, r *http.Request, channelId string, params DeleteNotificationChannelParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get notification channel
+// (GET /notification-channels/{channelId})
+func (_ Unimplemented) GetNotificationChannel(w http.ResponseWriter, r *http.Request, channelId string, params GetNotificationChannelParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update notification channel
+// (PUT /notification-channels/{channelId})
+func (_ Unimplemented) UpdateNotificationChannel(w http.ResponseWriter, r *http.Request, channelId string, params UpdateNotificationChannelParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// List notification routes
+// (GET /notification-routes)
+func (_ Unimplemented) ListNotificationRoutes(w http.ResponseWriter, r *http.Request, params ListNotificationRoutesParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get global notification routes
+// (GET /notification-routes/global)
+func (_ Unimplemented) GetGlobalNotificationRoutes(w http.ResponseWriter, r *http.Request, params GetGlobalNotificationRoutesParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update global notification routes
+// (PUT /notification-routes/global)
+func (_ Unimplemented) UpdateGlobalNotificationRoutes(w http.ResponseWriter, r *http.Request, params UpdateGlobalNotificationRoutesParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get workspace notification routes
+// (GET /notification-routes/workspaces/{workspaceName})
+func (_ Unimplemented) GetWorkspaceNotificationRoutes(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params GetWorkspaceNotificationRoutesParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update workspace notification routes
+// (PUT /notification-routes/workspaces/{workspaceName})
+func (_ Unimplemented) UpdateWorkspaceNotificationRoutes(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params UpdateWorkspaceNotificationRoutesParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get notification settings
+// (GET /notification-settings)
+func (_ Unimplemented) GetNotificationSettings(w http.ResponseWriter, r *http.Request, params GetNotificationSettingsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update notification settings
+// (PUT /notification-settings)
+func (_ Unimplemented) UpdateNotificationSettings(w http.ResponseWriter, r *http.Request, params UpdateNotificationSettingsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // Get the OpenAPI document
 // (GET /openapi.json)
 func (_ Unimplemented) GetOpenapiJson(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// List runtime profiles
+// (GET /profiles)
+func (_ Unimplemented) ListRuntimeProfiles(w http.ResponseWriter, r *http.Request, params ListRuntimeProfilesParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Create runtime profile
+// (POST /profiles)
+func (_ Unimplemented) CreateRuntimeProfile(w http.ResponseWriter, r *http.Request, params CreateRuntimeProfileParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get global runtime profile defaults
+// (GET /profiles/_global)
+func (_ Unimplemented) GetGlobalRuntimeProfileDefaults(w http.ResponseWriter, r *http.Request, params GetGlobalRuntimeProfileDefaultsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update global runtime profile defaults
+// (PATCH /profiles/_global)
+func (_ Unimplemented) UpdateGlobalRuntimeProfileDefaults(w http.ResponseWriter, r *http.Request, params UpdateGlobalRuntimeProfileDefaultsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Delete global runtime profile default entry
+// (DELETE /profiles/_global/entries/{key})
+func (_ Unimplemented) DeleteGlobalRuntimeProfileDefaultEntry(w http.ResponseWriter, r *http.Request, key RuntimeProfileKey, params DeleteGlobalRuntimeProfileDefaultEntryParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Set global runtime profile default secret
+// (PUT /profiles/_global/secrets/{key})
+func (_ Unimplemented) SetGlobalRuntimeProfileDefaultSecret(w http.ResponseWriter, r *http.Request, key RuntimeProfileKey, params SetGlobalRuntimeProfileDefaultSecretParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Set global runtime profile default variable
+// (PUT /profiles/_global/variables/{key})
+func (_ Unimplemented) SetGlobalRuntimeProfileDefaultVariable(w http.ResponseWriter, r *http.Request, key RuntimeProfileKey, params SetGlobalRuntimeProfileDefaultVariableParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get workspace runtime profile defaults
+// (GET /profiles/_workspaces/{workspaceName})
+func (_ Unimplemented) GetWorkspaceRuntimeProfileDefaults(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params GetWorkspaceRuntimeProfileDefaultsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update workspace runtime profile defaults
+// (PATCH /profiles/_workspaces/{workspaceName})
+func (_ Unimplemented) UpdateWorkspaceRuntimeProfileDefaults(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params UpdateWorkspaceRuntimeProfileDefaultsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Delete workspace runtime profile default entry
+// (DELETE /profiles/_workspaces/{workspaceName}/entries/{key})
+func (_ Unimplemented) DeleteWorkspaceRuntimeProfileDefaultEntry(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, key RuntimeProfileKey, params DeleteWorkspaceRuntimeProfileDefaultEntryParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Set workspace runtime profile default secret
+// (PUT /profiles/_workspaces/{workspaceName}/secrets/{key})
+func (_ Unimplemented) SetWorkspaceRuntimeProfileDefaultSecret(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, key RuntimeProfileKey, params SetWorkspaceRuntimeProfileDefaultSecretParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Set workspace runtime profile default variable
+// (PUT /profiles/_workspaces/{workspaceName}/variables/{key})
+func (_ Unimplemented) SetWorkspaceRuntimeProfileDefaultVariable(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, key RuntimeProfileKey, params SetWorkspaceRuntimeProfileDefaultVariableParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Delete runtime profile
+// (DELETE /profiles/{profileName})
+func (_ Unimplemented) DeleteRuntimeProfile(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, params DeleteRuntimeProfileParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get runtime profile
+// (GET /profiles/{profileName})
+func (_ Unimplemented) GetRuntimeProfile(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, params GetRuntimeProfileParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update runtime profile metadata
+// (PATCH /profiles/{profileName})
+func (_ Unimplemented) UpdateRuntimeProfile(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, params UpdateRuntimeProfileParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Delete runtime profile entry
+// (DELETE /profiles/{profileName}/entries/{key})
+func (_ Unimplemented) DeleteRuntimeProfileEntry(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, key RuntimeProfileKey, params DeleteRuntimeProfileEntryParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Set runtime profile secret
+// (PUT /profiles/{profileName}/secrets/{key})
+func (_ Unimplemented) SetRuntimeProfileSecret(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, key RuntimeProfileKey, params SetRuntimeProfileSecretParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Set runtime profile variable
+// (PUT /profiles/{profileName}/variables/{key})
+func (_ Unimplemented) SetRuntimeProfileVariable(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, key RuntimeProfileKey, params SetRuntimeProfileVariableParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -6321,6 +9324,54 @@ func (_ Unimplemented) SearchDocFeed(w http.ResponseWriter, r *http.Request, par
 // Search document match snippets
 // (GET /search/docs/matches)
 func (_ Unimplemented) SearchDocMatches(w http.ResponseWriter, r *http.Request, params SearchDocMatchesParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// List secrets
+// (GET /secrets)
+func (_ Unimplemented) ListSecrets(w http.ResponseWriter, r *http.Request, params ListSecretsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Create a secret
+// (POST /secrets)
+func (_ Unimplemented) CreateSecret(w http.ResponseWriter, r *http.Request, params CreateSecretParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Delete secret
+// (DELETE /secrets/{secretId})
+func (_ Unimplemented) DeleteSecret(w http.ResponseWriter, r *http.Request, secretId string, params DeleteSecretParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get secret
+// (GET /secrets/{secretId})
+func (_ Unimplemented) GetSecret(w http.ResponseWriter, r *http.Request, secretId string, params GetSecretParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update secret metadata
+// (PATCH /secrets/{secretId})
+func (_ Unimplemented) UpdateSecret(w http.ResponseWriter, r *http.Request, secretId string, params UpdateSecretParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Disable secret
+// (POST /secrets/{secretId}/disable)
+func (_ Unimplemented) DisableSecret(w http.ResponseWriter, r *http.Request, secretId string, params DisableSecretParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Enable secret
+// (POST /secrets/{secretId}/enable)
+func (_ Unimplemented) EnableSecret(w http.ResponseWriter, r *http.Request, secretId string, params EnableSecretParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Write a new secret value version
+// (POST /secrets/{secretId}/versions)
+func (_ Unimplemented) WriteSecretVersion(w http.ResponseWriter, r *http.Request, secretId string, params WriteSecretVersionParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -6504,6 +9555,18 @@ func (_ Unimplemented) UpdateBaseConfig(w http.ResponseWriter, r *http.Request, 
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// Get workspace base configuration
+// (GET /settings/workspaces/{workspaceName}/base-config)
+func (_ Unimplemented) GetWorkspaceBaseConfig(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params GetWorkspaceBaseConfigParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update workspace base configuration
+// (PUT /settings/workspaces/{workspaceName}/base-config)
+func (_ Unimplemented) UpdateWorkspaceBaseConfig(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params UpdateWorkspaceBaseConfigParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // Cleanup missing sync items
 // (POST /sync/cleanup)
 func (_ Unimplemented) SyncCleanup(w http.ResponseWriter, r *http.Request, params SyncCleanupParams) {
@@ -6630,6 +9693,36 @@ func (_ Unimplemented) ResetUserPassword(w http.ResponseWriter, r *http.Request,
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// List saved views
+// (GET /views)
+func (_ Unimplemented) ListViews(w http.ResponseWriter, r *http.Request, params ListViewsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Create a view
+// (POST /views)
+func (_ Unimplemented) CreateView(w http.ResponseWriter, r *http.Request, params CreateViewParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Delete a view
+// (DELETE /views/{viewId})
+func (_ Unimplemented) DeleteView(w http.ResponseWriter, r *http.Request, viewId string, params DeleteViewParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get a view
+// (GET /views/{viewId})
+func (_ Unimplemented) GetView(w http.ResponseWriter, r *http.Request, viewId string, params GetViewParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update a view
+// (PUT /views/{viewId})
+func (_ Unimplemented) UpdateView(w http.ResponseWriter, r *http.Request, viewId string, params UpdateViewParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // List all webhooks
 // (GET /webhooks)
 func (_ Unimplemented) ListWebhooks(w http.ResponseWriter, r *http.Request, params ListWebhooksParams) {
@@ -6708,6 +9801,22 @@ func (siw *ServerInterfaceWrapper) ListAgentSessions(w http.ResponseWriter, r *h
 	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "paginationMode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "paginationMode", r.URL.Query(), &params.PaginationMode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "paginationMode", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "cursor", r.URL.Query(), &params.Cursor)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
 		return
 	}
 
@@ -7124,6 +10233,102 @@ func (siw *ServerInterfaceWrapper) ListAuditLogs(w http.ResponseWriter, r *http.
 		return
 	}
 
+	// ------------- Optional query parameter "action" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "action", r.URL.Query(), &params.Action)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "action", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "source" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "source", r.URL.Query(), &params.Source)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "source", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "surface" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "surface", r.URL.Query(), &params.Surface)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "surface", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "result" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "result", r.URL.Query(), &params.Result)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "result", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "correlationId" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "correlationId", r.URL.Query(), &params.CorrelationId)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "correlationId", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "resourceType" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "resourceType", r.URL.Query(), &params.ResourceType)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "resourceType", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "resourceId" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "resourceId", r.URL.Query(), &params.ResourceId)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "resourceId", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "credentialId" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "credentialId", r.URL.Query(), &params.CredentialId)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "credentialId", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "credentialType" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "credentialType", r.URL.Query(), &params.CredentialType)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "credentialType", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "mcpTool" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "mcpTool", r.URL.Query(), &params.McpTool)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "mcpTool", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "ipAddress" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "ipAddress", r.URL.Query(), &params.IpAddress)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "ipAddress", Err: err})
+		return
+	}
+
 	// ------------- Optional query parameter "userId" -------------
 
 	err = runtime.BindQueryParameter("form", true, false, "userId", r.URL.Query(), &params.UserId)
@@ -7332,11 +10537,27 @@ func (siw *ServerInterfaceWrapper) ListDAGRuns(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
 	// ------------- Optional query parameter "name" -------------
 
 	err = runtime.BindQueryParameter("form", true, false, "name", r.URL.Query(), &params.Name)
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "labels" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "labels", r.URL.Query(), &params.Labels)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "labels", Err: err})
 		return
 	}
 
@@ -7510,8 +10731,69 @@ func (siw *ServerInterfaceWrapper) ListDAGRunsByName(w http.ResponseWriter, r *h
 		return
 	}
 
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListDAGRunsByName(w, r, name, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteDAGRun operation middleware
+func (siw *ServerInterfaceWrapper) DeleteDAGRun(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "name" -------------
+	var name DAGName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", chi.URLParam(r, "name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "dagRunId" -------------
+	var dagRunId DAGRunConcreteId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "dagRunId", chi.URLParam(r, "dagRunId"), &dagRunId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "dagRunId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteDAGRunParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteDAGRun(w, r, name, dagRunId, params)
 	}))
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -7815,6 +11097,112 @@ func (siw *ServerInterfaceWrapper) DequeueDAGRun(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.DequeueDAGRun(w, r, name, dagRunId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// EditRetryDAGRun operation middleware
+func (siw *ServerInterfaceWrapper) EditRetryDAGRun(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "name" -------------
+	var name DAGName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", chi.URLParam(r, "name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "dagRunId" -------------
+	var dagRunId DAGRunId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "dagRunId", chi.URLParam(r, "dagRunId"), &dagRunId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "dagRunId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params EditRetryDAGRunParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.EditRetryDAGRun(w, r, name, dagRunId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PreviewEditRetryDAGRun operation middleware
+func (siw *ServerInterfaceWrapper) PreviewEditRetryDAGRun(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "name" -------------
+	var name DAGName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", chi.URLParam(r, "name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "dagRunId" -------------
+	var dagRunId DAGRunId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "dagRunId", chi.URLParam(r, "dagRunId"), &dagRunId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "dagRunId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params PreviewEditRetryDAGRunParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PreviewEditRetryDAGRun(w, r, name, dagRunId, params)
 	}))
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -9859,11 +13247,27 @@ func (siw *ServerInterfaceWrapper) ListDAGs(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
 	// ------------- Optional query parameter "name" -------------
 
 	err = runtime.BindQueryParameter("form", true, false, "name", r.URL.Query(), &params.Name)
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "labels" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "labels", r.URL.Query(), &params.Labels)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "labels", Err: err})
 		return
 	}
 
@@ -9928,6 +13332,49 @@ func (siw *ServerInterfaceWrapper) CreateNewDAG(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CreateNewDAG(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetAllDAGLabels operation middleware
+func (siw *ServerInterfaceWrapper) GetAllDAGLabels(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetAllDAGLabelsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetAllDAGLabels(w, r, params)
 	}))
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -10008,6 +13455,14 @@ func (siw *ServerInterfaceWrapper) GetAllDAGTags(w http.ResponseWriter, r *http.
 	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
 		return
 	}
 
@@ -10286,6 +13741,314 @@ func (siw *ServerInterfaceWrapper) EnqueueDAGDAGRun(w http.ResponseWriter, r *ht
 	handler.ServeHTTP(w, r)
 }
 
+// DeleteDAGIncidents operation middleware
+func (siw *ServerInterfaceWrapper) DeleteDAGIncidents(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "fileName" -------------
+	var fileName DAGFileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "fileName", chi.URLParam(r, "fileName"), &fileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "fileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteDAGIncidentsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteDAGIncidents(w, r, fileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetDAGIncidents operation middleware
+func (siw *ServerInterfaceWrapper) GetDAGIncidents(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "fileName" -------------
+	var fileName DAGFileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "fileName", chi.URLParam(r, "fileName"), &fileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "fileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetDAGIncidentsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetDAGIncidents(w, r, fileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateDAGIncidents operation middleware
+func (siw *ServerInterfaceWrapper) UpdateDAGIncidents(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "fileName" -------------
+	var fileName DAGFileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "fileName", chi.URLParam(r, "fileName"), &fileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "fileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateDAGIncidentsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateDAGIncidents(w, r, fileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteDAGNotifications operation middleware
+func (siw *ServerInterfaceWrapper) DeleteDAGNotifications(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "fileName" -------------
+	var fileName DAGFileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "fileName", chi.URLParam(r, "fileName"), &fileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "fileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteDAGNotificationsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteDAGNotifications(w, r, fileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetDAGNotifications operation middleware
+func (siw *ServerInterfaceWrapper) GetDAGNotifications(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "fileName" -------------
+	var fileName DAGFileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "fileName", chi.URLParam(r, "fileName"), &fileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "fileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetDAGNotificationsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetDAGNotifications(w, r, fileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateDAGNotifications operation middleware
+func (siw *ServerInterfaceWrapper) UpdateDAGNotifications(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "fileName" -------------
+	var fileName DAGFileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "fileName", chi.URLParam(r, "fileName"), &fileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "fileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateDAGNotificationsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateDAGNotifications(w, r, fileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// TestDAGNotifications operation middleware
+func (siw *ServerInterfaceWrapper) TestDAGNotifications(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "fileName" -------------
+	var fileName DAGFileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "fileName", chi.URLParam(r, "fileName"), &fileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "fileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params TestDAGNotificationsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.TestDAGNotifications(w, r, fileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // RenameDAG operation middleware
 func (siw *ServerInterfaceWrapper) RenameDAG(w http.ResponseWriter, r *http.Request) {
 
@@ -10321,6 +14084,138 @@ func (siw *ServerInterfaceWrapper) RenameDAG(w http.ResponseWriter, r *http.Requ
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RenameDAG(w, r, fileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteDAGSettings operation middleware
+func (siw *ServerInterfaceWrapper) DeleteDAGSettings(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "fileName" -------------
+	var fileName DAGFileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "fileName", chi.URLParam(r, "fileName"), &fileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "fileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteDAGSettingsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteDAGSettings(w, r, fileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetDAGSettings operation middleware
+func (siw *ServerInterfaceWrapper) GetDAGSettings(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "fileName" -------------
+	var fileName DAGFileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "fileName", chi.URLParam(r, "fileName"), &fileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "fileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetDAGSettingsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetDAGSettings(w, r, fileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateDAGSettings operation middleware
+func (siw *ServerInterfaceWrapper) UpdateDAGSettings(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "fileName" -------------
+	var fileName DAGFileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "fileName", chi.URLParam(r, "fileName"), &fileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "fileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateDAGSettingsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateDAGSettings(w, r, fileName, params)
 	}))
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -10726,6 +14621,182 @@ func (siw *ServerInterfaceWrapper) CreateDAGWebhook(w http.ResponseWriter, r *ht
 	handler.ServeHTTP(w, r)
 }
 
+// ConfigureDAGWebhookHMAC operation middleware
+func (siw *ServerInterfaceWrapper) ConfigureDAGWebhookHMAC(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "fileName" -------------
+	var fileName DAGFileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "fileName", chi.URLParam(r, "fileName"), &fileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "fileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ConfigureDAGWebhookHMACParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ConfigureDAGWebhookHMAC(w, r, fileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DisableDAGWebhookHMAC operation middleware
+func (siw *ServerInterfaceWrapper) DisableDAGWebhookHMAC(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "fileName" -------------
+	var fileName DAGFileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "fileName", chi.URLParam(r, "fileName"), &fileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "fileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DisableDAGWebhookHMACParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DisableDAGWebhookHMAC(w, r, fileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// EnableDAGWebhookHMAC operation middleware
+func (siw *ServerInterfaceWrapper) EnableDAGWebhookHMAC(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "fileName" -------------
+	var fileName DAGFileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "fileName", chi.URLParam(r, "fileName"), &fileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "fileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params EnableDAGWebhookHMACParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.EnableDAGWebhookHMAC(w, r, fileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RegenerateDAGWebhookHMACSecret operation middleware
+func (siw *ServerInterfaceWrapper) RegenerateDAGWebhookHMACSecret(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "fileName" -------------
+	var fileName DAGFileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "fileName", chi.URLParam(r, "fileName"), &fileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "fileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RegenerateDAGWebhookHMACSecretParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RegenerateDAGWebhookHMACSecret(w, r, fileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // RegenerateDAGWebhookToken operation middleware
 func (siw *ServerInterfaceWrapper) RegenerateDAGWebhookToken(w http.ResponseWriter, r *http.Request) {
 
@@ -10838,6 +14909,14 @@ func (siw *ServerInterfaceWrapper) ListDocs(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
 	// ------------- Optional query parameter "page" -------------
 
 	err = runtime.BindQueryParameter("form", true, false, "page", r.URL.Query(), &params.Page)
@@ -10913,6 +14992,14 @@ func (siw *ServerInterfaceWrapper) CreateDoc(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CreateDoc(w, r, params)
 	}))
@@ -10948,6 +15035,14 @@ func (siw *ServerInterfaceWrapper) DeleteDocBatch(w http.ResponseWriter, r *http
 		return
 	}
 
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.DeleteDocBatch(w, r, params)
 	}))
@@ -10980,6 +15075,14 @@ func (siw *ServerInterfaceWrapper) DeleteDoc(w http.ResponseWriter, r *http.Requ
 	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
 		return
 	}
 
@@ -11033,6 +15136,14 @@ func (siw *ServerInterfaceWrapper) GetDoc(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
 	// ------------- Required query parameter "path" -------------
 
 	if paramValue := r.URL.Query().Get("path"); paramValue != "" {
@@ -11080,6 +15191,14 @@ func (siw *ServerInterfaceWrapper) UpdateDoc(w http.ResponseWriter, r *http.Requ
 	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
 		return
 	}
 
@@ -11133,6 +15252,14 @@ func (siw *ServerInterfaceWrapper) RenameDoc(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
 	// ------------- Required query parameter "path" -------------
 
 	if paramValue := r.URL.Query().Get("path"); paramValue != "" {
@@ -11180,6 +15307,14 @@ func (siw *ServerInterfaceWrapper) SearchDocs(w http.ResponseWriter, r *http.Req
 	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
 		return
 	}
 
@@ -11378,6 +15513,445 @@ func (siw *ServerInterfaceWrapper) GetHealthStatus(w http.ResponseWriter, r *htt
 	handler.ServeHTTP(w, r)
 }
 
+// ListIncidentPolicies operation middleware
+func (siw *ServerInterfaceWrapper) ListIncidentPolicies(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListIncidentPoliciesParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListIncidentPolicies(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetGlobalIncidentPolicies operation middleware
+func (siw *ServerInterfaceWrapper) GetGlobalIncidentPolicies(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetGlobalIncidentPoliciesParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetGlobalIncidentPolicies(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateGlobalIncidentPolicies operation middleware
+func (siw *ServerInterfaceWrapper) UpdateGlobalIncidentPolicies(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateGlobalIncidentPoliciesParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateGlobalIncidentPolicies(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetWorkspaceIncidentPolicies operation middleware
+func (siw *ServerInterfaceWrapper) GetWorkspaceIncidentPolicies(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "workspaceName" -------------
+	var workspaceName WorkspaceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspaceName", chi.URLParam(r, "workspaceName"), &workspaceName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspaceName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetWorkspaceIncidentPoliciesParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetWorkspaceIncidentPolicies(w, r, workspaceName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateWorkspaceIncidentPolicies operation middleware
+func (siw *ServerInterfaceWrapper) UpdateWorkspaceIncidentPolicies(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "workspaceName" -------------
+	var workspaceName WorkspaceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspaceName", chi.URLParam(r, "workspaceName"), &workspaceName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspaceName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateWorkspaceIncidentPoliciesParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateWorkspaceIncidentPolicies(w, r, workspaceName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListIncidentProviders operation middleware
+func (siw *ServerInterfaceWrapper) ListIncidentProviders(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListIncidentProvidersParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListIncidentProviders(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateIncidentProvider operation middleware
+func (siw *ServerInterfaceWrapper) CreateIncidentProvider(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateIncidentProviderParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateIncidentProvider(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteIncidentProvider operation middleware
+func (siw *ServerInterfaceWrapper) DeleteIncidentProvider(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "providerId" -------------
+	var providerId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "providerId", chi.URLParam(r, "providerId"), &providerId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "providerId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteIncidentProviderParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteIncidentProvider(w, r, providerId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetIncidentProvider operation middleware
+func (siw *ServerInterfaceWrapper) GetIncidentProvider(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "providerId" -------------
+	var providerId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "providerId", chi.URLParam(r, "providerId"), &providerId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "providerId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetIncidentProviderParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetIncidentProvider(w, r, providerId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateIncidentProvider operation middleware
+func (siw *ServerInterfaceWrapper) UpdateIncidentProvider(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "providerId" -------------
+	var providerId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "providerId", chi.URLParam(r, "providerId"), &providerId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "providerId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateIncidentProviderParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateIncidentProvider(w, r, providerId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// TestIncidentProvider operation middleware
+func (siw *ServerInterfaceWrapper) TestIncidentProvider(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "providerId" -------------
+	var providerId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "providerId", chi.URLParam(r, "providerId"), &providerId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "providerId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params TestIncidentProviderParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.TestIncidentProvider(w, r, providerId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ActivateLicense operation middleware
 func (siw *ServerInterfaceWrapper) ActivateLicense(w http.ResponseWriter, r *http.Request) {
 
@@ -11470,6 +16044,471 @@ func (siw *ServerInterfaceWrapper) GetMetrics(w http.ResponseWriter, r *http.Req
 	handler.ServeHTTP(w, r)
 }
 
+// ListNotificationChannels operation middleware
+func (siw *ServerInterfaceWrapper) ListNotificationChannels(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListNotificationChannelsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListNotificationChannels(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateNotificationChannel operation middleware
+func (siw *ServerInterfaceWrapper) CreateNotificationChannel(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateNotificationChannelParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateNotificationChannel(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteNotificationChannel operation middleware
+func (siw *ServerInterfaceWrapper) DeleteNotificationChannel(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", chi.URLParam(r, "channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteNotificationChannelParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteNotificationChannel(w, r, channelId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetNotificationChannel operation middleware
+func (siw *ServerInterfaceWrapper) GetNotificationChannel(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", chi.URLParam(r, "channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetNotificationChannelParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetNotificationChannel(w, r, channelId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateNotificationChannel operation middleware
+func (siw *ServerInterfaceWrapper) UpdateNotificationChannel(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "channelId" -------------
+	var channelId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "channelId", chi.URLParam(r, "channelId"), &channelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "channelId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateNotificationChannelParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateNotificationChannel(w, r, channelId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListNotificationRoutes operation middleware
+func (siw *ServerInterfaceWrapper) ListNotificationRoutes(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListNotificationRoutesParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListNotificationRoutes(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetGlobalNotificationRoutes operation middleware
+func (siw *ServerInterfaceWrapper) GetGlobalNotificationRoutes(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetGlobalNotificationRoutesParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetGlobalNotificationRoutes(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateGlobalNotificationRoutes operation middleware
+func (siw *ServerInterfaceWrapper) UpdateGlobalNotificationRoutes(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateGlobalNotificationRoutesParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateGlobalNotificationRoutes(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetWorkspaceNotificationRoutes operation middleware
+func (siw *ServerInterfaceWrapper) GetWorkspaceNotificationRoutes(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "workspaceName" -------------
+	var workspaceName WorkspaceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspaceName", chi.URLParam(r, "workspaceName"), &workspaceName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspaceName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetWorkspaceNotificationRoutesParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetWorkspaceNotificationRoutes(w, r, workspaceName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateWorkspaceNotificationRoutes operation middleware
+func (siw *ServerInterfaceWrapper) UpdateWorkspaceNotificationRoutes(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "workspaceName" -------------
+	var workspaceName WorkspaceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspaceName", chi.URLParam(r, "workspaceName"), &workspaceName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspaceName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateWorkspaceNotificationRoutesParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateWorkspaceNotificationRoutes(w, r, workspaceName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetNotificationSettings operation middleware
+func (siw *ServerInterfaceWrapper) GetNotificationSettings(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetNotificationSettingsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetNotificationSettings(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateNotificationSettings operation middleware
+func (siw *ServerInterfaceWrapper) UpdateNotificationSettings(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateNotificationSettingsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateNotificationSettings(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetOpenapiJson operation middleware
 func (siw *ServerInterfaceWrapper) GetOpenapiJson(w http.ResponseWriter, r *http.Request) {
 
@@ -11483,6 +16522,816 @@ func (siw *ServerInterfaceWrapper) GetOpenapiJson(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetOpenapiJson(w, r)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListRuntimeProfiles operation middleware
+func (siw *ServerInterfaceWrapper) ListRuntimeProfiles(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListRuntimeProfilesParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListRuntimeProfiles(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateRuntimeProfile operation middleware
+func (siw *ServerInterfaceWrapper) CreateRuntimeProfile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateRuntimeProfileParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateRuntimeProfile(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetGlobalRuntimeProfileDefaults operation middleware
+func (siw *ServerInterfaceWrapper) GetGlobalRuntimeProfileDefaults(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetGlobalRuntimeProfileDefaultsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetGlobalRuntimeProfileDefaults(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateGlobalRuntimeProfileDefaults operation middleware
+func (siw *ServerInterfaceWrapper) UpdateGlobalRuntimeProfileDefaults(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateGlobalRuntimeProfileDefaultsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateGlobalRuntimeProfileDefaults(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteGlobalRuntimeProfileDefaultEntry operation middleware
+func (siw *ServerInterfaceWrapper) DeleteGlobalRuntimeProfileDefaultEntry(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "key" -------------
+	var key RuntimeProfileKey
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", chi.URLParam(r, "key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteGlobalRuntimeProfileDefaultEntryParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteGlobalRuntimeProfileDefaultEntry(w, r, key, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetGlobalRuntimeProfileDefaultSecret operation middleware
+func (siw *ServerInterfaceWrapper) SetGlobalRuntimeProfileDefaultSecret(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "key" -------------
+	var key RuntimeProfileKey
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", chi.URLParam(r, "key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetGlobalRuntimeProfileDefaultSecretParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetGlobalRuntimeProfileDefaultSecret(w, r, key, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetGlobalRuntimeProfileDefaultVariable operation middleware
+func (siw *ServerInterfaceWrapper) SetGlobalRuntimeProfileDefaultVariable(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "key" -------------
+	var key RuntimeProfileKey
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", chi.URLParam(r, "key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetGlobalRuntimeProfileDefaultVariableParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetGlobalRuntimeProfileDefaultVariable(w, r, key, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetWorkspaceRuntimeProfileDefaults operation middleware
+func (siw *ServerInterfaceWrapper) GetWorkspaceRuntimeProfileDefaults(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "workspaceName" -------------
+	var workspaceName WorkspaceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspaceName", chi.URLParam(r, "workspaceName"), &workspaceName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspaceName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetWorkspaceRuntimeProfileDefaultsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetWorkspaceRuntimeProfileDefaults(w, r, workspaceName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateWorkspaceRuntimeProfileDefaults operation middleware
+func (siw *ServerInterfaceWrapper) UpdateWorkspaceRuntimeProfileDefaults(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "workspaceName" -------------
+	var workspaceName WorkspaceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspaceName", chi.URLParam(r, "workspaceName"), &workspaceName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspaceName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateWorkspaceRuntimeProfileDefaultsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateWorkspaceRuntimeProfileDefaults(w, r, workspaceName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteWorkspaceRuntimeProfileDefaultEntry operation middleware
+func (siw *ServerInterfaceWrapper) DeleteWorkspaceRuntimeProfileDefaultEntry(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "workspaceName" -------------
+	var workspaceName WorkspaceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspaceName", chi.URLParam(r, "workspaceName"), &workspaceName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspaceName", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "key" -------------
+	var key RuntimeProfileKey
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", chi.URLParam(r, "key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteWorkspaceRuntimeProfileDefaultEntryParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteWorkspaceRuntimeProfileDefaultEntry(w, r, workspaceName, key, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetWorkspaceRuntimeProfileDefaultSecret operation middleware
+func (siw *ServerInterfaceWrapper) SetWorkspaceRuntimeProfileDefaultSecret(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "workspaceName" -------------
+	var workspaceName WorkspaceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspaceName", chi.URLParam(r, "workspaceName"), &workspaceName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspaceName", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "key" -------------
+	var key RuntimeProfileKey
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", chi.URLParam(r, "key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetWorkspaceRuntimeProfileDefaultSecretParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetWorkspaceRuntimeProfileDefaultSecret(w, r, workspaceName, key, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetWorkspaceRuntimeProfileDefaultVariable operation middleware
+func (siw *ServerInterfaceWrapper) SetWorkspaceRuntimeProfileDefaultVariable(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "workspaceName" -------------
+	var workspaceName WorkspaceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspaceName", chi.URLParam(r, "workspaceName"), &workspaceName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspaceName", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "key" -------------
+	var key RuntimeProfileKey
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", chi.URLParam(r, "key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetWorkspaceRuntimeProfileDefaultVariableParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetWorkspaceRuntimeProfileDefaultVariable(w, r, workspaceName, key, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteRuntimeProfile operation middleware
+func (siw *ServerInterfaceWrapper) DeleteRuntimeProfile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "profileName" -------------
+	var profileName RuntimeProfileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "profileName", chi.URLParam(r, "profileName"), &profileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "profileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteRuntimeProfileParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteRuntimeProfile(w, r, profileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetRuntimeProfile operation middleware
+func (siw *ServerInterfaceWrapper) GetRuntimeProfile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "profileName" -------------
+	var profileName RuntimeProfileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "profileName", chi.URLParam(r, "profileName"), &profileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "profileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetRuntimeProfileParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetRuntimeProfile(w, r, profileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateRuntimeProfile operation middleware
+func (siw *ServerInterfaceWrapper) UpdateRuntimeProfile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "profileName" -------------
+	var profileName RuntimeProfileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "profileName", chi.URLParam(r, "profileName"), &profileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "profileName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateRuntimeProfileParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateRuntimeProfile(w, r, profileName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteRuntimeProfileEntry operation middleware
+func (siw *ServerInterfaceWrapper) DeleteRuntimeProfileEntry(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "profileName" -------------
+	var profileName RuntimeProfileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "profileName", chi.URLParam(r, "profileName"), &profileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "profileName", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "key" -------------
+	var key RuntimeProfileKey
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", chi.URLParam(r, "key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteRuntimeProfileEntryParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteRuntimeProfileEntry(w, r, profileName, key, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetRuntimeProfileSecret operation middleware
+func (siw *ServerInterfaceWrapper) SetRuntimeProfileSecret(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "profileName" -------------
+	var profileName RuntimeProfileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "profileName", chi.URLParam(r, "profileName"), &profileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "profileName", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "key" -------------
+	var key RuntimeProfileKey
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", chi.URLParam(r, "key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetRuntimeProfileSecretParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetRuntimeProfileSecret(w, r, profileName, key, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetRuntimeProfileVariable operation middleware
+func (siw *ServerInterfaceWrapper) SetRuntimeProfileVariable(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "profileName" -------------
+	var profileName RuntimeProfileName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "profileName", chi.URLParam(r, "profileName"), &profileName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "profileName", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "key" -------------
+	var key RuntimeProfileKey
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", chi.URLParam(r, "key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetRuntimeProfileVariableParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetRuntimeProfileVariable(w, r, profileName, key, params)
 	}))
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -11901,6 +17750,14 @@ func (siw *ServerInterfaceWrapper) SearchDAGFeed(w http.ResponseWriter, r *http.
 		return
 	}
 
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
 	// ------------- Required query parameter "q" -------------
 
 	if paramValue := r.URL.Query().Get("q"); paramValue != "" {
@@ -11913,6 +17770,14 @@ func (siw *ServerInterfaceWrapper) SearchDAGFeed(w http.ResponseWriter, r *http.
 	err = runtime.BindQueryParameter("form", true, true, "q", r.URL.Query(), &params.Q)
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "labels" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "labels", r.URL.Query(), &params.Labels)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "labels", Err: err})
 		return
 	}
 
@@ -11991,6 +17856,22 @@ func (siw *ServerInterfaceWrapper) SearchDagMatches(w http.ResponseWriter, r *ht
 		return
 	}
 
+	// ------------- Optional query parameter "labels" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "labels", r.URL.Query(), &params.Labels)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "labels", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
 	// ------------- Optional query parameter "cursor" -------------
 
 	err = runtime.BindQueryParameter("form", true, false, "cursor", r.URL.Query(), &params.Cursor)
@@ -12039,6 +17920,14 @@ func (siw *ServerInterfaceWrapper) SearchDocFeed(w http.ResponseWriter, r *http.
 	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
 		return
 	}
 
@@ -12108,6 +17997,14 @@ func (siw *ServerInterfaceWrapper) SearchDocMatches(w http.ResponseWriter, r *ht
 		return
 	}
 
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
 	// ------------- Required query parameter "path" -------------
 
 	if paramValue := r.URL.Query().Get("path"); paramValue != "" {
@@ -12156,6 +18053,364 @@ func (siw *ServerInterfaceWrapper) SearchDocMatches(w http.ResponseWriter, r *ht
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SearchDocMatches(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListSecrets operation middleware
+func (siw *ServerInterfaceWrapper) ListSecrets(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSecretsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "workspace" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "workspace", r.URL.Query(), &params.Workspace)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "limit", r.URL.Query(), &params.Limit)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "offset", r.URL.Query(), &params.Offset)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "offset", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSecrets(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateSecret operation middleware
+func (siw *ServerInterfaceWrapper) CreateSecret(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateSecretParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateSecret(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteSecret operation middleware
+func (siw *ServerInterfaceWrapper) DeleteSecret(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "secretId" -------------
+	var secretId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "secretId", chi.URLParam(r, "secretId"), &secretId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "secretId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteSecretParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteSecret(w, r, secretId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSecret operation middleware
+func (siw *ServerInterfaceWrapper) GetSecret(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "secretId" -------------
+	var secretId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "secretId", chi.URLParam(r, "secretId"), &secretId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "secretId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetSecretParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSecret(w, r, secretId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateSecret operation middleware
+func (siw *ServerInterfaceWrapper) UpdateSecret(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "secretId" -------------
+	var secretId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "secretId", chi.URLParam(r, "secretId"), &secretId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "secretId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateSecretParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateSecret(w, r, secretId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DisableSecret operation middleware
+func (siw *ServerInterfaceWrapper) DisableSecret(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "secretId" -------------
+	var secretId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "secretId", chi.URLParam(r, "secretId"), &secretId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "secretId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DisableSecretParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DisableSecret(w, r, secretId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// EnableSecret operation middleware
+func (siw *ServerInterfaceWrapper) EnableSecret(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "secretId" -------------
+	var secretId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "secretId", chi.URLParam(r, "secretId"), &secretId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "secretId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params EnableSecretParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.EnableSecret(w, r, secretId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// WriteSecretVersion operation middleware
+func (siw *ServerInterfaceWrapper) WriteSecretVersion(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "secretId" -------------
+	var secretId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "secretId", chi.URLParam(r, "secretId"), &secretId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "secretId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params WriteSecretVersionParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.WriteSecretVersion(w, r, secretId, params)
 	}))
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -13346,6 +19601,94 @@ func (siw *ServerInterfaceWrapper) UpdateBaseConfig(w http.ResponseWriter, r *ht
 	handler.ServeHTTP(w, r)
 }
 
+// GetWorkspaceBaseConfig operation middleware
+func (siw *ServerInterfaceWrapper) GetWorkspaceBaseConfig(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "workspaceName" -------------
+	var workspaceName WorkspaceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspaceName", chi.URLParam(r, "workspaceName"), &workspaceName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspaceName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetWorkspaceBaseConfigParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetWorkspaceBaseConfig(w, r, workspaceName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateWorkspaceBaseConfig operation middleware
+func (siw *ServerInterfaceWrapper) UpdateWorkspaceBaseConfig(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "workspaceName" -------------
+	var workspaceName WorkspaceName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspaceName", chi.URLParam(r, "workspaceName"), &workspaceName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspaceName", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateWorkspaceBaseConfigParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateWorkspaceBaseConfig(w, r, workspaceName, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // SyncCleanup operation middleware
 func (siw *ServerInterfaceWrapper) SyncCleanup(w http.ResponseWriter, r *http.Request) {
 
@@ -14101,6 +20444,208 @@ func (siw *ServerInterfaceWrapper) ResetUserPassword(w http.ResponseWriter, r *h
 	handler.ServeHTTP(w, r)
 }
 
+// ListViews operation middleware
+func (siw *ServerInterfaceWrapper) ListViews(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListViewsParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListViews(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateView operation middleware
+func (siw *ServerInterfaceWrapper) CreateView(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateViewParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateView(w, r, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteView operation middleware
+func (siw *ServerInterfaceWrapper) DeleteView(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "viewId" -------------
+	var viewId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "viewId", chi.URLParam(r, "viewId"), &viewId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "viewId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteViewParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteView(w, r, viewId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetView operation middleware
+func (siw *ServerInterfaceWrapper) GetView(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "viewId" -------------
+	var viewId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "viewId", chi.URLParam(r, "viewId"), &viewId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "viewId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetViewParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetView(w, r, viewId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateView operation middleware
+func (siw *ServerInterfaceWrapper) UpdateView(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "viewId" -------------
+	var viewId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "viewId", chi.URLParam(r, "viewId"), &viewId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "viewId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, ApiTokenScopes, []string{})
+
+	ctx = context.WithValue(ctx, BasicAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateViewParams
+
+	// ------------- Optional query parameter "remoteNode" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "remoteNode", r.URL.Query(), &params.RemoteNode)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "remoteNode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateView(w, r, viewId, params)
+	}))
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		handler = siw.HandlerMiddlewares[i](handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListWebhooks operation middleware
 func (siw *ServerInterfaceWrapper) ListWebhooks(w http.ResponseWriter, r *http.Request) {
 
@@ -14179,6 +20724,25 @@ func (siw *ServerInterfaceWrapper) TriggerWebhook(w http.ResponseWriter, r *http
 		}
 
 		params.Authorization = &Authorization
+
+	}
+
+	// ------------- Optional header parameter "X-Dagu-Signature" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Dagu-Signature")]; found {
+		var XDaguSignature string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Dagu-Signature", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Dagu-Signature", valueList[0], &XDaguSignature, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Dagu-Signature", Err: err})
+			return
+		}
+
+		params.XDaguSignature = &XDaguSignature
 
 	}
 
@@ -14604,6 +21168,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/dag-runs/{name}", wrapper.ListDAGRunsByName)
 	})
 	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/dag-runs/{name}/{dagRunId}", wrapper.DeleteDAGRun)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/dag-runs/{name}/{dagRunId}", wrapper.GetDAGRunDetails)
 	})
 	r.Group(func(r chi.Router) {
@@ -14617,6 +21184,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/dag-runs/{name}/{dagRunId}/dequeue", wrapper.DequeueDAGRun)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/dag-runs/{name}/{dagRunId}/edit-retry", wrapper.EditRetryDAGRun)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/dag-runs/{name}/{dagRunId}/edit-retry/preview", wrapper.PreviewEditRetryDAGRun)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/dag-runs/{name}/{dagRunId}/log", wrapper.GetDAGRunLog)
@@ -14712,6 +21285,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/dags", wrapper.CreateNewDAG)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/dags/labels", wrapper.GetAllDAGLabels)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/dags/search", wrapper.SearchDAGs)
 	})
 	r.Group(func(r chi.Router) {
@@ -14736,7 +21312,37 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/dags/{fileName}/enqueue", wrapper.EnqueueDAGDAGRun)
 	})
 	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/dags/{fileName}/incidents", wrapper.DeleteDAGIncidents)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/dags/{fileName}/incidents", wrapper.GetDAGIncidents)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/dags/{fileName}/incidents", wrapper.UpdateDAGIncidents)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/dags/{fileName}/notifications", wrapper.DeleteDAGNotifications)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/dags/{fileName}/notifications", wrapper.GetDAGNotifications)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/dags/{fileName}/notifications", wrapper.UpdateDAGNotifications)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/dags/{fileName}/notifications/test", wrapper.TestDAGNotifications)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/dags/{fileName}/rename", wrapper.RenameDAG)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/dags/{fileName}/settings", wrapper.DeleteDAGSettings)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/dags/{fileName}/settings", wrapper.GetDAGSettings)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/dags/{fileName}/settings", wrapper.UpdateDAGSettings)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/dags/{fileName}/spec", wrapper.GetDAGSpec)
@@ -14764,6 +21370,18 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/dags/{fileName}/webhook", wrapper.CreateDAGWebhook)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/dags/{fileName}/webhook/hmac/configure", wrapper.ConfigureDAGWebhookHMAC)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/dags/{fileName}/webhook/hmac/disable", wrapper.DisableDAGWebhookHMAC)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/dags/{fileName}/webhook/hmac/enable", wrapper.EnableDAGWebhookHMAC)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/dags/{fileName}/webhook/hmac/regenerate", wrapper.RegenerateDAGWebhookHMACSecret)
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/dags/{fileName}/webhook/regenerate", wrapper.RegenerateDAGWebhookToken)
@@ -14802,6 +21420,39 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/health", wrapper.GetHealthStatus)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/incident-policies", wrapper.ListIncidentPolicies)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/incident-policies/global", wrapper.GetGlobalIncidentPolicies)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/incident-policies/global", wrapper.UpdateGlobalIncidentPolicies)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/incident-policies/workspaces/{workspaceName}", wrapper.GetWorkspaceIncidentPolicies)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/incident-policies/workspaces/{workspaceName}", wrapper.UpdateWorkspaceIncidentPolicies)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/incident-providers", wrapper.ListIncidentProviders)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/incident-providers", wrapper.CreateIncidentProvider)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/incident-providers/{providerId}", wrapper.DeleteIncidentProvider)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/incident-providers/{providerId}", wrapper.GetIncidentProvider)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/incident-providers/{providerId}", wrapper.UpdateIncidentProvider)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/incident-providers/{providerId}/test", wrapper.TestIncidentProvider)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/license/activate", wrapper.ActivateLicense)
 	})
 	r.Group(func(r chi.Router) {
@@ -14811,7 +21462,97 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/metrics", wrapper.GetMetrics)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/notification-channels", wrapper.ListNotificationChannels)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/notification-channels", wrapper.CreateNotificationChannel)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/notification-channels/{channelId}", wrapper.DeleteNotificationChannel)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/notification-channels/{channelId}", wrapper.GetNotificationChannel)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/notification-channels/{channelId}", wrapper.UpdateNotificationChannel)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/notification-routes", wrapper.ListNotificationRoutes)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/notification-routes/global", wrapper.GetGlobalNotificationRoutes)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/notification-routes/global", wrapper.UpdateGlobalNotificationRoutes)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/notification-routes/workspaces/{workspaceName}", wrapper.GetWorkspaceNotificationRoutes)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/notification-routes/workspaces/{workspaceName}", wrapper.UpdateWorkspaceNotificationRoutes)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/notification-settings", wrapper.GetNotificationSettings)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/notification-settings", wrapper.UpdateNotificationSettings)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/openapi.json", wrapper.GetOpenapiJson)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/profiles", wrapper.ListRuntimeProfiles)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/profiles", wrapper.CreateRuntimeProfile)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/profiles/_global", wrapper.GetGlobalRuntimeProfileDefaults)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/profiles/_global", wrapper.UpdateGlobalRuntimeProfileDefaults)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/profiles/_global/entries/{key}", wrapper.DeleteGlobalRuntimeProfileDefaultEntry)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/profiles/_global/secrets/{key}", wrapper.SetGlobalRuntimeProfileDefaultSecret)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/profiles/_global/variables/{key}", wrapper.SetGlobalRuntimeProfileDefaultVariable)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/profiles/_workspaces/{workspaceName}", wrapper.GetWorkspaceRuntimeProfileDefaults)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/profiles/_workspaces/{workspaceName}", wrapper.UpdateWorkspaceRuntimeProfileDefaults)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/profiles/_workspaces/{workspaceName}/entries/{key}", wrapper.DeleteWorkspaceRuntimeProfileDefaultEntry)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/profiles/_workspaces/{workspaceName}/secrets/{key}", wrapper.SetWorkspaceRuntimeProfileDefaultSecret)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/profiles/_workspaces/{workspaceName}/variables/{key}", wrapper.SetWorkspaceRuntimeProfileDefaultVariable)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/profiles/{profileName}", wrapper.DeleteRuntimeProfile)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/profiles/{profileName}", wrapper.GetRuntimeProfile)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/profiles/{profileName}", wrapper.UpdateRuntimeProfile)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/profiles/{profileName}/entries/{key}", wrapper.DeleteRuntimeProfileEntry)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/profiles/{profileName}/secrets/{key}", wrapper.SetRuntimeProfileSecret)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/profiles/{profileName}/variables/{key}", wrapper.SetRuntimeProfileVariable)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/queues", wrapper.ListQueues)
@@ -14851,6 +21592,30 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/search/docs/matches", wrapper.SearchDocMatches)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/secrets", wrapper.ListSecrets)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/secrets", wrapper.CreateSecret)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/secrets/{secretId}", wrapper.DeleteSecret)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/secrets/{secretId}", wrapper.GetSecret)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/secrets/{secretId}", wrapper.UpdateSecret)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/secrets/{secretId}/disable", wrapper.DisableSecret)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/secrets/{secretId}/enable", wrapper.EnableSecret)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/secrets/{secretId}/versions", wrapper.WriteSecretVersion)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/services/coordinator", wrapper.GetCoordinatorStatus)
@@ -14943,6 +21708,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Put(options.BaseURL+"/settings/base-config", wrapper.UpdateBaseConfig)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/settings/workspaces/{workspaceName}/base-config", wrapper.GetWorkspaceBaseConfig)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/settings/workspaces/{workspaceName}/base-config", wrapper.UpdateWorkspaceBaseConfig)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/sync/cleanup", wrapper.SyncCleanup)
 	})
 	r.Group(func(r chi.Router) {
@@ -15004,6 +21775,21 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/users/{userId}/reset-password", wrapper.ResetUserPassword)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/views", wrapper.ListViews)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/views", wrapper.CreateView)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/views/{viewId}", wrapper.DeleteView)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/views/{viewId}", wrapper.GetView)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/views/{viewId}", wrapper.UpdateView)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/webhooks", wrapper.ListWebhooks)
@@ -15775,6 +22561,23 @@ func (response Login401JSONResponse) VisitLoginResponse(w http.ResponseWriter) e
 	return json.NewEncoder(w).Encode(response)
 }
 
+type Login429ResponseHeaders struct {
+	RetryAfter int
+}
+
+type Login429JSONResponse struct {
+	Body    Error
+	Headers Login429ResponseHeaders
+}
+
+func (response Login429JSONResponse) VisitLoginResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
 type LogindefaultJSONResponse struct {
 	Body       Error
 	StatusCode int
@@ -16051,6 +22854,54 @@ func (response ListDAGRunsByNamedefaultJSONResponse) VisitListDAGRunsByNameRespo
 	return json.NewEncoder(w).Encode(response.Body)
 }
 
+type DeleteDAGRunRequestObject struct {
+	Name     DAGName          `json:"name"`
+	DagRunId DAGRunConcreteId `json:"dagRunId"`
+	Params   DeleteDAGRunParams
+}
+
+type DeleteDAGRunResponseObject interface {
+	VisitDeleteDAGRunResponse(w http.ResponseWriter) error
+}
+
+type DeleteDAGRun204Response struct {
+}
+
+func (response DeleteDAGRun204Response) VisitDeleteDAGRunResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteDAGRun400JSONResponse Error
+
+func (response DeleteDAGRun400JSONResponse) VisitDeleteDAGRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteDAGRun404JSONResponse Error
+
+func (response DeleteDAGRun404JSONResponse) VisitDeleteDAGRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteDAGRundefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DeleteDAGRundefaultJSONResponse) VisitDeleteDAGRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
 type GetDAGRunDetailsRequestObject struct {
 	Name     DAGName  `json:"name"`
 	DagRunId DAGRunId `json:"dagRunId"`
@@ -16263,6 +23114,102 @@ type DequeueDAGRundefaultJSONResponse struct {
 }
 
 func (response DequeueDAGRundefaultJSONResponse) VisitDequeueDAGRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type EditRetryDAGRunRequestObject struct {
+	Name     DAGName  `json:"name"`
+	DagRunId DAGRunId `json:"dagRunId"`
+	Params   EditRetryDAGRunParams
+	Body     *EditRetryDAGRunJSONRequestBody
+}
+
+type EditRetryDAGRunResponseObject interface {
+	VisitEditRetryDAGRunResponse(w http.ResponseWriter) error
+}
+
+type EditRetryDAGRun200JSONResponse struct {
+	// DagRunId Unique identifier for the DAG-run. The special value 'latest' can be used to reference the most recent DAG-run.
+	DagRunId DAGRunId `json:"dagRunId"`
+
+	// Queued Indicates whether the run was queued instead of starting immediately.
+	Queued       bool     `json:"queued"`
+	SkippedSteps []string `json:"skippedSteps"`
+	StartedSteps []string `json:"startedSteps"`
+}
+
+func (response EditRetryDAGRun200JSONResponse) VisitEditRetryDAGRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type EditRetryDAGRundefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response EditRetryDAGRundefaultJSONResponse) VisitEditRetryDAGRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type PreviewEditRetryDAGRunRequestObject struct {
+	Name     DAGName  `json:"name"`
+	DagRunId DAGRunId `json:"dagRunId"`
+	Params   PreviewEditRetryDAGRunParams
+	Body     *PreviewEditRetryDAGRunJSONRequestBody
+}
+
+type PreviewEditRetryDAGRunResponseObject interface {
+	VisitPreviewEditRetryDAGRunResponse(w http.ResponseWriter) error
+}
+
+type PreviewEditRetryDAGRun200JSONResponse struct {
+	// DagName Resolved DAG name for the edited retry.
+	DagName string `json:"dagName"`
+
+	// Errors Validation errors that must be fixed before launching.
+	Errors []string `json:"errors"`
+
+	// IneligibleSteps Previous completed steps that cannot be skipped with the edited specification.
+	IneligibleSteps []struct {
+		Reason   string `json:"reason"`
+		StepName string `json:"stepName"`
+	} `json:"ineligibleSteps"`
+
+	// RunnableSteps Steps that will be started if not skipped.
+	RunnableSteps []string `json:"runnableSteps"`
+
+	// SkippedSteps Default steps selected to be skipped.
+	SkippedSteps []string `json:"skippedSteps"`
+
+	// Steps Resolved edited DAG steps in execution order for preview rendering.
+	Steps []Step `json:"steps"`
+
+	// Warnings Non-blocking warnings for the edited retry.
+	Warnings []string `json:"warnings"`
+}
+
+func (response PreviewEditRetryDAGRun200JSONResponse) VisitPreviewEditRetryDAGRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PreviewEditRetryDAGRundefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response PreviewEditRetryDAGRundefaultJSONResponse) VisitPreviewEditRetryDAGRunResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
 
@@ -17682,6 +24629,35 @@ func (response CreateNewDAGdefaultJSONResponse) VisitCreateNewDAGResponse(w http
 	return json.NewEncoder(w).Encode(response.Body)
 }
 
+type GetAllDAGLabelsRequestObject struct {
+	Params GetAllDAGLabelsParams
+}
+
+type GetAllDAGLabelsResponseObject interface {
+	VisitGetAllDAGLabelsResponse(w http.ResponseWriter) error
+}
+
+type GetAllDAGLabels200JSONResponse ListLabelResponse
+
+func (response GetAllDAGLabels200JSONResponse) VisitGetAllDAGLabelsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetAllDAGLabelsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetAllDAGLabelsdefaultJSONResponse) VisitGetAllDAGLabelsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
 type SearchDAGsRequestObject struct {
 	Params SearchDAGsParams
 }
@@ -17999,6 +24975,343 @@ func (response EnqueueDAGDAGRundefaultJSONResponse) VisitEnqueueDAGDAGRunRespons
 	return json.NewEncoder(w).Encode(response.Body)
 }
 
+type DeleteDAGIncidentsRequestObject struct {
+	FileName DAGFileName `json:"fileName"`
+	Params   DeleteDAGIncidentsParams
+}
+
+type DeleteDAGIncidentsResponseObject interface {
+	VisitDeleteDAGIncidentsResponse(w http.ResponseWriter) error
+}
+
+type DeleteDAGIncidents204Response struct {
+}
+
+func (response DeleteDAGIncidents204Response) VisitDeleteDAGIncidentsResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteDAGIncidents403JSONResponse Error
+
+func (response DeleteDAGIncidents403JSONResponse) VisitDeleteDAGIncidentsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteDAGIncidents404JSONResponse Error
+
+func (response DeleteDAGIncidents404JSONResponse) VisitDeleteDAGIncidentsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteDAGIncidentsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DeleteDAGIncidentsdefaultJSONResponse) VisitDeleteDAGIncidentsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetDAGIncidentsRequestObject struct {
+	FileName DAGFileName `json:"fileName"`
+	Params   GetDAGIncidentsParams
+}
+
+type GetDAGIncidentsResponseObject interface {
+	VisitGetDAGIncidentsResponse(w http.ResponseWriter) error
+}
+
+type GetDAGIncidents200JSONResponse IncidentPolicySet
+
+func (response GetDAGIncidents200JSONResponse) VisitGetDAGIncidentsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetDAGIncidents403JSONResponse Error
+
+func (response GetDAGIncidents403JSONResponse) VisitGetDAGIncidentsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetDAGIncidents404JSONResponse Error
+
+func (response GetDAGIncidents404JSONResponse) VisitGetDAGIncidentsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetDAGIncidentsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetDAGIncidentsdefaultJSONResponse) VisitGetDAGIncidentsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type UpdateDAGIncidentsRequestObject struct {
+	FileName DAGFileName `json:"fileName"`
+	Params   UpdateDAGIncidentsParams
+	Body     *UpdateDAGIncidentsJSONRequestBody
+}
+
+type UpdateDAGIncidentsResponseObject interface {
+	VisitUpdateDAGIncidentsResponse(w http.ResponseWriter) error
+}
+
+type UpdateDAGIncidents200JSONResponse IncidentPolicySet
+
+func (response UpdateDAGIncidents200JSONResponse) VisitUpdateDAGIncidentsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateDAGIncidents400JSONResponse Error
+
+func (response UpdateDAGIncidents400JSONResponse) VisitUpdateDAGIncidentsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateDAGIncidents403JSONResponse Error
+
+func (response UpdateDAGIncidents403JSONResponse) VisitUpdateDAGIncidentsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateDAGIncidents404JSONResponse Error
+
+func (response UpdateDAGIncidents404JSONResponse) VisitUpdateDAGIncidentsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateDAGIncidentsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateDAGIncidentsdefaultJSONResponse) VisitUpdateDAGIncidentsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type DeleteDAGNotificationsRequestObject struct {
+	FileName DAGFileName `json:"fileName"`
+	Params   DeleteDAGNotificationsParams
+}
+
+type DeleteDAGNotificationsResponseObject interface {
+	VisitDeleteDAGNotificationsResponse(w http.ResponseWriter) error
+}
+
+type DeleteDAGNotifications204Response struct {
+}
+
+func (response DeleteDAGNotifications204Response) VisitDeleteDAGNotificationsResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteDAGNotifications404JSONResponse Error
+
+func (response DeleteDAGNotifications404JSONResponse) VisitDeleteDAGNotificationsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteDAGNotificationsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DeleteDAGNotificationsdefaultJSONResponse) VisitDeleteDAGNotificationsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetDAGNotificationsRequestObject struct {
+	FileName DAGFileName `json:"fileName"`
+	Params   GetDAGNotificationsParams
+}
+
+type GetDAGNotificationsResponseObject interface {
+	VisitGetDAGNotificationsResponse(w http.ResponseWriter) error
+}
+
+type GetDAGNotifications200JSONResponse DAGNotificationSettings
+
+func (response GetDAGNotifications200JSONResponse) VisitGetDAGNotificationsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetDAGNotifications404JSONResponse Error
+
+func (response GetDAGNotifications404JSONResponse) VisitGetDAGNotificationsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetDAGNotificationsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetDAGNotificationsdefaultJSONResponse) VisitGetDAGNotificationsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type UpdateDAGNotificationsRequestObject struct {
+	FileName DAGFileName `json:"fileName"`
+	Params   UpdateDAGNotificationsParams
+	Body     *UpdateDAGNotificationsJSONRequestBody
+}
+
+type UpdateDAGNotificationsResponseObject interface {
+	VisitUpdateDAGNotificationsResponse(w http.ResponseWriter) error
+}
+
+type UpdateDAGNotifications200JSONResponse DAGNotificationSettings
+
+func (response UpdateDAGNotifications200JSONResponse) VisitUpdateDAGNotificationsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateDAGNotifications400JSONResponse Error
+
+func (response UpdateDAGNotifications400JSONResponse) VisitUpdateDAGNotificationsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateDAGNotifications403JSONResponse Error
+
+func (response UpdateDAGNotifications403JSONResponse) VisitUpdateDAGNotificationsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateDAGNotifications404JSONResponse Error
+
+func (response UpdateDAGNotifications404JSONResponse) VisitUpdateDAGNotificationsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateDAGNotificationsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateDAGNotificationsdefaultJSONResponse) VisitUpdateDAGNotificationsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type TestDAGNotificationsRequestObject struct {
+	FileName DAGFileName `json:"fileName"`
+	Params   TestDAGNotificationsParams
+	Body     *TestDAGNotificationsJSONRequestBody
+}
+
+type TestDAGNotificationsResponseObject interface {
+	VisitTestDAGNotificationsResponse(w http.ResponseWriter) error
+}
+
+type TestDAGNotifications200JSONResponse TestDAGNotificationResponse
+
+func (response TestDAGNotifications200JSONResponse) VisitTestDAGNotificationsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type TestDAGNotifications400JSONResponse Error
+
+func (response TestDAGNotifications400JSONResponse) VisitTestDAGNotificationsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type TestDAGNotifications404JSONResponse Error
+
+func (response TestDAGNotifications404JSONResponse) VisitTestDAGNotificationsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type TestDAGNotificationsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response TestDAGNotificationsdefaultJSONResponse) VisitTestDAGNotificationsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
 type RenameDAGRequestObject struct {
 	FileName DAGFileName `json:"fileName"`
 	Params   RenameDAGParams
@@ -18047,6 +25360,141 @@ func (response RenameDAGdefaultJSONResponse) VisitRenameDAGResponse(w http.Respo
 	return json.NewEncoder(w).Encode(response.Body)
 }
 
+type DeleteDAGSettingsRequestObject struct {
+	FileName DAGFileName `json:"fileName"`
+	Params   DeleteDAGSettingsParams
+}
+
+type DeleteDAGSettingsResponseObject interface {
+	VisitDeleteDAGSettingsResponse(w http.ResponseWriter) error
+}
+
+type DeleteDAGSettings204Response struct {
+}
+
+func (response DeleteDAGSettings204Response) VisitDeleteDAGSettingsResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteDAGSettings404JSONResponse Error
+
+func (response DeleteDAGSettings404JSONResponse) VisitDeleteDAGSettingsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteDAGSettingsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DeleteDAGSettingsdefaultJSONResponse) VisitDeleteDAGSettingsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetDAGSettingsRequestObject struct {
+	FileName DAGFileName `json:"fileName"`
+	Params   GetDAGSettingsParams
+}
+
+type GetDAGSettingsResponseObject interface {
+	VisitGetDAGSettingsResponse(w http.ResponseWriter) error
+}
+
+type GetDAGSettings200JSONResponse DAGSettings
+
+func (response GetDAGSettings200JSONResponse) VisitGetDAGSettingsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetDAGSettings404JSONResponse Error
+
+func (response GetDAGSettings404JSONResponse) VisitGetDAGSettingsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetDAGSettingsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetDAGSettingsdefaultJSONResponse) VisitGetDAGSettingsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type UpdateDAGSettingsRequestObject struct {
+	FileName DAGFileName `json:"fileName"`
+	Params   UpdateDAGSettingsParams
+	Body     *UpdateDAGSettingsJSONRequestBody
+}
+
+type UpdateDAGSettingsResponseObject interface {
+	VisitUpdateDAGSettingsResponse(w http.ResponseWriter) error
+}
+
+type UpdateDAGSettings200JSONResponse DAGSettings
+
+func (response UpdateDAGSettings200JSONResponse) VisitUpdateDAGSettingsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateDAGSettings400JSONResponse Error
+
+func (response UpdateDAGSettings400JSONResponse) VisitUpdateDAGSettingsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateDAGSettings403JSONResponse Error
+
+func (response UpdateDAGSettings403JSONResponse) VisitUpdateDAGSettingsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateDAGSettings404JSONResponse Error
+
+func (response UpdateDAGSettings404JSONResponse) VisitUpdateDAGSettingsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateDAGSettingsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateDAGSettingsdefaultJSONResponse) VisitUpdateDAGSettingsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
 type GetDAGSpecRequestObject struct {
 	FileName DAGFileName `json:"fileName"`
 	Params   GetDAGSpecParams
@@ -18065,6 +25513,9 @@ type GetDAGSpec200JSONResponse struct {
 
 	// Spec The DAG spec in YAML format
 	Spec string `json:"spec"`
+
+	// ValueReferenceNotices Passive value-reference notices produced while loading this spec. These notices are not persisted.
+	ValueReferenceNotices []ValueReferenceNotice `json:"valueReferenceNotices"`
 }
 
 func (response GetDAGSpec200JSONResponse) VisitGetDAGSpecResponse(w http.ResponseWriter) error {
@@ -18424,6 +25875,227 @@ type CreateDAGWebhookdefaultJSONResponse struct {
 }
 
 func (response CreateDAGWebhookdefaultJSONResponse) VisitCreateDAGWebhookResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type ConfigureDAGWebhookHMACRequestObject struct {
+	FileName DAGFileName `json:"fileName"`
+	Params   ConfigureDAGWebhookHMACParams
+	Body     *ConfigureDAGWebhookHMACJSONRequestBody
+}
+
+type ConfigureDAGWebhookHMACResponseObject interface {
+	VisitConfigureDAGWebhookHMACResponse(w http.ResponseWriter) error
+}
+
+type ConfigureDAGWebhookHMAC200JSONResponse WebhookDetails
+
+func (response ConfigureDAGWebhookHMAC200JSONResponse) VisitConfigureDAGWebhookHMACResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ConfigureDAGWebhookHMAC400JSONResponse Error
+
+func (response ConfigureDAGWebhookHMAC400JSONResponse) VisitConfigureDAGWebhookHMACResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ConfigureDAGWebhookHMAC404JSONResponse Error
+
+func (response ConfigureDAGWebhookHMAC404JSONResponse) VisitConfigureDAGWebhookHMACResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ConfigureDAGWebhookHMAC501JSONResponse Error
+
+func (response ConfigureDAGWebhookHMAC501JSONResponse) VisitConfigureDAGWebhookHMACResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ConfigureDAGWebhookHMACdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ConfigureDAGWebhookHMACdefaultJSONResponse) VisitConfigureDAGWebhookHMACResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type DisableDAGWebhookHMACRequestObject struct {
+	FileName DAGFileName `json:"fileName"`
+	Params   DisableDAGWebhookHMACParams
+}
+
+type DisableDAGWebhookHMACResponseObject interface {
+	VisitDisableDAGWebhookHMACResponse(w http.ResponseWriter) error
+}
+
+type DisableDAGWebhookHMAC200JSONResponse WebhookDetails
+
+func (response DisableDAGWebhookHMAC200JSONResponse) VisitDisableDAGWebhookHMACResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DisableDAGWebhookHMAC404JSONResponse Error
+
+func (response DisableDAGWebhookHMAC404JSONResponse) VisitDisableDAGWebhookHMACResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DisableDAGWebhookHMAC501JSONResponse Error
+
+func (response DisableDAGWebhookHMAC501JSONResponse) VisitDisableDAGWebhookHMACResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DisableDAGWebhookHMACdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DisableDAGWebhookHMACdefaultJSONResponse) VisitDisableDAGWebhookHMACResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type EnableDAGWebhookHMACRequestObject struct {
+	FileName DAGFileName `json:"fileName"`
+	Params   EnableDAGWebhookHMACParams
+	Body     *EnableDAGWebhookHMACJSONRequestBody
+}
+
+type EnableDAGWebhookHMACResponseObject interface {
+	VisitEnableDAGWebhookHMACResponse(w http.ResponseWriter) error
+}
+
+type EnableDAGWebhookHMAC200JSONResponse WebhookHMACSecretResponse
+
+func (response EnableDAGWebhookHMAC200JSONResponse) VisitEnableDAGWebhookHMACResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type EnableDAGWebhookHMAC400JSONResponse Error
+
+func (response EnableDAGWebhookHMAC400JSONResponse) VisitEnableDAGWebhookHMACResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type EnableDAGWebhookHMAC404JSONResponse Error
+
+func (response EnableDAGWebhookHMAC404JSONResponse) VisitEnableDAGWebhookHMACResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type EnableDAGWebhookHMAC501JSONResponse Error
+
+func (response EnableDAGWebhookHMAC501JSONResponse) VisitEnableDAGWebhookHMACResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type EnableDAGWebhookHMACdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response EnableDAGWebhookHMACdefaultJSONResponse) VisitEnableDAGWebhookHMACResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type RegenerateDAGWebhookHMACSecretRequestObject struct {
+	FileName DAGFileName `json:"fileName"`
+	Params   RegenerateDAGWebhookHMACSecretParams
+}
+
+type RegenerateDAGWebhookHMACSecretResponseObject interface {
+	VisitRegenerateDAGWebhookHMACSecretResponse(w http.ResponseWriter) error
+}
+
+type RegenerateDAGWebhookHMACSecret200JSONResponse WebhookHMACSecretResponse
+
+func (response RegenerateDAGWebhookHMACSecret200JSONResponse) VisitRegenerateDAGWebhookHMACSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RegenerateDAGWebhookHMACSecret400JSONResponse Error
+
+func (response RegenerateDAGWebhookHMACSecret400JSONResponse) VisitRegenerateDAGWebhookHMACSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RegenerateDAGWebhookHMACSecret404JSONResponse Error
+
+func (response RegenerateDAGWebhookHMACSecret404JSONResponse) VisitRegenerateDAGWebhookHMACSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RegenerateDAGWebhookHMACSecret501JSONResponse Error
+
+func (response RegenerateDAGWebhookHMACSecret501JSONResponse) VisitRegenerateDAGWebhookHMACSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RegenerateDAGWebhookHMACSecretdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RegenerateDAGWebhookHMACSecretdefaultJSONResponse) VisitRegenerateDAGWebhookHMACSecretResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
 
@@ -18903,6 +26575,541 @@ func (response GetHealthStatusdefaultResponse) VisitGetHealthStatusResponse(w ht
 	return nil
 }
 
+type ListIncidentPoliciesRequestObject struct {
+	Params ListIncidentPoliciesParams
+}
+
+type ListIncidentPoliciesResponseObject interface {
+	VisitListIncidentPoliciesResponse(w http.ResponseWriter) error
+}
+
+type ListIncidentPolicies200JSONResponse IncidentPolicySetListResponse
+
+func (response ListIncidentPolicies200JSONResponse) VisitListIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListIncidentPolicies403JSONResponse Error
+
+func (response ListIncidentPolicies403JSONResponse) VisitListIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListIncidentPoliciesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListIncidentPoliciesdefaultJSONResponse) VisitListIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetGlobalIncidentPoliciesRequestObject struct {
+	Params GetGlobalIncidentPoliciesParams
+}
+
+type GetGlobalIncidentPoliciesResponseObject interface {
+	VisitGetGlobalIncidentPoliciesResponse(w http.ResponseWriter) error
+}
+
+type GetGlobalIncidentPolicies200JSONResponse IncidentPolicySet
+
+func (response GetGlobalIncidentPolicies200JSONResponse) VisitGetGlobalIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetGlobalIncidentPolicies403JSONResponse Error
+
+func (response GetGlobalIncidentPolicies403JSONResponse) VisitGetGlobalIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetGlobalIncidentPoliciesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetGlobalIncidentPoliciesdefaultJSONResponse) VisitGetGlobalIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type UpdateGlobalIncidentPoliciesRequestObject struct {
+	Params UpdateGlobalIncidentPoliciesParams
+	Body   *UpdateGlobalIncidentPoliciesJSONRequestBody
+}
+
+type UpdateGlobalIncidentPoliciesResponseObject interface {
+	VisitUpdateGlobalIncidentPoliciesResponse(w http.ResponseWriter) error
+}
+
+type UpdateGlobalIncidentPolicies200JSONResponse IncidentPolicySet
+
+func (response UpdateGlobalIncidentPolicies200JSONResponse) VisitUpdateGlobalIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateGlobalIncidentPolicies400JSONResponse Error
+
+func (response UpdateGlobalIncidentPolicies400JSONResponse) VisitUpdateGlobalIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateGlobalIncidentPolicies403JSONResponse Error
+
+func (response UpdateGlobalIncidentPolicies403JSONResponse) VisitUpdateGlobalIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateGlobalIncidentPolicies404JSONResponse Error
+
+func (response UpdateGlobalIncidentPolicies404JSONResponse) VisitUpdateGlobalIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateGlobalIncidentPoliciesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateGlobalIncidentPoliciesdefaultJSONResponse) VisitUpdateGlobalIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetWorkspaceIncidentPoliciesRequestObject struct {
+	WorkspaceName WorkspaceName `json:"workspaceName"`
+	Params        GetWorkspaceIncidentPoliciesParams
+}
+
+type GetWorkspaceIncidentPoliciesResponseObject interface {
+	VisitGetWorkspaceIncidentPoliciesResponse(w http.ResponseWriter) error
+}
+
+type GetWorkspaceIncidentPolicies200JSONResponse IncidentPolicySet
+
+func (response GetWorkspaceIncidentPolicies200JSONResponse) VisitGetWorkspaceIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkspaceIncidentPolicies403JSONResponse Error
+
+func (response GetWorkspaceIncidentPolicies403JSONResponse) VisitGetWorkspaceIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkspaceIncidentPolicies404JSONResponse Error
+
+func (response GetWorkspaceIncidentPolicies404JSONResponse) VisitGetWorkspaceIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkspaceIncidentPoliciesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetWorkspaceIncidentPoliciesdefaultJSONResponse) VisitGetWorkspaceIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type UpdateWorkspaceIncidentPoliciesRequestObject struct {
+	WorkspaceName WorkspaceName `json:"workspaceName"`
+	Params        UpdateWorkspaceIncidentPoliciesParams
+	Body          *UpdateWorkspaceIncidentPoliciesJSONRequestBody
+}
+
+type UpdateWorkspaceIncidentPoliciesResponseObject interface {
+	VisitUpdateWorkspaceIncidentPoliciesResponse(w http.ResponseWriter) error
+}
+
+type UpdateWorkspaceIncidentPolicies200JSONResponse IncidentPolicySet
+
+func (response UpdateWorkspaceIncidentPolicies200JSONResponse) VisitUpdateWorkspaceIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceIncidentPolicies400JSONResponse Error
+
+func (response UpdateWorkspaceIncidentPolicies400JSONResponse) VisitUpdateWorkspaceIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceIncidentPolicies403JSONResponse Error
+
+func (response UpdateWorkspaceIncidentPolicies403JSONResponse) VisitUpdateWorkspaceIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceIncidentPolicies404JSONResponse Error
+
+func (response UpdateWorkspaceIncidentPolicies404JSONResponse) VisitUpdateWorkspaceIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceIncidentPoliciesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateWorkspaceIncidentPoliciesdefaultJSONResponse) VisitUpdateWorkspaceIncidentPoliciesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type ListIncidentProvidersRequestObject struct {
+	Params ListIncidentProvidersParams
+}
+
+type ListIncidentProvidersResponseObject interface {
+	VisitListIncidentProvidersResponse(w http.ResponseWriter) error
+}
+
+type ListIncidentProviders200JSONResponse IncidentProviderListResponse
+
+func (response ListIncidentProviders200JSONResponse) VisitListIncidentProvidersResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListIncidentProviders403JSONResponse Error
+
+func (response ListIncidentProviders403JSONResponse) VisitListIncidentProvidersResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListIncidentProvidersdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListIncidentProvidersdefaultJSONResponse) VisitListIncidentProvidersResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type CreateIncidentProviderRequestObject struct {
+	Params CreateIncidentProviderParams
+	Body   *CreateIncidentProviderJSONRequestBody
+}
+
+type CreateIncidentProviderResponseObject interface {
+	VisitCreateIncidentProviderResponse(w http.ResponseWriter) error
+}
+
+type CreateIncidentProvider201JSONResponse IncidentProvider
+
+func (response CreateIncidentProvider201JSONResponse) VisitCreateIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateIncidentProvider400JSONResponse Error
+
+func (response CreateIncidentProvider400JSONResponse) VisitCreateIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateIncidentProvider403JSONResponse Error
+
+func (response CreateIncidentProvider403JSONResponse) VisitCreateIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateIncidentProviderdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CreateIncidentProviderdefaultJSONResponse) VisitCreateIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type DeleteIncidentProviderRequestObject struct {
+	ProviderId string `json:"providerId"`
+	Params     DeleteIncidentProviderParams
+}
+
+type DeleteIncidentProviderResponseObject interface {
+	VisitDeleteIncidentProviderResponse(w http.ResponseWriter) error
+}
+
+type DeleteIncidentProvider204Response struct {
+}
+
+func (response DeleteIncidentProvider204Response) VisitDeleteIncidentProviderResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteIncidentProvider403JSONResponse Error
+
+func (response DeleteIncidentProvider403JSONResponse) VisitDeleteIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteIncidentProvider404JSONResponse Error
+
+func (response DeleteIncidentProvider404JSONResponse) VisitDeleteIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteIncidentProvider409JSONResponse Error
+
+func (response DeleteIncidentProvider409JSONResponse) VisitDeleteIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteIncidentProviderdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DeleteIncidentProviderdefaultJSONResponse) VisitDeleteIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetIncidentProviderRequestObject struct {
+	ProviderId string `json:"providerId"`
+	Params     GetIncidentProviderParams
+}
+
+type GetIncidentProviderResponseObject interface {
+	VisitGetIncidentProviderResponse(w http.ResponseWriter) error
+}
+
+type GetIncidentProvider200JSONResponse IncidentProvider
+
+func (response GetIncidentProvider200JSONResponse) VisitGetIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetIncidentProvider403JSONResponse Error
+
+func (response GetIncidentProvider403JSONResponse) VisitGetIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetIncidentProvider404JSONResponse Error
+
+func (response GetIncidentProvider404JSONResponse) VisitGetIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetIncidentProviderdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetIncidentProviderdefaultJSONResponse) VisitGetIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type UpdateIncidentProviderRequestObject struct {
+	ProviderId string `json:"providerId"`
+	Params     UpdateIncidentProviderParams
+	Body       *UpdateIncidentProviderJSONRequestBody
+}
+
+type UpdateIncidentProviderResponseObject interface {
+	VisitUpdateIncidentProviderResponse(w http.ResponseWriter) error
+}
+
+type UpdateIncidentProvider200JSONResponse IncidentProvider
+
+func (response UpdateIncidentProvider200JSONResponse) VisitUpdateIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateIncidentProvider400JSONResponse Error
+
+func (response UpdateIncidentProvider400JSONResponse) VisitUpdateIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateIncidentProvider403JSONResponse Error
+
+func (response UpdateIncidentProvider403JSONResponse) VisitUpdateIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateIncidentProvider404JSONResponse Error
+
+func (response UpdateIncidentProvider404JSONResponse) VisitUpdateIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateIncidentProviderdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateIncidentProviderdefaultJSONResponse) VisitUpdateIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type TestIncidentProviderRequestObject struct {
+	ProviderId string `json:"providerId"`
+	Params     TestIncidentProviderParams
+}
+
+type TestIncidentProviderResponseObject interface {
+	VisitTestIncidentProviderResponse(w http.ResponseWriter) error
+}
+
+type TestIncidentProvider200JSONResponse TestIncidentProviderResponse
+
+func (response TestIncidentProvider200JSONResponse) VisitTestIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type TestIncidentProvider403JSONResponse Error
+
+func (response TestIncidentProvider403JSONResponse) VisitTestIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type TestIncidentProvider404JSONResponse Error
+
+func (response TestIncidentProvider404JSONResponse) VisitTestIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type TestIncidentProviderdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response TestIncidentProviderdefaultJSONResponse) VisitTestIncidentProviderResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
 type ActivateLicenseRequestObject struct {
 	Params ActivateLicenseParams
 	Body   *ActivateLicenseJSONRequestBody
@@ -19033,6 +27240,561 @@ func (response GetMetricsdefaultJSONResponse) VisitGetMetricsResponse(w http.Res
 	return json.NewEncoder(w).Encode(response.Body)
 }
 
+type ListNotificationChannelsRequestObject struct {
+	Params ListNotificationChannelsParams
+}
+
+type ListNotificationChannelsResponseObject interface {
+	VisitListNotificationChannelsResponse(w http.ResponseWriter) error
+}
+
+type ListNotificationChannels200JSONResponse NotificationChannelListResponse
+
+func (response ListNotificationChannels200JSONResponse) VisitListNotificationChannelsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListNotificationChannels403JSONResponse Error
+
+func (response ListNotificationChannels403JSONResponse) VisitListNotificationChannelsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListNotificationChannelsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListNotificationChannelsdefaultJSONResponse) VisitListNotificationChannelsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type CreateNotificationChannelRequestObject struct {
+	Params CreateNotificationChannelParams
+	Body   *CreateNotificationChannelJSONRequestBody
+}
+
+type CreateNotificationChannelResponseObject interface {
+	VisitCreateNotificationChannelResponse(w http.ResponseWriter) error
+}
+
+type CreateNotificationChannel201JSONResponse NotificationChannel
+
+func (response CreateNotificationChannel201JSONResponse) VisitCreateNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateNotificationChannel400JSONResponse Error
+
+func (response CreateNotificationChannel400JSONResponse) VisitCreateNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateNotificationChannel403JSONResponse Error
+
+func (response CreateNotificationChannel403JSONResponse) VisitCreateNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateNotificationChanneldefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CreateNotificationChanneldefaultJSONResponse) VisitCreateNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type DeleteNotificationChannelRequestObject struct {
+	ChannelId string `json:"channelId"`
+	Params    DeleteNotificationChannelParams
+}
+
+type DeleteNotificationChannelResponseObject interface {
+	VisitDeleteNotificationChannelResponse(w http.ResponseWriter) error
+}
+
+type DeleteNotificationChannel204Response struct {
+}
+
+func (response DeleteNotificationChannel204Response) VisitDeleteNotificationChannelResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteNotificationChannel403JSONResponse Error
+
+func (response DeleteNotificationChannel403JSONResponse) VisitDeleteNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteNotificationChannel404JSONResponse Error
+
+func (response DeleteNotificationChannel404JSONResponse) VisitDeleteNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteNotificationChannel409JSONResponse Error
+
+func (response DeleteNotificationChannel409JSONResponse) VisitDeleteNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteNotificationChanneldefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DeleteNotificationChanneldefaultJSONResponse) VisitDeleteNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetNotificationChannelRequestObject struct {
+	ChannelId string `json:"channelId"`
+	Params    GetNotificationChannelParams
+}
+
+type GetNotificationChannelResponseObject interface {
+	VisitGetNotificationChannelResponse(w http.ResponseWriter) error
+}
+
+type GetNotificationChannel200JSONResponse NotificationChannel
+
+func (response GetNotificationChannel200JSONResponse) VisitGetNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetNotificationChannel403JSONResponse Error
+
+func (response GetNotificationChannel403JSONResponse) VisitGetNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetNotificationChannel404JSONResponse Error
+
+func (response GetNotificationChannel404JSONResponse) VisitGetNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetNotificationChanneldefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetNotificationChanneldefaultJSONResponse) VisitGetNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type UpdateNotificationChannelRequestObject struct {
+	ChannelId string `json:"channelId"`
+	Params    UpdateNotificationChannelParams
+	Body      *UpdateNotificationChannelJSONRequestBody
+}
+
+type UpdateNotificationChannelResponseObject interface {
+	VisitUpdateNotificationChannelResponse(w http.ResponseWriter) error
+}
+
+type UpdateNotificationChannel200JSONResponse NotificationChannel
+
+func (response UpdateNotificationChannel200JSONResponse) VisitUpdateNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateNotificationChannel400JSONResponse Error
+
+func (response UpdateNotificationChannel400JSONResponse) VisitUpdateNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateNotificationChannel403JSONResponse Error
+
+func (response UpdateNotificationChannel403JSONResponse) VisitUpdateNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateNotificationChannel404JSONResponse Error
+
+func (response UpdateNotificationChannel404JSONResponse) VisitUpdateNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateNotificationChanneldefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateNotificationChanneldefaultJSONResponse) VisitUpdateNotificationChannelResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type ListNotificationRoutesRequestObject struct {
+	Params ListNotificationRoutesParams
+}
+
+type ListNotificationRoutesResponseObject interface {
+	VisitListNotificationRoutesResponse(w http.ResponseWriter) error
+}
+
+type ListNotificationRoutes200JSONResponse NotificationRouteSetListResponse
+
+func (response ListNotificationRoutes200JSONResponse) VisitListNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListNotificationRoutes403JSONResponse Error
+
+func (response ListNotificationRoutes403JSONResponse) VisitListNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListNotificationRoutesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListNotificationRoutesdefaultJSONResponse) VisitListNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetGlobalNotificationRoutesRequestObject struct {
+	Params GetGlobalNotificationRoutesParams
+}
+
+type GetGlobalNotificationRoutesResponseObject interface {
+	VisitGetGlobalNotificationRoutesResponse(w http.ResponseWriter) error
+}
+
+type GetGlobalNotificationRoutes200JSONResponse NotificationRouteSet
+
+func (response GetGlobalNotificationRoutes200JSONResponse) VisitGetGlobalNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetGlobalNotificationRoutes403JSONResponse Error
+
+func (response GetGlobalNotificationRoutes403JSONResponse) VisitGetGlobalNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetGlobalNotificationRoutesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetGlobalNotificationRoutesdefaultJSONResponse) VisitGetGlobalNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type UpdateGlobalNotificationRoutesRequestObject struct {
+	Params UpdateGlobalNotificationRoutesParams
+	Body   *UpdateGlobalNotificationRoutesJSONRequestBody
+}
+
+type UpdateGlobalNotificationRoutesResponseObject interface {
+	VisitUpdateGlobalNotificationRoutesResponse(w http.ResponseWriter) error
+}
+
+type UpdateGlobalNotificationRoutes200JSONResponse NotificationRouteSet
+
+func (response UpdateGlobalNotificationRoutes200JSONResponse) VisitUpdateGlobalNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateGlobalNotificationRoutes400JSONResponse Error
+
+func (response UpdateGlobalNotificationRoutes400JSONResponse) VisitUpdateGlobalNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateGlobalNotificationRoutes403JSONResponse Error
+
+func (response UpdateGlobalNotificationRoutes403JSONResponse) VisitUpdateGlobalNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateGlobalNotificationRoutes404JSONResponse Error
+
+func (response UpdateGlobalNotificationRoutes404JSONResponse) VisitUpdateGlobalNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateGlobalNotificationRoutesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateGlobalNotificationRoutesdefaultJSONResponse) VisitUpdateGlobalNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetWorkspaceNotificationRoutesRequestObject struct {
+	WorkspaceName WorkspaceName `json:"workspaceName"`
+	Params        GetWorkspaceNotificationRoutesParams
+}
+
+type GetWorkspaceNotificationRoutesResponseObject interface {
+	VisitGetWorkspaceNotificationRoutesResponse(w http.ResponseWriter) error
+}
+
+type GetWorkspaceNotificationRoutes200JSONResponse NotificationRouteSet
+
+func (response GetWorkspaceNotificationRoutes200JSONResponse) VisitGetWorkspaceNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkspaceNotificationRoutes403JSONResponse Error
+
+func (response GetWorkspaceNotificationRoutes403JSONResponse) VisitGetWorkspaceNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkspaceNotificationRoutes404JSONResponse Error
+
+func (response GetWorkspaceNotificationRoutes404JSONResponse) VisitGetWorkspaceNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkspaceNotificationRoutesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetWorkspaceNotificationRoutesdefaultJSONResponse) VisitGetWorkspaceNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type UpdateWorkspaceNotificationRoutesRequestObject struct {
+	WorkspaceName WorkspaceName `json:"workspaceName"`
+	Params        UpdateWorkspaceNotificationRoutesParams
+	Body          *UpdateWorkspaceNotificationRoutesJSONRequestBody
+}
+
+type UpdateWorkspaceNotificationRoutesResponseObject interface {
+	VisitUpdateWorkspaceNotificationRoutesResponse(w http.ResponseWriter) error
+}
+
+type UpdateWorkspaceNotificationRoutes200JSONResponse NotificationRouteSet
+
+func (response UpdateWorkspaceNotificationRoutes200JSONResponse) VisitUpdateWorkspaceNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceNotificationRoutes400JSONResponse Error
+
+func (response UpdateWorkspaceNotificationRoutes400JSONResponse) VisitUpdateWorkspaceNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceNotificationRoutes403JSONResponse Error
+
+func (response UpdateWorkspaceNotificationRoutes403JSONResponse) VisitUpdateWorkspaceNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceNotificationRoutes404JSONResponse Error
+
+func (response UpdateWorkspaceNotificationRoutes404JSONResponse) VisitUpdateWorkspaceNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceNotificationRoutesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateWorkspaceNotificationRoutesdefaultJSONResponse) VisitUpdateWorkspaceNotificationRoutesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetNotificationSettingsRequestObject struct {
+	Params GetNotificationSettingsParams
+}
+
+type GetNotificationSettingsResponseObject interface {
+	VisitGetNotificationSettingsResponse(w http.ResponseWriter) error
+}
+
+type GetNotificationSettings200JSONResponse NotificationWorkspaceSettings
+
+func (response GetNotificationSettings200JSONResponse) VisitGetNotificationSettingsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetNotificationSettingsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetNotificationSettingsdefaultJSONResponse) VisitGetNotificationSettingsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type UpdateNotificationSettingsRequestObject struct {
+	Params UpdateNotificationSettingsParams
+	Body   *UpdateNotificationSettingsJSONRequestBody
+}
+
+type UpdateNotificationSettingsResponseObject interface {
+	VisitUpdateNotificationSettingsResponse(w http.ResponseWriter) error
+}
+
+type UpdateNotificationSettings200JSONResponse NotificationWorkspaceSettings
+
+func (response UpdateNotificationSettings200JSONResponse) VisitUpdateNotificationSettingsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateNotificationSettings400JSONResponse Error
+
+func (response UpdateNotificationSettings400JSONResponse) VisitUpdateNotificationSettingsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateNotificationSettingsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateNotificationSettingsdefaultJSONResponse) VisitUpdateNotificationSettingsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
 type GetOpenapiJsonRequestObject struct {
 }
 
@@ -19064,6 +27826,1085 @@ type GetOpenapiJsondefaultJSONResponse struct {
 }
 
 func (response GetOpenapiJsondefaultJSONResponse) VisitGetOpenapiJsonResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type ListRuntimeProfilesRequestObject struct {
+	Params ListRuntimeProfilesParams
+}
+
+type ListRuntimeProfilesResponseObject interface {
+	VisitListRuntimeProfilesResponse(w http.ResponseWriter) error
+}
+
+type ListRuntimeProfiles200JSONResponse RuntimeProfileListResponse
+
+func (response ListRuntimeProfiles200JSONResponse) VisitListRuntimeProfilesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListRuntimeProfiles401JSONResponse Error
+
+func (response ListRuntimeProfiles401JSONResponse) VisitListRuntimeProfilesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListRuntimeProfiles403JSONResponse Error
+
+func (response ListRuntimeProfiles403JSONResponse) VisitListRuntimeProfilesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListRuntimeProfilesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListRuntimeProfilesdefaultJSONResponse) VisitListRuntimeProfilesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type CreateRuntimeProfileRequestObject struct {
+	Params CreateRuntimeProfileParams
+	Body   *CreateRuntimeProfileJSONRequestBody
+}
+
+type CreateRuntimeProfileResponseObject interface {
+	VisitCreateRuntimeProfileResponse(w http.ResponseWriter) error
+}
+
+type CreateRuntimeProfile201JSONResponse RuntimeProfileResponse
+
+func (response CreateRuntimeProfile201JSONResponse) VisitCreateRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateRuntimeProfile400JSONResponse Error
+
+func (response CreateRuntimeProfile400JSONResponse) VisitCreateRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateRuntimeProfile401JSONResponse Error
+
+func (response CreateRuntimeProfile401JSONResponse) VisitCreateRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateRuntimeProfile403JSONResponse Error
+
+func (response CreateRuntimeProfile403JSONResponse) VisitCreateRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateRuntimeProfile409JSONResponse Error
+
+func (response CreateRuntimeProfile409JSONResponse) VisitCreateRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateRuntimeProfiledefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CreateRuntimeProfiledefaultJSONResponse) VisitCreateRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetGlobalRuntimeProfileDefaultsRequestObject struct {
+	Params GetGlobalRuntimeProfileDefaultsParams
+}
+
+type GetGlobalRuntimeProfileDefaultsResponseObject interface {
+	VisitGetGlobalRuntimeProfileDefaultsResponse(w http.ResponseWriter) error
+}
+
+type GetGlobalRuntimeProfileDefaults200JSONResponse InheritedRuntimeProfileResponse
+
+func (response GetGlobalRuntimeProfileDefaults200JSONResponse) VisitGetGlobalRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetGlobalRuntimeProfileDefaults401JSONResponse Error
+
+func (response GetGlobalRuntimeProfileDefaults401JSONResponse) VisitGetGlobalRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetGlobalRuntimeProfileDefaults403JSONResponse Error
+
+func (response GetGlobalRuntimeProfileDefaults403JSONResponse) VisitGetGlobalRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetGlobalRuntimeProfileDefaultsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetGlobalRuntimeProfileDefaultsdefaultJSONResponse) VisitGetGlobalRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type UpdateGlobalRuntimeProfileDefaultsRequestObject struct {
+	Params UpdateGlobalRuntimeProfileDefaultsParams
+	Body   *UpdateGlobalRuntimeProfileDefaultsJSONRequestBody
+}
+
+type UpdateGlobalRuntimeProfileDefaultsResponseObject interface {
+	VisitUpdateGlobalRuntimeProfileDefaultsResponse(w http.ResponseWriter) error
+}
+
+type UpdateGlobalRuntimeProfileDefaults200JSONResponse InheritedRuntimeProfileResponse
+
+func (response UpdateGlobalRuntimeProfileDefaults200JSONResponse) VisitUpdateGlobalRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateGlobalRuntimeProfileDefaults400JSONResponse Error
+
+func (response UpdateGlobalRuntimeProfileDefaults400JSONResponse) VisitUpdateGlobalRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateGlobalRuntimeProfileDefaults401JSONResponse Error
+
+func (response UpdateGlobalRuntimeProfileDefaults401JSONResponse) VisitUpdateGlobalRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateGlobalRuntimeProfileDefaults403JSONResponse Error
+
+func (response UpdateGlobalRuntimeProfileDefaults403JSONResponse) VisitUpdateGlobalRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateGlobalRuntimeProfileDefaultsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateGlobalRuntimeProfileDefaultsdefaultJSONResponse) VisitUpdateGlobalRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type DeleteGlobalRuntimeProfileDefaultEntryRequestObject struct {
+	Key    RuntimeProfileKey `json:"key"`
+	Params DeleteGlobalRuntimeProfileDefaultEntryParams
+}
+
+type DeleteGlobalRuntimeProfileDefaultEntryResponseObject interface {
+	VisitDeleteGlobalRuntimeProfileDefaultEntryResponse(w http.ResponseWriter) error
+}
+
+type DeleteGlobalRuntimeProfileDefaultEntry204Response struct {
+}
+
+func (response DeleteGlobalRuntimeProfileDefaultEntry204Response) VisitDeleteGlobalRuntimeProfileDefaultEntryResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteGlobalRuntimeProfileDefaultEntry400JSONResponse Error
+
+func (response DeleteGlobalRuntimeProfileDefaultEntry400JSONResponse) VisitDeleteGlobalRuntimeProfileDefaultEntryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteGlobalRuntimeProfileDefaultEntry401JSONResponse Error
+
+func (response DeleteGlobalRuntimeProfileDefaultEntry401JSONResponse) VisitDeleteGlobalRuntimeProfileDefaultEntryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteGlobalRuntimeProfileDefaultEntry403JSONResponse Error
+
+func (response DeleteGlobalRuntimeProfileDefaultEntry403JSONResponse) VisitDeleteGlobalRuntimeProfileDefaultEntryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteGlobalRuntimeProfileDefaultEntry404JSONResponse Error
+
+func (response DeleteGlobalRuntimeProfileDefaultEntry404JSONResponse) VisitDeleteGlobalRuntimeProfileDefaultEntryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetGlobalRuntimeProfileDefaultSecretRequestObject struct {
+	Key    RuntimeProfileKey `json:"key"`
+	Params SetGlobalRuntimeProfileDefaultSecretParams
+	Body   *SetGlobalRuntimeProfileDefaultSecretJSONRequestBody
+}
+
+type SetGlobalRuntimeProfileDefaultSecretResponseObject interface {
+	VisitSetGlobalRuntimeProfileDefaultSecretResponse(w http.ResponseWriter) error
+}
+
+type SetGlobalRuntimeProfileDefaultSecret200JSONResponse InheritedRuntimeProfileResponse
+
+func (response SetGlobalRuntimeProfileDefaultSecret200JSONResponse) VisitSetGlobalRuntimeProfileDefaultSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetGlobalRuntimeProfileDefaultSecret400JSONResponse Error
+
+func (response SetGlobalRuntimeProfileDefaultSecret400JSONResponse) VisitSetGlobalRuntimeProfileDefaultSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetGlobalRuntimeProfileDefaultSecret401JSONResponse Error
+
+func (response SetGlobalRuntimeProfileDefaultSecret401JSONResponse) VisitSetGlobalRuntimeProfileDefaultSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetGlobalRuntimeProfileDefaultSecret403JSONResponse Error
+
+func (response SetGlobalRuntimeProfileDefaultSecret403JSONResponse) VisitSetGlobalRuntimeProfileDefaultSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetGlobalRuntimeProfileDefaultSecretdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetGlobalRuntimeProfileDefaultSecretdefaultJSONResponse) VisitSetGlobalRuntimeProfileDefaultSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type SetGlobalRuntimeProfileDefaultVariableRequestObject struct {
+	Key    RuntimeProfileKey `json:"key"`
+	Params SetGlobalRuntimeProfileDefaultVariableParams
+	Body   *SetGlobalRuntimeProfileDefaultVariableJSONRequestBody
+}
+
+type SetGlobalRuntimeProfileDefaultVariableResponseObject interface {
+	VisitSetGlobalRuntimeProfileDefaultVariableResponse(w http.ResponseWriter) error
+}
+
+type SetGlobalRuntimeProfileDefaultVariable200JSONResponse InheritedRuntimeProfileResponse
+
+func (response SetGlobalRuntimeProfileDefaultVariable200JSONResponse) VisitSetGlobalRuntimeProfileDefaultVariableResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetGlobalRuntimeProfileDefaultVariable400JSONResponse Error
+
+func (response SetGlobalRuntimeProfileDefaultVariable400JSONResponse) VisitSetGlobalRuntimeProfileDefaultVariableResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetGlobalRuntimeProfileDefaultVariable401JSONResponse Error
+
+func (response SetGlobalRuntimeProfileDefaultVariable401JSONResponse) VisitSetGlobalRuntimeProfileDefaultVariableResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetGlobalRuntimeProfileDefaultVariable403JSONResponse Error
+
+func (response SetGlobalRuntimeProfileDefaultVariable403JSONResponse) VisitSetGlobalRuntimeProfileDefaultVariableResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetGlobalRuntimeProfileDefaultVariabledefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetGlobalRuntimeProfileDefaultVariabledefaultJSONResponse) VisitSetGlobalRuntimeProfileDefaultVariableResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetWorkspaceRuntimeProfileDefaultsRequestObject struct {
+	WorkspaceName WorkspaceName `json:"workspaceName"`
+	Params        GetWorkspaceRuntimeProfileDefaultsParams
+}
+
+type GetWorkspaceRuntimeProfileDefaultsResponseObject interface {
+	VisitGetWorkspaceRuntimeProfileDefaultsResponse(w http.ResponseWriter) error
+}
+
+type GetWorkspaceRuntimeProfileDefaults200JSONResponse InheritedRuntimeProfileResponse
+
+func (response GetWorkspaceRuntimeProfileDefaults200JSONResponse) VisitGetWorkspaceRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkspaceRuntimeProfileDefaults400JSONResponse Error
+
+func (response GetWorkspaceRuntimeProfileDefaults400JSONResponse) VisitGetWorkspaceRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkspaceRuntimeProfileDefaults401JSONResponse Error
+
+func (response GetWorkspaceRuntimeProfileDefaults401JSONResponse) VisitGetWorkspaceRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkspaceRuntimeProfileDefaults403JSONResponse Error
+
+func (response GetWorkspaceRuntimeProfileDefaults403JSONResponse) VisitGetWorkspaceRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkspaceRuntimeProfileDefaults404JSONResponse Error
+
+func (response GetWorkspaceRuntimeProfileDefaults404JSONResponse) VisitGetWorkspaceRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkspaceRuntimeProfileDefaultsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetWorkspaceRuntimeProfileDefaultsdefaultJSONResponse) VisitGetWorkspaceRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type UpdateWorkspaceRuntimeProfileDefaultsRequestObject struct {
+	WorkspaceName WorkspaceName `json:"workspaceName"`
+	Params        UpdateWorkspaceRuntimeProfileDefaultsParams
+	Body          *UpdateWorkspaceRuntimeProfileDefaultsJSONRequestBody
+}
+
+type UpdateWorkspaceRuntimeProfileDefaultsResponseObject interface {
+	VisitUpdateWorkspaceRuntimeProfileDefaultsResponse(w http.ResponseWriter) error
+}
+
+type UpdateWorkspaceRuntimeProfileDefaults200JSONResponse InheritedRuntimeProfileResponse
+
+func (response UpdateWorkspaceRuntimeProfileDefaults200JSONResponse) VisitUpdateWorkspaceRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceRuntimeProfileDefaults400JSONResponse Error
+
+func (response UpdateWorkspaceRuntimeProfileDefaults400JSONResponse) VisitUpdateWorkspaceRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceRuntimeProfileDefaults401JSONResponse Error
+
+func (response UpdateWorkspaceRuntimeProfileDefaults401JSONResponse) VisitUpdateWorkspaceRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceRuntimeProfileDefaults403JSONResponse Error
+
+func (response UpdateWorkspaceRuntimeProfileDefaults403JSONResponse) VisitUpdateWorkspaceRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceRuntimeProfileDefaults404JSONResponse Error
+
+func (response UpdateWorkspaceRuntimeProfileDefaults404JSONResponse) VisitUpdateWorkspaceRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceRuntimeProfileDefaultsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateWorkspaceRuntimeProfileDefaultsdefaultJSONResponse) VisitUpdateWorkspaceRuntimeProfileDefaultsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type DeleteWorkspaceRuntimeProfileDefaultEntryRequestObject struct {
+	WorkspaceName WorkspaceName     `json:"workspaceName"`
+	Key           RuntimeProfileKey `json:"key"`
+	Params        DeleteWorkspaceRuntimeProfileDefaultEntryParams
+}
+
+type DeleteWorkspaceRuntimeProfileDefaultEntryResponseObject interface {
+	VisitDeleteWorkspaceRuntimeProfileDefaultEntryResponse(w http.ResponseWriter) error
+}
+
+type DeleteWorkspaceRuntimeProfileDefaultEntry204Response struct {
+}
+
+func (response DeleteWorkspaceRuntimeProfileDefaultEntry204Response) VisitDeleteWorkspaceRuntimeProfileDefaultEntryResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteWorkspaceRuntimeProfileDefaultEntry400JSONResponse Error
+
+func (response DeleteWorkspaceRuntimeProfileDefaultEntry400JSONResponse) VisitDeleteWorkspaceRuntimeProfileDefaultEntryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteWorkspaceRuntimeProfileDefaultEntry401JSONResponse Error
+
+func (response DeleteWorkspaceRuntimeProfileDefaultEntry401JSONResponse) VisitDeleteWorkspaceRuntimeProfileDefaultEntryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteWorkspaceRuntimeProfileDefaultEntry403JSONResponse Error
+
+func (response DeleteWorkspaceRuntimeProfileDefaultEntry403JSONResponse) VisitDeleteWorkspaceRuntimeProfileDefaultEntryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteWorkspaceRuntimeProfileDefaultEntry404JSONResponse Error
+
+func (response DeleteWorkspaceRuntimeProfileDefaultEntry404JSONResponse) VisitDeleteWorkspaceRuntimeProfileDefaultEntryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetWorkspaceRuntimeProfileDefaultSecretRequestObject struct {
+	WorkspaceName WorkspaceName     `json:"workspaceName"`
+	Key           RuntimeProfileKey `json:"key"`
+	Params        SetWorkspaceRuntimeProfileDefaultSecretParams
+	Body          *SetWorkspaceRuntimeProfileDefaultSecretJSONRequestBody
+}
+
+type SetWorkspaceRuntimeProfileDefaultSecretResponseObject interface {
+	VisitSetWorkspaceRuntimeProfileDefaultSecretResponse(w http.ResponseWriter) error
+}
+
+type SetWorkspaceRuntimeProfileDefaultSecret200JSONResponse InheritedRuntimeProfileResponse
+
+func (response SetWorkspaceRuntimeProfileDefaultSecret200JSONResponse) VisitSetWorkspaceRuntimeProfileDefaultSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetWorkspaceRuntimeProfileDefaultSecret400JSONResponse Error
+
+func (response SetWorkspaceRuntimeProfileDefaultSecret400JSONResponse) VisitSetWorkspaceRuntimeProfileDefaultSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetWorkspaceRuntimeProfileDefaultSecret401JSONResponse Error
+
+func (response SetWorkspaceRuntimeProfileDefaultSecret401JSONResponse) VisitSetWorkspaceRuntimeProfileDefaultSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetWorkspaceRuntimeProfileDefaultSecret403JSONResponse Error
+
+func (response SetWorkspaceRuntimeProfileDefaultSecret403JSONResponse) VisitSetWorkspaceRuntimeProfileDefaultSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetWorkspaceRuntimeProfileDefaultSecret404JSONResponse Error
+
+func (response SetWorkspaceRuntimeProfileDefaultSecret404JSONResponse) VisitSetWorkspaceRuntimeProfileDefaultSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetWorkspaceRuntimeProfileDefaultSecretdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetWorkspaceRuntimeProfileDefaultSecretdefaultJSONResponse) VisitSetWorkspaceRuntimeProfileDefaultSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type SetWorkspaceRuntimeProfileDefaultVariableRequestObject struct {
+	WorkspaceName WorkspaceName     `json:"workspaceName"`
+	Key           RuntimeProfileKey `json:"key"`
+	Params        SetWorkspaceRuntimeProfileDefaultVariableParams
+	Body          *SetWorkspaceRuntimeProfileDefaultVariableJSONRequestBody
+}
+
+type SetWorkspaceRuntimeProfileDefaultVariableResponseObject interface {
+	VisitSetWorkspaceRuntimeProfileDefaultVariableResponse(w http.ResponseWriter) error
+}
+
+type SetWorkspaceRuntimeProfileDefaultVariable200JSONResponse InheritedRuntimeProfileResponse
+
+func (response SetWorkspaceRuntimeProfileDefaultVariable200JSONResponse) VisitSetWorkspaceRuntimeProfileDefaultVariableResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetWorkspaceRuntimeProfileDefaultVariable400JSONResponse Error
+
+func (response SetWorkspaceRuntimeProfileDefaultVariable400JSONResponse) VisitSetWorkspaceRuntimeProfileDefaultVariableResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetWorkspaceRuntimeProfileDefaultVariable401JSONResponse Error
+
+func (response SetWorkspaceRuntimeProfileDefaultVariable401JSONResponse) VisitSetWorkspaceRuntimeProfileDefaultVariableResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetWorkspaceRuntimeProfileDefaultVariable403JSONResponse Error
+
+func (response SetWorkspaceRuntimeProfileDefaultVariable403JSONResponse) VisitSetWorkspaceRuntimeProfileDefaultVariableResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetWorkspaceRuntimeProfileDefaultVariable404JSONResponse Error
+
+func (response SetWorkspaceRuntimeProfileDefaultVariable404JSONResponse) VisitSetWorkspaceRuntimeProfileDefaultVariableResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetWorkspaceRuntimeProfileDefaultVariabledefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetWorkspaceRuntimeProfileDefaultVariabledefaultJSONResponse) VisitSetWorkspaceRuntimeProfileDefaultVariableResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type DeleteRuntimeProfileRequestObject struct {
+	ProfileName RuntimeProfileName `json:"profileName"`
+	Params      DeleteRuntimeProfileParams
+}
+
+type DeleteRuntimeProfileResponseObject interface {
+	VisitDeleteRuntimeProfileResponse(w http.ResponseWriter) error
+}
+
+type DeleteRuntimeProfile204Response struct {
+}
+
+func (response DeleteRuntimeProfile204Response) VisitDeleteRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteRuntimeProfile401JSONResponse Error
+
+func (response DeleteRuntimeProfile401JSONResponse) VisitDeleteRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteRuntimeProfile403JSONResponse Error
+
+func (response DeleteRuntimeProfile403JSONResponse) VisitDeleteRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteRuntimeProfile404JSONResponse Error
+
+func (response DeleteRuntimeProfile404JSONResponse) VisitDeleteRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteRuntimeProfiledefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DeleteRuntimeProfiledefaultJSONResponse) VisitDeleteRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetRuntimeProfileRequestObject struct {
+	ProfileName RuntimeProfileName `json:"profileName"`
+	Params      GetRuntimeProfileParams
+}
+
+type GetRuntimeProfileResponseObject interface {
+	VisitGetRuntimeProfileResponse(w http.ResponseWriter) error
+}
+
+type GetRuntimeProfile200JSONResponse RuntimeProfileResponse
+
+func (response GetRuntimeProfile200JSONResponse) VisitGetRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetRuntimeProfile401JSONResponse Error
+
+func (response GetRuntimeProfile401JSONResponse) VisitGetRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetRuntimeProfile403JSONResponse Error
+
+func (response GetRuntimeProfile403JSONResponse) VisitGetRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetRuntimeProfile404JSONResponse Error
+
+func (response GetRuntimeProfile404JSONResponse) VisitGetRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetRuntimeProfiledefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetRuntimeProfiledefaultJSONResponse) VisitGetRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type UpdateRuntimeProfileRequestObject struct {
+	ProfileName RuntimeProfileName `json:"profileName"`
+	Params      UpdateRuntimeProfileParams
+	Body        *UpdateRuntimeProfileJSONRequestBody
+}
+
+type UpdateRuntimeProfileResponseObject interface {
+	VisitUpdateRuntimeProfileResponse(w http.ResponseWriter) error
+}
+
+type UpdateRuntimeProfile200JSONResponse RuntimeProfileResponse
+
+func (response UpdateRuntimeProfile200JSONResponse) VisitUpdateRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateRuntimeProfile400JSONResponse Error
+
+func (response UpdateRuntimeProfile400JSONResponse) VisitUpdateRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateRuntimeProfile401JSONResponse Error
+
+func (response UpdateRuntimeProfile401JSONResponse) VisitUpdateRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateRuntimeProfile403JSONResponse Error
+
+func (response UpdateRuntimeProfile403JSONResponse) VisitUpdateRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateRuntimeProfile404JSONResponse Error
+
+func (response UpdateRuntimeProfile404JSONResponse) VisitUpdateRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateRuntimeProfiledefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateRuntimeProfiledefaultJSONResponse) VisitUpdateRuntimeProfileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type DeleteRuntimeProfileEntryRequestObject struct {
+	ProfileName RuntimeProfileName `json:"profileName"`
+	Key         RuntimeProfileKey  `json:"key"`
+	Params      DeleteRuntimeProfileEntryParams
+}
+
+type DeleteRuntimeProfileEntryResponseObject interface {
+	VisitDeleteRuntimeProfileEntryResponse(w http.ResponseWriter) error
+}
+
+type DeleteRuntimeProfileEntry204Response struct {
+}
+
+func (response DeleteRuntimeProfileEntry204Response) VisitDeleteRuntimeProfileEntryResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteRuntimeProfileEntry400JSONResponse Error
+
+func (response DeleteRuntimeProfileEntry400JSONResponse) VisitDeleteRuntimeProfileEntryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteRuntimeProfileEntry401JSONResponse Error
+
+func (response DeleteRuntimeProfileEntry401JSONResponse) VisitDeleteRuntimeProfileEntryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteRuntimeProfileEntry403JSONResponse Error
+
+func (response DeleteRuntimeProfileEntry403JSONResponse) VisitDeleteRuntimeProfileEntryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteRuntimeProfileEntry404JSONResponse Error
+
+func (response DeleteRuntimeProfileEntry404JSONResponse) VisitDeleteRuntimeProfileEntryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetRuntimeProfileSecretRequestObject struct {
+	ProfileName RuntimeProfileName `json:"profileName"`
+	Key         RuntimeProfileKey  `json:"key"`
+	Params      SetRuntimeProfileSecretParams
+	Body        *SetRuntimeProfileSecretJSONRequestBody
+}
+
+type SetRuntimeProfileSecretResponseObject interface {
+	VisitSetRuntimeProfileSecretResponse(w http.ResponseWriter) error
+}
+
+type SetRuntimeProfileSecret200JSONResponse RuntimeProfileResponse
+
+func (response SetRuntimeProfileSecret200JSONResponse) VisitSetRuntimeProfileSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetRuntimeProfileSecret400JSONResponse Error
+
+func (response SetRuntimeProfileSecret400JSONResponse) VisitSetRuntimeProfileSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetRuntimeProfileSecret401JSONResponse Error
+
+func (response SetRuntimeProfileSecret401JSONResponse) VisitSetRuntimeProfileSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetRuntimeProfileSecret403JSONResponse Error
+
+func (response SetRuntimeProfileSecret403JSONResponse) VisitSetRuntimeProfileSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetRuntimeProfileSecret404JSONResponse Error
+
+func (response SetRuntimeProfileSecret404JSONResponse) VisitSetRuntimeProfileSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetRuntimeProfileSecretdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetRuntimeProfileSecretdefaultJSONResponse) VisitSetRuntimeProfileSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type SetRuntimeProfileVariableRequestObject struct {
+	ProfileName RuntimeProfileName `json:"profileName"`
+	Key         RuntimeProfileKey  `json:"key"`
+	Params      SetRuntimeProfileVariableParams
+	Body        *SetRuntimeProfileVariableJSONRequestBody
+}
+
+type SetRuntimeProfileVariableResponseObject interface {
+	VisitSetRuntimeProfileVariableResponse(w http.ResponseWriter) error
+}
+
+type SetRuntimeProfileVariable200JSONResponse RuntimeProfileResponse
+
+func (response SetRuntimeProfileVariable200JSONResponse) VisitSetRuntimeProfileVariableResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetRuntimeProfileVariable400JSONResponse Error
+
+func (response SetRuntimeProfileVariable400JSONResponse) VisitSetRuntimeProfileVariableResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetRuntimeProfileVariable401JSONResponse Error
+
+func (response SetRuntimeProfileVariable401JSONResponse) VisitSetRuntimeProfileVariableResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetRuntimeProfileVariable403JSONResponse Error
+
+func (response SetRuntimeProfileVariable403JSONResponse) VisitSetRuntimeProfileVariableResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetRuntimeProfileVariable404JSONResponse Error
+
+func (response SetRuntimeProfileVariable404JSONResponse) VisitSetRuntimeProfileVariableResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type SetRuntimeProfileVariabledefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetRuntimeProfileVariabledefaultJSONResponse) VisitSetRuntimeProfileVariableResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
 
@@ -19539,6 +29380,480 @@ type SearchDocMatchesdefaultJSONResponse struct {
 }
 
 func (response SearchDocMatchesdefaultJSONResponse) VisitSearchDocMatchesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type ListSecretsRequestObject struct {
+	Params ListSecretsParams
+}
+
+type ListSecretsResponseObject interface {
+	VisitListSecretsResponse(w http.ResponseWriter) error
+}
+
+type ListSecrets200JSONResponse SecretListResponse
+
+func (response ListSecrets200JSONResponse) VisitListSecretsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListSecrets401JSONResponse Error
+
+func (response ListSecrets401JSONResponse) VisitListSecretsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListSecrets403JSONResponse Error
+
+func (response ListSecrets403JSONResponse) VisitListSecretsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListSecretsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListSecretsdefaultJSONResponse) VisitListSecretsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type CreateSecretRequestObject struct {
+	Params CreateSecretParams
+	Body   *CreateSecretJSONRequestBody
+}
+
+type CreateSecretResponseObject interface {
+	VisitCreateSecretResponse(w http.ResponseWriter) error
+}
+
+type CreateSecret201JSONResponse SecretResponse
+
+func (response CreateSecret201JSONResponse) VisitCreateSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateSecret400JSONResponse Error
+
+func (response CreateSecret400JSONResponse) VisitCreateSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateSecret401JSONResponse Error
+
+func (response CreateSecret401JSONResponse) VisitCreateSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateSecret403JSONResponse Error
+
+func (response CreateSecret403JSONResponse) VisitCreateSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateSecret409JSONResponse Error
+
+func (response CreateSecret409JSONResponse) VisitCreateSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateSecretdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CreateSecretdefaultJSONResponse) VisitCreateSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type DeleteSecretRequestObject struct {
+	SecretId string `json:"secretId"`
+	Params   DeleteSecretParams
+}
+
+type DeleteSecretResponseObject interface {
+	VisitDeleteSecretResponse(w http.ResponseWriter) error
+}
+
+type DeleteSecret204Response struct {
+}
+
+func (response DeleteSecret204Response) VisitDeleteSecretResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteSecret401JSONResponse Error
+
+func (response DeleteSecret401JSONResponse) VisitDeleteSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteSecret403JSONResponse Error
+
+func (response DeleteSecret403JSONResponse) VisitDeleteSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteSecret404JSONResponse Error
+
+func (response DeleteSecret404JSONResponse) VisitDeleteSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteSecretdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DeleteSecretdefaultJSONResponse) VisitDeleteSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetSecretRequestObject struct {
+	SecretId string `json:"secretId"`
+	Params   GetSecretParams
+}
+
+type GetSecretResponseObject interface {
+	VisitGetSecretResponse(w http.ResponseWriter) error
+}
+
+type GetSecret200JSONResponse SecretResponse
+
+func (response GetSecret200JSONResponse) VisitGetSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSecret401JSONResponse Error
+
+func (response GetSecret401JSONResponse) VisitGetSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSecret403JSONResponse Error
+
+func (response GetSecret403JSONResponse) VisitGetSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSecret404JSONResponse Error
+
+func (response GetSecret404JSONResponse) VisitGetSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSecretdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetSecretdefaultJSONResponse) VisitGetSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type UpdateSecretRequestObject struct {
+	SecretId string `json:"secretId"`
+	Params   UpdateSecretParams
+	Body     *UpdateSecretJSONRequestBody
+}
+
+type UpdateSecretResponseObject interface {
+	VisitUpdateSecretResponse(w http.ResponseWriter) error
+}
+
+type UpdateSecret200JSONResponse SecretResponse
+
+func (response UpdateSecret200JSONResponse) VisitUpdateSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateSecret400JSONResponse Error
+
+func (response UpdateSecret400JSONResponse) VisitUpdateSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateSecret401JSONResponse Error
+
+func (response UpdateSecret401JSONResponse) VisitUpdateSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateSecret403JSONResponse Error
+
+func (response UpdateSecret403JSONResponse) VisitUpdateSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateSecret404JSONResponse Error
+
+func (response UpdateSecret404JSONResponse) VisitUpdateSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateSecretdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateSecretdefaultJSONResponse) VisitUpdateSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type DisableSecretRequestObject struct {
+	SecretId string `json:"secretId"`
+	Params   DisableSecretParams
+}
+
+type DisableSecretResponseObject interface {
+	VisitDisableSecretResponse(w http.ResponseWriter) error
+}
+
+type DisableSecret200JSONResponse SecretResponse
+
+func (response DisableSecret200JSONResponse) VisitDisableSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DisableSecret401JSONResponse Error
+
+func (response DisableSecret401JSONResponse) VisitDisableSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DisableSecret403JSONResponse Error
+
+func (response DisableSecret403JSONResponse) VisitDisableSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DisableSecret404JSONResponse Error
+
+func (response DisableSecret404JSONResponse) VisitDisableSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DisableSecretdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DisableSecretdefaultJSONResponse) VisitDisableSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type EnableSecretRequestObject struct {
+	SecretId string `json:"secretId"`
+	Params   EnableSecretParams
+}
+
+type EnableSecretResponseObject interface {
+	VisitEnableSecretResponse(w http.ResponseWriter) error
+}
+
+type EnableSecret200JSONResponse SecretResponse
+
+func (response EnableSecret200JSONResponse) VisitEnableSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type EnableSecret401JSONResponse Error
+
+func (response EnableSecret401JSONResponse) VisitEnableSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type EnableSecret403JSONResponse Error
+
+func (response EnableSecret403JSONResponse) VisitEnableSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type EnableSecret404JSONResponse Error
+
+func (response EnableSecret404JSONResponse) VisitEnableSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type EnableSecretdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response EnableSecretdefaultJSONResponse) VisitEnableSecretResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type WriteSecretVersionRequestObject struct {
+	SecretId string `json:"secretId"`
+	Params   WriteSecretVersionParams
+	Body     *WriteSecretVersionJSONRequestBody
+}
+
+type WriteSecretVersionResponseObject interface {
+	VisitWriteSecretVersionResponse(w http.ResponseWriter) error
+}
+
+type WriteSecretVersion200JSONResponse SecretResponse
+
+func (response WriteSecretVersion200JSONResponse) VisitWriteSecretVersionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WriteSecretVersion400JSONResponse Error
+
+func (response WriteSecretVersion400JSONResponse) VisitWriteSecretVersionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WriteSecretVersion401JSONResponse Error
+
+func (response WriteSecretVersion401JSONResponse) VisitWriteSecretVersionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WriteSecretVersion403JSONResponse Error
+
+func (response WriteSecretVersion403JSONResponse) VisitWriteSecretVersionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WriteSecretVersion404JSONResponse Error
+
+func (response WriteSecretVersion404JSONResponse) VisitWriteSecretVersionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WriteSecretVersiondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response WriteSecretVersiondefaultJSONResponse) VisitWriteSecretVersionResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
 
@@ -21086,6 +31401,148 @@ func (response UpdateBaseConfigdefaultJSONResponse) VisitUpdateBaseConfigRespons
 	return json.NewEncoder(w).Encode(response.Body)
 }
 
+type GetWorkspaceBaseConfigRequestObject struct {
+	WorkspaceName WorkspaceName `json:"workspaceName"`
+	Params        GetWorkspaceBaseConfigParams
+}
+
+type GetWorkspaceBaseConfigResponseObject interface {
+	VisitGetWorkspaceBaseConfigResponse(w http.ResponseWriter) error
+}
+
+type GetWorkspaceBaseConfig200JSONResponse struct {
+	// Errors List of validation errors in the configuration
+	Errors []string `json:"errors"`
+
+	// Spec The workspace base configuration in YAML format
+	Spec string `json:"spec"`
+}
+
+func (response GetWorkspaceBaseConfig200JSONResponse) VisitGetWorkspaceBaseConfigResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkspaceBaseConfig400JSONResponse Error
+
+func (response GetWorkspaceBaseConfig400JSONResponse) VisitGetWorkspaceBaseConfigResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkspaceBaseConfig401JSONResponse Error
+
+func (response GetWorkspaceBaseConfig401JSONResponse) VisitGetWorkspaceBaseConfigResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkspaceBaseConfig403JSONResponse Error
+
+func (response GetWorkspaceBaseConfig403JSONResponse) VisitGetWorkspaceBaseConfigResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkspaceBaseConfig404JSONResponse Error
+
+func (response GetWorkspaceBaseConfig404JSONResponse) VisitGetWorkspaceBaseConfigResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkspaceBaseConfigdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetWorkspaceBaseConfigdefaultJSONResponse) VisitGetWorkspaceBaseConfigResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type UpdateWorkspaceBaseConfigRequestObject struct {
+	WorkspaceName WorkspaceName `json:"workspaceName"`
+	Params        UpdateWorkspaceBaseConfigParams
+	Body          *UpdateWorkspaceBaseConfigJSONRequestBody
+}
+
+type UpdateWorkspaceBaseConfigResponseObject interface {
+	VisitUpdateWorkspaceBaseConfigResponse(w http.ResponseWriter) error
+}
+
+type UpdateWorkspaceBaseConfig200JSONResponse struct {
+	// Errors List of validation warnings
+	Errors []string `json:"errors"`
+}
+
+func (response UpdateWorkspaceBaseConfig200JSONResponse) VisitUpdateWorkspaceBaseConfigResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceBaseConfig400JSONResponse Error
+
+func (response UpdateWorkspaceBaseConfig400JSONResponse) VisitUpdateWorkspaceBaseConfigResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceBaseConfig401JSONResponse Error
+
+func (response UpdateWorkspaceBaseConfig401JSONResponse) VisitUpdateWorkspaceBaseConfigResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceBaseConfig403JSONResponse Error
+
+func (response UpdateWorkspaceBaseConfig403JSONResponse) VisitUpdateWorkspaceBaseConfigResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceBaseConfig404JSONResponse Error
+
+func (response UpdateWorkspaceBaseConfig404JSONResponse) VisitUpdateWorkspaceBaseConfigResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateWorkspaceBaseConfigdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateWorkspaceBaseConfigdefaultJSONResponse) VisitUpdateWorkspaceBaseConfigResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
 type SyncCleanupRequestObject struct {
 	Params SyncCleanupParams
 }
@@ -22041,6 +32498,272 @@ func (response ResetUserPassworddefaultJSONResponse) VisitResetUserPasswordRespo
 	return json.NewEncoder(w).Encode(response.Body)
 }
 
+type ListViewsRequestObject struct {
+	Params ListViewsParams
+}
+
+type ListViewsResponseObject interface {
+	VisitListViewsResponse(w http.ResponseWriter) error
+}
+
+type ListViews200JSONResponse ViewListResponse
+
+func (response ListViews200JSONResponse) VisitListViewsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListViews401JSONResponse Error
+
+func (response ListViews401JSONResponse) VisitListViewsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListViewsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListViewsdefaultJSONResponse) VisitListViewsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type CreateViewRequestObject struct {
+	Params CreateViewParams
+	Body   *CreateViewJSONRequestBody
+}
+
+type CreateViewResponseObject interface {
+	VisitCreateViewResponse(w http.ResponseWriter) error
+}
+
+type CreateView201JSONResponse View
+
+func (response CreateView201JSONResponse) VisitCreateViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateView400JSONResponse Error
+
+func (response CreateView400JSONResponse) VisitCreateViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateView401JSONResponse Error
+
+func (response CreateView401JSONResponse) VisitCreateViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateView403JSONResponse Error
+
+func (response CreateView403JSONResponse) VisitCreateViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateViewdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CreateViewdefaultJSONResponse) VisitCreateViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type DeleteViewRequestObject struct {
+	ViewId string `json:"viewId"`
+	Params DeleteViewParams
+}
+
+type DeleteViewResponseObject interface {
+	VisitDeleteViewResponse(w http.ResponseWriter) error
+}
+
+type DeleteView204Response struct {
+}
+
+func (response DeleteView204Response) VisitDeleteViewResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteView401JSONResponse Error
+
+func (response DeleteView401JSONResponse) VisitDeleteViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteView403JSONResponse Error
+
+func (response DeleteView403JSONResponse) VisitDeleteViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteView404JSONResponse Error
+
+func (response DeleteView404JSONResponse) VisitDeleteViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteViewdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DeleteViewdefaultJSONResponse) VisitDeleteViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetViewRequestObject struct {
+	ViewId string `json:"viewId"`
+	Params GetViewParams
+}
+
+type GetViewResponseObject interface {
+	VisitGetViewResponse(w http.ResponseWriter) error
+}
+
+type GetView200JSONResponse View
+
+func (response GetView200JSONResponse) VisitGetViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetView401JSONResponse Error
+
+func (response GetView401JSONResponse) VisitGetViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetView404JSONResponse Error
+
+func (response GetView404JSONResponse) VisitGetViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetViewdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetViewdefaultJSONResponse) VisitGetViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type UpdateViewRequestObject struct {
+	ViewId string `json:"viewId"`
+	Params UpdateViewParams
+	Body   *UpdateViewJSONRequestBody
+}
+
+type UpdateViewResponseObject interface {
+	VisitUpdateViewResponse(w http.ResponseWriter) error
+}
+
+type UpdateView200JSONResponse View
+
+func (response UpdateView200JSONResponse) VisitUpdateViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateView400JSONResponse Error
+
+func (response UpdateView400JSONResponse) VisitUpdateViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateView401JSONResponse Error
+
+func (response UpdateView401JSONResponse) VisitUpdateViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateView403JSONResponse Error
+
+func (response UpdateView403JSONResponse) VisitUpdateViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateView404JSONResponse Error
+
+func (response UpdateView404JSONResponse) VisitUpdateViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateViewdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateViewdefaultJSONResponse) VisitUpdateViewResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
 type ListWebhooksRequestObject struct {
 	Params ListWebhooksParams
 }
@@ -22199,6 +32922,18 @@ func (response ListWorkspaces200JSONResponse) VisitListWorkspacesResponse(w http
 	w.WriteHeader(200)
 
 	return json.NewEncoder(w).Encode(response)
+}
+
+type ListWorkspacesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListWorkspacesdefaultJSONResponse) VisitListWorkspacesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+
+	return json.NewEncoder(w).Encode(response.Body)
 }
 
 type CreateWorkspaceRequestObject struct {
@@ -22389,6 +33124,9 @@ type StrictServerInterface interface {
 	// List all DAG-runs with a specific name
 	// (GET /dag-runs/{name})
 	ListDAGRunsByName(ctx context.Context, request ListDAGRunsByNameRequestObject) (ListDAGRunsByNameResponseObject, error)
+	// Delete a DAG-run
+	// (DELETE /dag-runs/{name}/{dagRunId})
+	DeleteDAGRun(ctx context.Context, request DeleteDAGRunRequestObject) (DeleteDAGRunResponseObject, error)
 	// Retrieve detailed status of a DAG-run
 	// (GET /dag-runs/{name}/{dagRunId})
 	GetDAGRunDetails(ctx context.Context, request GetDAGRunDetailsRequestObject) (GetDAGRunDetailsResponseObject, error)
@@ -22404,6 +33142,12 @@ type StrictServerInterface interface {
 	// Dequeue a queued DAG-run
 	// (GET /dag-runs/{name}/{dagRunId}/dequeue)
 	DequeueDAGRun(ctx context.Context, request DequeueDAGRunRequestObject) (DequeueDAGRunResponseObject, error)
+	// Run edited DAG retry
+	// (POST /dag-runs/{name}/{dagRunId}/edit-retry)
+	EditRetryDAGRun(ctx context.Context, request EditRetryDAGRunRequestObject) (EditRetryDAGRunResponseObject, error)
+	// Preview edited DAG-run retry
+	// (POST /dag-runs/{name}/{dagRunId}/edit-retry/preview)
+	PreviewEditRetryDAGRun(ctx context.Context, request PreviewEditRetryDAGRunRequestObject) (PreviewEditRetryDAGRunResponseObject, error)
 	// Retrieve full execution log of a DAG-run
 	// (GET /dag-runs/{name}/{dagRunId}/log)
 	GetDAGRunLog(ctx context.Context, request GetDAGRunLogRequestObject) (GetDAGRunLogResponseObject, error)
@@ -22497,6 +33241,9 @@ type StrictServerInterface interface {
 	// Create a new DAG definition
 	// (POST /dags)
 	CreateNewDAG(ctx context.Context, request CreateNewDAGRequestObject) (CreateNewDAGResponseObject, error)
+	// List all available DAG labels
+	// (GET /dags/labels)
+	GetAllDAGLabels(ctx context.Context, request GetAllDAGLabelsRequestObject) (GetAllDAGLabelsResponseObject, error)
 	// Search DAGs
 	// (GET /dags/search)
 	SearchDAGs(ctx context.Context, request SearchDAGsRequestObject) (SearchDAGsResponseObject, error)
@@ -22521,9 +33268,39 @@ type StrictServerInterface interface {
 	// Enqueue a DAG-run from DAG
 	// (POST /dags/{fileName}/enqueue)
 	EnqueueDAGDAGRun(ctx context.Context, request EnqueueDAGDAGRunRequestObject) (EnqueueDAGDAGRunResponseObject, error)
+	// Delete DAG incident routing
+	// (DELETE /dags/{fileName}/incidents)
+	DeleteDAGIncidents(ctx context.Context, request DeleteDAGIncidentsRequestObject) (DeleteDAGIncidentsResponseObject, error)
+	// Get DAG incident routing
+	// (GET /dags/{fileName}/incidents)
+	GetDAGIncidents(ctx context.Context, request GetDAGIncidentsRequestObject) (GetDAGIncidentsResponseObject, error)
+	// Update DAG incident routing
+	// (PUT /dags/{fileName}/incidents)
+	UpdateDAGIncidents(ctx context.Context, request UpdateDAGIncidentsRequestObject) (UpdateDAGIncidentsResponseObject, error)
+	// Delete DAG notification settings
+	// (DELETE /dags/{fileName}/notifications)
+	DeleteDAGNotifications(ctx context.Context, request DeleteDAGNotificationsRequestObject) (DeleteDAGNotificationsResponseObject, error)
+	// Get DAG notification settings
+	// (GET /dags/{fileName}/notifications)
+	GetDAGNotifications(ctx context.Context, request GetDAGNotificationsRequestObject) (GetDAGNotificationsResponseObject, error)
+	// Update DAG notification settings
+	// (PUT /dags/{fileName}/notifications)
+	UpdateDAGNotifications(ctx context.Context, request UpdateDAGNotificationsRequestObject) (UpdateDAGNotificationsResponseObject, error)
+	// Send a test DAG notification
+	// (POST /dags/{fileName}/notifications/test)
+	TestDAGNotifications(ctx context.Context, request TestDAGNotificationsRequestObject) (TestDAGNotificationsResponseObject, error)
 	// Change DAG file ID
 	// (POST /dags/{fileName}/rename)
 	RenameDAG(ctx context.Context, request RenameDAGRequestObject) (RenameDAGResponseObject, error)
+	// Delete DAG settings
+	// (DELETE /dags/{fileName}/settings)
+	DeleteDAGSettings(ctx context.Context, request DeleteDAGSettingsRequestObject) (DeleteDAGSettingsResponseObject, error)
+	// Get DAG settings
+	// (GET /dags/{fileName}/settings)
+	GetDAGSettings(ctx context.Context, request GetDAGSettingsRequestObject) (GetDAGSettingsResponseObject, error)
+	// Update DAG settings
+	// (PUT /dags/{fileName}/settings)
+	UpdateDAGSettings(ctx context.Context, request UpdateDAGSettingsRequestObject) (UpdateDAGSettingsResponseObject, error)
 	// Retrieve DAG specification
 	// (GET /dags/{fileName}/spec)
 	GetDAGSpec(ctx context.Context, request GetDAGSpecRequestObject) (GetDAGSpecResponseObject, error)
@@ -22551,6 +33328,18 @@ type StrictServerInterface interface {
 	// Create webhook for DAG
 	// (POST /dags/{fileName}/webhook)
 	CreateDAGWebhook(ctx context.Context, request CreateDAGWebhookRequestObject) (CreateDAGWebhookResponseObject, error)
+	// Configure webhook HMAC
+	// (POST /dags/{fileName}/webhook/hmac/configure)
+	ConfigureDAGWebhookHMAC(ctx context.Context, request ConfigureDAGWebhookHMACRequestObject) (ConfigureDAGWebhookHMACResponseObject, error)
+	// Disable webhook HMAC
+	// (POST /dags/{fileName}/webhook/hmac/disable)
+	DisableDAGWebhookHMAC(ctx context.Context, request DisableDAGWebhookHMACRequestObject) (DisableDAGWebhookHMACResponseObject, error)
+	// Enable webhook HMAC
+	// (POST /dags/{fileName}/webhook/hmac/enable)
+	EnableDAGWebhookHMAC(ctx context.Context, request EnableDAGWebhookHMACRequestObject) (EnableDAGWebhookHMACResponseObject, error)
+	// Regenerate webhook HMAC secret
+	// (POST /dags/{fileName}/webhook/hmac/regenerate)
+	RegenerateDAGWebhookHMACSecret(ctx context.Context, request RegenerateDAGWebhookHMACSecretRequestObject) (RegenerateDAGWebhookHMACSecretResponseObject, error)
 	// Regenerate webhook token
 	// (POST /dags/{fileName}/webhook/regenerate)
 	RegenerateDAGWebhookToken(ctx context.Context, request RegenerateDAGWebhookTokenRequestObject) (RegenerateDAGWebhookTokenResponseObject, error)
@@ -22587,6 +33376,39 @@ type StrictServerInterface interface {
 	// Check server health status
 	// (GET /health)
 	GetHealthStatus(ctx context.Context, request GetHealthStatusRequestObject) (GetHealthStatusResponseObject, error)
+	// List incident routing
+	// (GET /incident-policies)
+	ListIncidentPolicies(ctx context.Context, request ListIncidentPoliciesRequestObject) (ListIncidentPoliciesResponseObject, error)
+	// Get global incident routing
+	// (GET /incident-policies/global)
+	GetGlobalIncidentPolicies(ctx context.Context, request GetGlobalIncidentPoliciesRequestObject) (GetGlobalIncidentPoliciesResponseObject, error)
+	// Update global incident routing
+	// (PUT /incident-policies/global)
+	UpdateGlobalIncidentPolicies(ctx context.Context, request UpdateGlobalIncidentPoliciesRequestObject) (UpdateGlobalIncidentPoliciesResponseObject, error)
+	// Get workspace incident routing
+	// (GET /incident-policies/workspaces/{workspaceName})
+	GetWorkspaceIncidentPolicies(ctx context.Context, request GetWorkspaceIncidentPoliciesRequestObject) (GetWorkspaceIncidentPoliciesResponseObject, error)
+	// Update workspace incident routing
+	// (PUT /incident-policies/workspaces/{workspaceName})
+	UpdateWorkspaceIncidentPolicies(ctx context.Context, request UpdateWorkspaceIncidentPoliciesRequestObject) (UpdateWorkspaceIncidentPoliciesResponseObject, error)
+	// List incident providers
+	// (GET /incident-providers)
+	ListIncidentProviders(ctx context.Context, request ListIncidentProvidersRequestObject) (ListIncidentProvidersResponseObject, error)
+	// Create incident provider
+	// (POST /incident-providers)
+	CreateIncidentProvider(ctx context.Context, request CreateIncidentProviderRequestObject) (CreateIncidentProviderResponseObject, error)
+	// Delete incident provider
+	// (DELETE /incident-providers/{providerId})
+	DeleteIncidentProvider(ctx context.Context, request DeleteIncidentProviderRequestObject) (DeleteIncidentProviderResponseObject, error)
+	// Get incident provider
+	// (GET /incident-providers/{providerId})
+	GetIncidentProvider(ctx context.Context, request GetIncidentProviderRequestObject) (GetIncidentProviderResponseObject, error)
+	// Update incident provider
+	// (PUT /incident-providers/{providerId})
+	UpdateIncidentProvider(ctx context.Context, request UpdateIncidentProviderRequestObject) (UpdateIncidentProviderResponseObject, error)
+	// Send a test incident
+	// (POST /incident-providers/{providerId}/test)
+	TestIncidentProvider(ctx context.Context, request TestIncidentProviderRequestObject) (TestIncidentProviderResponseObject, error)
 	// Activate a license key
 	// (POST /license/activate)
 	ActivateLicense(ctx context.Context, request ActivateLicenseRequestObject) (ActivateLicenseResponseObject, error)
@@ -22596,9 +33418,99 @@ type StrictServerInterface interface {
 	// Get Prometheus metrics
 	// (GET /metrics)
 	GetMetrics(ctx context.Context, request GetMetricsRequestObject) (GetMetricsResponseObject, error)
+	// List notification channels
+	// (GET /notification-channels)
+	ListNotificationChannels(ctx context.Context, request ListNotificationChannelsRequestObject) (ListNotificationChannelsResponseObject, error)
+	// Create notification channel
+	// (POST /notification-channels)
+	CreateNotificationChannel(ctx context.Context, request CreateNotificationChannelRequestObject) (CreateNotificationChannelResponseObject, error)
+	// Delete notification channel
+	// (DELETE /notification-channels/{channelId})
+	DeleteNotificationChannel(ctx context.Context, request DeleteNotificationChannelRequestObject) (DeleteNotificationChannelResponseObject, error)
+	// Get notification channel
+	// (GET /notification-channels/{channelId})
+	GetNotificationChannel(ctx context.Context, request GetNotificationChannelRequestObject) (GetNotificationChannelResponseObject, error)
+	// Update notification channel
+	// (PUT /notification-channels/{channelId})
+	UpdateNotificationChannel(ctx context.Context, request UpdateNotificationChannelRequestObject) (UpdateNotificationChannelResponseObject, error)
+	// List notification routes
+	// (GET /notification-routes)
+	ListNotificationRoutes(ctx context.Context, request ListNotificationRoutesRequestObject) (ListNotificationRoutesResponseObject, error)
+	// Get global notification routes
+	// (GET /notification-routes/global)
+	GetGlobalNotificationRoutes(ctx context.Context, request GetGlobalNotificationRoutesRequestObject) (GetGlobalNotificationRoutesResponseObject, error)
+	// Update global notification routes
+	// (PUT /notification-routes/global)
+	UpdateGlobalNotificationRoutes(ctx context.Context, request UpdateGlobalNotificationRoutesRequestObject) (UpdateGlobalNotificationRoutesResponseObject, error)
+	// Get workspace notification routes
+	// (GET /notification-routes/workspaces/{workspaceName})
+	GetWorkspaceNotificationRoutes(ctx context.Context, request GetWorkspaceNotificationRoutesRequestObject) (GetWorkspaceNotificationRoutesResponseObject, error)
+	// Update workspace notification routes
+	// (PUT /notification-routes/workspaces/{workspaceName})
+	UpdateWorkspaceNotificationRoutes(ctx context.Context, request UpdateWorkspaceNotificationRoutesRequestObject) (UpdateWorkspaceNotificationRoutesResponseObject, error)
+	// Get notification settings
+	// (GET /notification-settings)
+	GetNotificationSettings(ctx context.Context, request GetNotificationSettingsRequestObject) (GetNotificationSettingsResponseObject, error)
+	// Update notification settings
+	// (PUT /notification-settings)
+	UpdateNotificationSettings(ctx context.Context, request UpdateNotificationSettingsRequestObject) (UpdateNotificationSettingsResponseObject, error)
 	// Get the OpenAPI document
 	// (GET /openapi.json)
 	GetOpenapiJson(ctx context.Context, request GetOpenapiJsonRequestObject) (GetOpenapiJsonResponseObject, error)
+	// List runtime profiles
+	// (GET /profiles)
+	ListRuntimeProfiles(ctx context.Context, request ListRuntimeProfilesRequestObject) (ListRuntimeProfilesResponseObject, error)
+	// Create runtime profile
+	// (POST /profiles)
+	CreateRuntimeProfile(ctx context.Context, request CreateRuntimeProfileRequestObject) (CreateRuntimeProfileResponseObject, error)
+	// Get global runtime profile defaults
+	// (GET /profiles/_global)
+	GetGlobalRuntimeProfileDefaults(ctx context.Context, request GetGlobalRuntimeProfileDefaultsRequestObject) (GetGlobalRuntimeProfileDefaultsResponseObject, error)
+	// Update global runtime profile defaults
+	// (PATCH /profiles/_global)
+	UpdateGlobalRuntimeProfileDefaults(ctx context.Context, request UpdateGlobalRuntimeProfileDefaultsRequestObject) (UpdateGlobalRuntimeProfileDefaultsResponseObject, error)
+	// Delete global runtime profile default entry
+	// (DELETE /profiles/_global/entries/{key})
+	DeleteGlobalRuntimeProfileDefaultEntry(ctx context.Context, request DeleteGlobalRuntimeProfileDefaultEntryRequestObject) (DeleteGlobalRuntimeProfileDefaultEntryResponseObject, error)
+	// Set global runtime profile default secret
+	// (PUT /profiles/_global/secrets/{key})
+	SetGlobalRuntimeProfileDefaultSecret(ctx context.Context, request SetGlobalRuntimeProfileDefaultSecretRequestObject) (SetGlobalRuntimeProfileDefaultSecretResponseObject, error)
+	// Set global runtime profile default variable
+	// (PUT /profiles/_global/variables/{key})
+	SetGlobalRuntimeProfileDefaultVariable(ctx context.Context, request SetGlobalRuntimeProfileDefaultVariableRequestObject) (SetGlobalRuntimeProfileDefaultVariableResponseObject, error)
+	// Get workspace runtime profile defaults
+	// (GET /profiles/_workspaces/{workspaceName})
+	GetWorkspaceRuntimeProfileDefaults(ctx context.Context, request GetWorkspaceRuntimeProfileDefaultsRequestObject) (GetWorkspaceRuntimeProfileDefaultsResponseObject, error)
+	// Update workspace runtime profile defaults
+	// (PATCH /profiles/_workspaces/{workspaceName})
+	UpdateWorkspaceRuntimeProfileDefaults(ctx context.Context, request UpdateWorkspaceRuntimeProfileDefaultsRequestObject) (UpdateWorkspaceRuntimeProfileDefaultsResponseObject, error)
+	// Delete workspace runtime profile default entry
+	// (DELETE /profiles/_workspaces/{workspaceName}/entries/{key})
+	DeleteWorkspaceRuntimeProfileDefaultEntry(ctx context.Context, request DeleteWorkspaceRuntimeProfileDefaultEntryRequestObject) (DeleteWorkspaceRuntimeProfileDefaultEntryResponseObject, error)
+	// Set workspace runtime profile default secret
+	// (PUT /profiles/_workspaces/{workspaceName}/secrets/{key})
+	SetWorkspaceRuntimeProfileDefaultSecret(ctx context.Context, request SetWorkspaceRuntimeProfileDefaultSecretRequestObject) (SetWorkspaceRuntimeProfileDefaultSecretResponseObject, error)
+	// Set workspace runtime profile default variable
+	// (PUT /profiles/_workspaces/{workspaceName}/variables/{key})
+	SetWorkspaceRuntimeProfileDefaultVariable(ctx context.Context, request SetWorkspaceRuntimeProfileDefaultVariableRequestObject) (SetWorkspaceRuntimeProfileDefaultVariableResponseObject, error)
+	// Delete runtime profile
+	// (DELETE /profiles/{profileName})
+	DeleteRuntimeProfile(ctx context.Context, request DeleteRuntimeProfileRequestObject) (DeleteRuntimeProfileResponseObject, error)
+	// Get runtime profile
+	// (GET /profiles/{profileName})
+	GetRuntimeProfile(ctx context.Context, request GetRuntimeProfileRequestObject) (GetRuntimeProfileResponseObject, error)
+	// Update runtime profile metadata
+	// (PATCH /profiles/{profileName})
+	UpdateRuntimeProfile(ctx context.Context, request UpdateRuntimeProfileRequestObject) (UpdateRuntimeProfileResponseObject, error)
+	// Delete runtime profile entry
+	// (DELETE /profiles/{profileName}/entries/{key})
+	DeleteRuntimeProfileEntry(ctx context.Context, request DeleteRuntimeProfileEntryRequestObject) (DeleteRuntimeProfileEntryResponseObject, error)
+	// Set runtime profile secret
+	// (PUT /profiles/{profileName}/secrets/{key})
+	SetRuntimeProfileSecret(ctx context.Context, request SetRuntimeProfileSecretRequestObject) (SetRuntimeProfileSecretResponseObject, error)
+	// Set runtime profile variable
+	// (PUT /profiles/{profileName}/variables/{key})
+	SetRuntimeProfileVariable(ctx context.Context, request SetRuntimeProfileVariableRequestObject) (SetRuntimeProfileVariableResponseObject, error)
 	// List all execution queues with summary statistics
 	// (GET /queues)
 	ListQueues(ctx context.Context, request ListQueuesRequestObject) (ListQueuesResponseObject, error)
@@ -22638,6 +33550,30 @@ type StrictServerInterface interface {
 	// Search document match snippets
 	// (GET /search/docs/matches)
 	SearchDocMatches(ctx context.Context, request SearchDocMatchesRequestObject) (SearchDocMatchesResponseObject, error)
+	// List secrets
+	// (GET /secrets)
+	ListSecrets(ctx context.Context, request ListSecretsRequestObject) (ListSecretsResponseObject, error)
+	// Create a secret
+	// (POST /secrets)
+	CreateSecret(ctx context.Context, request CreateSecretRequestObject) (CreateSecretResponseObject, error)
+	// Delete secret
+	// (DELETE /secrets/{secretId})
+	DeleteSecret(ctx context.Context, request DeleteSecretRequestObject) (DeleteSecretResponseObject, error)
+	// Get secret
+	// (GET /secrets/{secretId})
+	GetSecret(ctx context.Context, request GetSecretRequestObject) (GetSecretResponseObject, error)
+	// Update secret metadata
+	// (PATCH /secrets/{secretId})
+	UpdateSecret(ctx context.Context, request UpdateSecretRequestObject) (UpdateSecretResponseObject, error)
+	// Disable secret
+	// (POST /secrets/{secretId}/disable)
+	DisableSecret(ctx context.Context, request DisableSecretRequestObject) (DisableSecretResponseObject, error)
+	// Enable secret
+	// (POST /secrets/{secretId}/enable)
+	EnableSecret(ctx context.Context, request EnableSecretRequestObject) (EnableSecretResponseObject, error)
+	// Write a new secret value version
+	// (POST /secrets/{secretId}/versions)
+	WriteSecretVersion(ctx context.Context, request WriteSecretVersionRequestObject) (WriteSecretVersionResponseObject, error)
 	// Get coordinator service status
 	// (GET /services/coordinator)
 	GetCoordinatorStatus(ctx context.Context, request GetCoordinatorStatusRequestObject) (GetCoordinatorStatusResponseObject, error)
@@ -22728,6 +33664,12 @@ type StrictServerInterface interface {
 	// Update base configuration
 	// (PUT /settings/base-config)
 	UpdateBaseConfig(ctx context.Context, request UpdateBaseConfigRequestObject) (UpdateBaseConfigResponseObject, error)
+	// Get workspace base configuration
+	// (GET /settings/workspaces/{workspaceName}/base-config)
+	GetWorkspaceBaseConfig(ctx context.Context, request GetWorkspaceBaseConfigRequestObject) (GetWorkspaceBaseConfigResponseObject, error)
+	// Update workspace base configuration
+	// (PUT /settings/workspaces/{workspaceName}/base-config)
+	UpdateWorkspaceBaseConfig(ctx context.Context, request UpdateWorkspaceBaseConfigRequestObject) (UpdateWorkspaceBaseConfigResponseObject, error)
 	// Cleanup missing sync items
 	// (POST /sync/cleanup)
 	SyncCleanup(ctx context.Context, request SyncCleanupRequestObject) (SyncCleanupResponseObject, error)
@@ -22791,6 +33733,21 @@ type StrictServerInterface interface {
 	// Reset user's password
 	// (POST /users/{userId}/reset-password)
 	ResetUserPassword(ctx context.Context, request ResetUserPasswordRequestObject) (ResetUserPasswordResponseObject, error)
+	// List saved views
+	// (GET /views)
+	ListViews(ctx context.Context, request ListViewsRequestObject) (ListViewsResponseObject, error)
+	// Create a view
+	// (POST /views)
+	CreateView(ctx context.Context, request CreateViewRequestObject) (CreateViewResponseObject, error)
+	// Delete a view
+	// (DELETE /views/{viewId})
+	DeleteView(ctx context.Context, request DeleteViewRequestObject) (DeleteViewResponseObject, error)
+	// Get a view
+	// (GET /views/{viewId})
+	GetView(ctx context.Context, request GetViewRequestObject) (GetViewResponseObject, error)
+	// Update a view
+	// (PUT /views/{viewId})
+	UpdateView(ctx context.Context, request UpdateViewRequestObject) (UpdateViewResponseObject, error)
 	// List all webhooks
 	// (GET /webhooks)
 	ListWebhooks(ctx context.Context, request ListWebhooksRequestObject) (ListWebhooksResponseObject, error)
@@ -23431,6 +34388,34 @@ func (sh *strictHandler) ListDAGRunsByName(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+// DeleteDAGRun operation middleware
+func (sh *strictHandler) DeleteDAGRun(w http.ResponseWriter, r *http.Request, name DAGName, dagRunId DAGRunConcreteId, params DeleteDAGRunParams) {
+	var request DeleteDAGRunRequestObject
+
+	request.Name = name
+	request.DagRunId = dagRunId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteDAGRun(ctx, request.(DeleteDAGRunRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteDAGRun")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteDAGRunResponseObject); ok {
+		if err := validResponse.VisitDeleteDAGRunResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetDAGRunDetails operation middleware
 func (sh *strictHandler) GetDAGRunDetails(w http.ResponseWriter, r *http.Request, name DAGName, dagRunId DAGRunId, params GetDAGRunDetailsParams) {
 	var request GetDAGRunDetailsRequestObject
@@ -23564,6 +34549,76 @@ func (sh *strictHandler) DequeueDAGRun(w http.ResponseWriter, r *http.Request, n
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(DequeueDAGRunResponseObject); ok {
 		if err := validResponse.VisitDequeueDAGRunResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// EditRetryDAGRun operation middleware
+func (sh *strictHandler) EditRetryDAGRun(w http.ResponseWriter, r *http.Request, name DAGName, dagRunId DAGRunId, params EditRetryDAGRunParams) {
+	var request EditRetryDAGRunRequestObject
+
+	request.Name = name
+	request.DagRunId = dagRunId
+	request.Params = params
+
+	var body EditRetryDAGRunJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.EditRetryDAGRun(ctx, request.(EditRetryDAGRunRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "EditRetryDAGRun")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(EditRetryDAGRunResponseObject); ok {
+		if err := validResponse.VisitEditRetryDAGRunResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PreviewEditRetryDAGRun operation middleware
+func (sh *strictHandler) PreviewEditRetryDAGRun(w http.ResponseWriter, r *http.Request, name DAGName, dagRunId DAGRunId, params PreviewEditRetryDAGRunParams) {
+	var request PreviewEditRetryDAGRunRequestObject
+
+	request.Name = name
+	request.DagRunId = dagRunId
+	request.Params = params
+
+	var body PreviewEditRetryDAGRunJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PreviewEditRetryDAGRun(ctx, request.(PreviewEditRetryDAGRunRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PreviewEditRetryDAGRun")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PreviewEditRetryDAGRunResponseObject); ok {
+		if err := validResponse.VisitPreviewEditRetryDAGRunResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -24540,6 +35595,32 @@ func (sh *strictHandler) CreateNewDAG(w http.ResponseWriter, r *http.Request, pa
 	}
 }
 
+// GetAllDAGLabels operation middleware
+func (sh *strictHandler) GetAllDAGLabels(w http.ResponseWriter, r *http.Request, params GetAllDAGLabelsParams) {
+	var request GetAllDAGLabelsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetAllDAGLabels(ctx, request.(GetAllDAGLabelsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetAllDAGLabels")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetAllDAGLabelsResponseObject); ok {
+		if err := validResponse.VisitGetAllDAGLabelsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // SearchDAGs operation middleware
 func (sh *strictHandler) SearchDAGs(w http.ResponseWriter, r *http.Request, params SearchDAGsParams) {
 	var request SearchDAGsRequestObject
@@ -24768,6 +35849,216 @@ func (sh *strictHandler) EnqueueDAGDAGRun(w http.ResponseWriter, r *http.Request
 	}
 }
 
+// DeleteDAGIncidents operation middleware
+func (sh *strictHandler) DeleteDAGIncidents(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params DeleteDAGIncidentsParams) {
+	var request DeleteDAGIncidentsRequestObject
+
+	request.FileName = fileName
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteDAGIncidents(ctx, request.(DeleteDAGIncidentsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteDAGIncidents")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteDAGIncidentsResponseObject); ok {
+		if err := validResponse.VisitDeleteDAGIncidentsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetDAGIncidents operation middleware
+func (sh *strictHandler) GetDAGIncidents(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params GetDAGIncidentsParams) {
+	var request GetDAGIncidentsRequestObject
+
+	request.FileName = fileName
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetDAGIncidents(ctx, request.(GetDAGIncidentsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetDAGIncidents")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetDAGIncidentsResponseObject); ok {
+		if err := validResponse.VisitGetDAGIncidentsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateDAGIncidents operation middleware
+func (sh *strictHandler) UpdateDAGIncidents(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params UpdateDAGIncidentsParams) {
+	var request UpdateDAGIncidentsRequestObject
+
+	request.FileName = fileName
+	request.Params = params
+
+	var body UpdateDAGIncidentsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateDAGIncidents(ctx, request.(UpdateDAGIncidentsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateDAGIncidents")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateDAGIncidentsResponseObject); ok {
+		if err := validResponse.VisitUpdateDAGIncidentsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteDAGNotifications operation middleware
+func (sh *strictHandler) DeleteDAGNotifications(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params DeleteDAGNotificationsParams) {
+	var request DeleteDAGNotificationsRequestObject
+
+	request.FileName = fileName
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteDAGNotifications(ctx, request.(DeleteDAGNotificationsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteDAGNotifications")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteDAGNotificationsResponseObject); ok {
+		if err := validResponse.VisitDeleteDAGNotificationsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetDAGNotifications operation middleware
+func (sh *strictHandler) GetDAGNotifications(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params GetDAGNotificationsParams) {
+	var request GetDAGNotificationsRequestObject
+
+	request.FileName = fileName
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetDAGNotifications(ctx, request.(GetDAGNotificationsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetDAGNotifications")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetDAGNotificationsResponseObject); ok {
+		if err := validResponse.VisitGetDAGNotificationsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateDAGNotifications operation middleware
+func (sh *strictHandler) UpdateDAGNotifications(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params UpdateDAGNotificationsParams) {
+	var request UpdateDAGNotificationsRequestObject
+
+	request.FileName = fileName
+	request.Params = params
+
+	var body UpdateDAGNotificationsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateDAGNotifications(ctx, request.(UpdateDAGNotificationsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateDAGNotifications")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateDAGNotificationsResponseObject); ok {
+		if err := validResponse.VisitUpdateDAGNotificationsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// TestDAGNotifications operation middleware
+func (sh *strictHandler) TestDAGNotifications(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params TestDAGNotificationsParams) {
+	var request TestDAGNotificationsRequestObject
+
+	request.FileName = fileName
+	request.Params = params
+
+	var body TestDAGNotificationsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.TestDAGNotifications(ctx, request.(TestDAGNotificationsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "TestDAGNotifications")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(TestDAGNotificationsResponseObject); ok {
+		if err := validResponse.VisitTestDAGNotificationsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // RenameDAG operation middleware
 func (sh *strictHandler) RenameDAG(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params RenameDAGParams) {
 	var request RenameDAGRequestObject
@@ -24795,6 +36086,94 @@ func (sh *strictHandler) RenameDAG(w http.ResponseWriter, r *http.Request, fileN
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RenameDAGResponseObject); ok {
 		if err := validResponse.VisitRenameDAGResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteDAGSettings operation middleware
+func (sh *strictHandler) DeleteDAGSettings(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params DeleteDAGSettingsParams) {
+	var request DeleteDAGSettingsRequestObject
+
+	request.FileName = fileName
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteDAGSettings(ctx, request.(DeleteDAGSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteDAGSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteDAGSettingsResponseObject); ok {
+		if err := validResponse.VisitDeleteDAGSettingsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetDAGSettings operation middleware
+func (sh *strictHandler) GetDAGSettings(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params GetDAGSettingsParams) {
+	var request GetDAGSettingsRequestObject
+
+	request.FileName = fileName
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetDAGSettings(ctx, request.(GetDAGSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetDAGSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetDAGSettingsResponseObject); ok {
+		if err := validResponse.VisitGetDAGSettingsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateDAGSettings operation middleware
+func (sh *strictHandler) UpdateDAGSettings(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params UpdateDAGSettingsParams) {
+	var request UpdateDAGSettingsRequestObject
+
+	request.FileName = fileName
+	request.Params = params
+
+	var body UpdateDAGSettingsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateDAGSettings(ctx, request.(UpdateDAGSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateDAGSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateDAGSettingsResponseObject); ok {
+		if err := validResponse.VisitUpdateDAGSettingsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -25066,6 +36445,128 @@ func (sh *strictHandler) CreateDAGWebhook(w http.ResponseWriter, r *http.Request
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CreateDAGWebhookResponseObject); ok {
 		if err := validResponse.VisitCreateDAGWebhookResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ConfigureDAGWebhookHMAC operation middleware
+func (sh *strictHandler) ConfigureDAGWebhookHMAC(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params ConfigureDAGWebhookHMACParams) {
+	var request ConfigureDAGWebhookHMACRequestObject
+
+	request.FileName = fileName
+	request.Params = params
+
+	var body ConfigureDAGWebhookHMACJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ConfigureDAGWebhookHMAC(ctx, request.(ConfigureDAGWebhookHMACRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ConfigureDAGWebhookHMAC")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ConfigureDAGWebhookHMACResponseObject); ok {
+		if err := validResponse.VisitConfigureDAGWebhookHMACResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DisableDAGWebhookHMAC operation middleware
+func (sh *strictHandler) DisableDAGWebhookHMAC(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params DisableDAGWebhookHMACParams) {
+	var request DisableDAGWebhookHMACRequestObject
+
+	request.FileName = fileName
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DisableDAGWebhookHMAC(ctx, request.(DisableDAGWebhookHMACRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DisableDAGWebhookHMAC")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DisableDAGWebhookHMACResponseObject); ok {
+		if err := validResponse.VisitDisableDAGWebhookHMACResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// EnableDAGWebhookHMAC operation middleware
+func (sh *strictHandler) EnableDAGWebhookHMAC(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params EnableDAGWebhookHMACParams) {
+	var request EnableDAGWebhookHMACRequestObject
+
+	request.FileName = fileName
+	request.Params = params
+
+	var body EnableDAGWebhookHMACJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.EnableDAGWebhookHMAC(ctx, request.(EnableDAGWebhookHMACRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "EnableDAGWebhookHMAC")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(EnableDAGWebhookHMACResponseObject); ok {
+		if err := validResponse.VisitEnableDAGWebhookHMACResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RegenerateDAGWebhookHMACSecret operation middleware
+func (sh *strictHandler) RegenerateDAGWebhookHMACSecret(w http.ResponseWriter, r *http.Request, fileName DAGFileName, params RegenerateDAGWebhookHMACSecretParams) {
+	var request RegenerateDAGWebhookHMACSecretRequestObject
+
+	request.FileName = fileName
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RegenerateDAGWebhookHMACSecret(ctx, request.(RegenerateDAGWebhookHMACSecretRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RegenerateDAGWebhookHMACSecret")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RegenerateDAGWebhookHMACSecretResponseObject); ok {
+		if err := validResponse.VisitRegenerateDAGWebhookHMACSecretResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -25420,6 +36921,326 @@ func (sh *strictHandler) GetHealthStatus(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// ListIncidentPolicies operation middleware
+func (sh *strictHandler) ListIncidentPolicies(w http.ResponseWriter, r *http.Request, params ListIncidentPoliciesParams) {
+	var request ListIncidentPoliciesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListIncidentPolicies(ctx, request.(ListIncidentPoliciesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListIncidentPolicies")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListIncidentPoliciesResponseObject); ok {
+		if err := validResponse.VisitListIncidentPoliciesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetGlobalIncidentPolicies operation middleware
+func (sh *strictHandler) GetGlobalIncidentPolicies(w http.ResponseWriter, r *http.Request, params GetGlobalIncidentPoliciesParams) {
+	var request GetGlobalIncidentPoliciesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetGlobalIncidentPolicies(ctx, request.(GetGlobalIncidentPoliciesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetGlobalIncidentPolicies")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetGlobalIncidentPoliciesResponseObject); ok {
+		if err := validResponse.VisitGetGlobalIncidentPoliciesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateGlobalIncidentPolicies operation middleware
+func (sh *strictHandler) UpdateGlobalIncidentPolicies(w http.ResponseWriter, r *http.Request, params UpdateGlobalIncidentPoliciesParams) {
+	var request UpdateGlobalIncidentPoliciesRequestObject
+
+	request.Params = params
+
+	var body UpdateGlobalIncidentPoliciesJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateGlobalIncidentPolicies(ctx, request.(UpdateGlobalIncidentPoliciesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateGlobalIncidentPolicies")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateGlobalIncidentPoliciesResponseObject); ok {
+		if err := validResponse.VisitUpdateGlobalIncidentPoliciesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetWorkspaceIncidentPolicies operation middleware
+func (sh *strictHandler) GetWorkspaceIncidentPolicies(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params GetWorkspaceIncidentPoliciesParams) {
+	var request GetWorkspaceIncidentPoliciesRequestObject
+
+	request.WorkspaceName = workspaceName
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetWorkspaceIncidentPolicies(ctx, request.(GetWorkspaceIncidentPoliciesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetWorkspaceIncidentPolicies")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetWorkspaceIncidentPoliciesResponseObject); ok {
+		if err := validResponse.VisitGetWorkspaceIncidentPoliciesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateWorkspaceIncidentPolicies operation middleware
+func (sh *strictHandler) UpdateWorkspaceIncidentPolicies(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params UpdateWorkspaceIncidentPoliciesParams) {
+	var request UpdateWorkspaceIncidentPoliciesRequestObject
+
+	request.WorkspaceName = workspaceName
+	request.Params = params
+
+	var body UpdateWorkspaceIncidentPoliciesJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateWorkspaceIncidentPolicies(ctx, request.(UpdateWorkspaceIncidentPoliciesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateWorkspaceIncidentPolicies")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateWorkspaceIncidentPoliciesResponseObject); ok {
+		if err := validResponse.VisitUpdateWorkspaceIncidentPoliciesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListIncidentProviders operation middleware
+func (sh *strictHandler) ListIncidentProviders(w http.ResponseWriter, r *http.Request, params ListIncidentProvidersParams) {
+	var request ListIncidentProvidersRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListIncidentProviders(ctx, request.(ListIncidentProvidersRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListIncidentProviders")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListIncidentProvidersResponseObject); ok {
+		if err := validResponse.VisitListIncidentProvidersResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateIncidentProvider operation middleware
+func (sh *strictHandler) CreateIncidentProvider(w http.ResponseWriter, r *http.Request, params CreateIncidentProviderParams) {
+	var request CreateIncidentProviderRequestObject
+
+	request.Params = params
+
+	var body CreateIncidentProviderJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateIncidentProvider(ctx, request.(CreateIncidentProviderRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateIncidentProvider")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateIncidentProviderResponseObject); ok {
+		if err := validResponse.VisitCreateIncidentProviderResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteIncidentProvider operation middleware
+func (sh *strictHandler) DeleteIncidentProvider(w http.ResponseWriter, r *http.Request, providerId string, params DeleteIncidentProviderParams) {
+	var request DeleteIncidentProviderRequestObject
+
+	request.ProviderId = providerId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteIncidentProvider(ctx, request.(DeleteIncidentProviderRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteIncidentProvider")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteIncidentProviderResponseObject); ok {
+		if err := validResponse.VisitDeleteIncidentProviderResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetIncidentProvider operation middleware
+func (sh *strictHandler) GetIncidentProvider(w http.ResponseWriter, r *http.Request, providerId string, params GetIncidentProviderParams) {
+	var request GetIncidentProviderRequestObject
+
+	request.ProviderId = providerId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetIncidentProvider(ctx, request.(GetIncidentProviderRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetIncidentProvider")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetIncidentProviderResponseObject); ok {
+		if err := validResponse.VisitGetIncidentProviderResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateIncidentProvider operation middleware
+func (sh *strictHandler) UpdateIncidentProvider(w http.ResponseWriter, r *http.Request, providerId string, params UpdateIncidentProviderParams) {
+	var request UpdateIncidentProviderRequestObject
+
+	request.ProviderId = providerId
+	request.Params = params
+
+	var body UpdateIncidentProviderJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateIncidentProvider(ctx, request.(UpdateIncidentProviderRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateIncidentProvider")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateIncidentProviderResponseObject); ok {
+		if err := validResponse.VisitUpdateIncidentProviderResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// TestIncidentProvider operation middleware
+func (sh *strictHandler) TestIncidentProvider(w http.ResponseWriter, r *http.Request, providerId string, params TestIncidentProviderParams) {
+	var request TestIncidentProviderRequestObject
+
+	request.ProviderId = providerId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.TestIncidentProvider(ctx, request.(TestIncidentProviderRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "TestIncidentProvider")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(TestIncidentProviderResponseObject); ok {
+		if err := validResponse.VisitTestIncidentProviderResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ActivateLicense operation middleware
 func (sh *strictHandler) ActivateLicense(w http.ResponseWriter, r *http.Request, params ActivateLicenseParams) {
 	var request ActivateLicenseRequestObject
@@ -25503,6 +37324,358 @@ func (sh *strictHandler) GetMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ListNotificationChannels operation middleware
+func (sh *strictHandler) ListNotificationChannels(w http.ResponseWriter, r *http.Request, params ListNotificationChannelsParams) {
+	var request ListNotificationChannelsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListNotificationChannels(ctx, request.(ListNotificationChannelsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListNotificationChannels")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListNotificationChannelsResponseObject); ok {
+		if err := validResponse.VisitListNotificationChannelsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateNotificationChannel operation middleware
+func (sh *strictHandler) CreateNotificationChannel(w http.ResponseWriter, r *http.Request, params CreateNotificationChannelParams) {
+	var request CreateNotificationChannelRequestObject
+
+	request.Params = params
+
+	var body CreateNotificationChannelJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateNotificationChannel(ctx, request.(CreateNotificationChannelRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateNotificationChannel")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateNotificationChannelResponseObject); ok {
+		if err := validResponse.VisitCreateNotificationChannelResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteNotificationChannel operation middleware
+func (sh *strictHandler) DeleteNotificationChannel(w http.ResponseWriter, r *http.Request, channelId string, params DeleteNotificationChannelParams) {
+	var request DeleteNotificationChannelRequestObject
+
+	request.ChannelId = channelId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteNotificationChannel(ctx, request.(DeleteNotificationChannelRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteNotificationChannel")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteNotificationChannelResponseObject); ok {
+		if err := validResponse.VisitDeleteNotificationChannelResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetNotificationChannel operation middleware
+func (sh *strictHandler) GetNotificationChannel(w http.ResponseWriter, r *http.Request, channelId string, params GetNotificationChannelParams) {
+	var request GetNotificationChannelRequestObject
+
+	request.ChannelId = channelId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetNotificationChannel(ctx, request.(GetNotificationChannelRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetNotificationChannel")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetNotificationChannelResponseObject); ok {
+		if err := validResponse.VisitGetNotificationChannelResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateNotificationChannel operation middleware
+func (sh *strictHandler) UpdateNotificationChannel(w http.ResponseWriter, r *http.Request, channelId string, params UpdateNotificationChannelParams) {
+	var request UpdateNotificationChannelRequestObject
+
+	request.ChannelId = channelId
+	request.Params = params
+
+	var body UpdateNotificationChannelJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateNotificationChannel(ctx, request.(UpdateNotificationChannelRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateNotificationChannel")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateNotificationChannelResponseObject); ok {
+		if err := validResponse.VisitUpdateNotificationChannelResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListNotificationRoutes operation middleware
+func (sh *strictHandler) ListNotificationRoutes(w http.ResponseWriter, r *http.Request, params ListNotificationRoutesParams) {
+	var request ListNotificationRoutesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListNotificationRoutes(ctx, request.(ListNotificationRoutesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListNotificationRoutes")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListNotificationRoutesResponseObject); ok {
+		if err := validResponse.VisitListNotificationRoutesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetGlobalNotificationRoutes operation middleware
+func (sh *strictHandler) GetGlobalNotificationRoutes(w http.ResponseWriter, r *http.Request, params GetGlobalNotificationRoutesParams) {
+	var request GetGlobalNotificationRoutesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetGlobalNotificationRoutes(ctx, request.(GetGlobalNotificationRoutesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetGlobalNotificationRoutes")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetGlobalNotificationRoutesResponseObject); ok {
+		if err := validResponse.VisitGetGlobalNotificationRoutesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateGlobalNotificationRoutes operation middleware
+func (sh *strictHandler) UpdateGlobalNotificationRoutes(w http.ResponseWriter, r *http.Request, params UpdateGlobalNotificationRoutesParams) {
+	var request UpdateGlobalNotificationRoutesRequestObject
+
+	request.Params = params
+
+	var body UpdateGlobalNotificationRoutesJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateGlobalNotificationRoutes(ctx, request.(UpdateGlobalNotificationRoutesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateGlobalNotificationRoutes")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateGlobalNotificationRoutesResponseObject); ok {
+		if err := validResponse.VisitUpdateGlobalNotificationRoutesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetWorkspaceNotificationRoutes operation middleware
+func (sh *strictHandler) GetWorkspaceNotificationRoutes(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params GetWorkspaceNotificationRoutesParams) {
+	var request GetWorkspaceNotificationRoutesRequestObject
+
+	request.WorkspaceName = workspaceName
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetWorkspaceNotificationRoutes(ctx, request.(GetWorkspaceNotificationRoutesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetWorkspaceNotificationRoutes")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetWorkspaceNotificationRoutesResponseObject); ok {
+		if err := validResponse.VisitGetWorkspaceNotificationRoutesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateWorkspaceNotificationRoutes operation middleware
+func (sh *strictHandler) UpdateWorkspaceNotificationRoutes(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params UpdateWorkspaceNotificationRoutesParams) {
+	var request UpdateWorkspaceNotificationRoutesRequestObject
+
+	request.WorkspaceName = workspaceName
+	request.Params = params
+
+	var body UpdateWorkspaceNotificationRoutesJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateWorkspaceNotificationRoutes(ctx, request.(UpdateWorkspaceNotificationRoutesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateWorkspaceNotificationRoutes")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateWorkspaceNotificationRoutesResponseObject); ok {
+		if err := validResponse.VisitUpdateWorkspaceNotificationRoutesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetNotificationSettings operation middleware
+func (sh *strictHandler) GetNotificationSettings(w http.ResponseWriter, r *http.Request, params GetNotificationSettingsParams) {
+	var request GetNotificationSettingsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetNotificationSettings(ctx, request.(GetNotificationSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetNotificationSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetNotificationSettingsResponseObject); ok {
+		if err := validResponse.VisitGetNotificationSettingsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateNotificationSettings operation middleware
+func (sh *strictHandler) UpdateNotificationSettings(w http.ResponseWriter, r *http.Request, params UpdateNotificationSettingsParams) {
+	var request UpdateNotificationSettingsRequestObject
+
+	request.Params = params
+
+	var body UpdateNotificationSettingsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateNotificationSettings(ctx, request.(UpdateNotificationSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateNotificationSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateNotificationSettingsResponseObject); ok {
+		if err := validResponse.VisitUpdateNotificationSettingsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetOpenapiJson operation middleware
 func (sh *strictHandler) GetOpenapiJson(w http.ResponseWriter, r *http.Request) {
 	var request GetOpenapiJsonRequestObject
@@ -25520,6 +37693,564 @@ func (sh *strictHandler) GetOpenapiJson(w http.ResponseWriter, r *http.Request) 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetOpenapiJsonResponseObject); ok {
 		if err := validResponse.VisitGetOpenapiJsonResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListRuntimeProfiles operation middleware
+func (sh *strictHandler) ListRuntimeProfiles(w http.ResponseWriter, r *http.Request, params ListRuntimeProfilesParams) {
+	var request ListRuntimeProfilesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListRuntimeProfiles(ctx, request.(ListRuntimeProfilesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListRuntimeProfiles")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListRuntimeProfilesResponseObject); ok {
+		if err := validResponse.VisitListRuntimeProfilesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateRuntimeProfile operation middleware
+func (sh *strictHandler) CreateRuntimeProfile(w http.ResponseWriter, r *http.Request, params CreateRuntimeProfileParams) {
+	var request CreateRuntimeProfileRequestObject
+
+	request.Params = params
+
+	var body CreateRuntimeProfileJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateRuntimeProfile(ctx, request.(CreateRuntimeProfileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateRuntimeProfile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateRuntimeProfileResponseObject); ok {
+		if err := validResponse.VisitCreateRuntimeProfileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetGlobalRuntimeProfileDefaults operation middleware
+func (sh *strictHandler) GetGlobalRuntimeProfileDefaults(w http.ResponseWriter, r *http.Request, params GetGlobalRuntimeProfileDefaultsParams) {
+	var request GetGlobalRuntimeProfileDefaultsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetGlobalRuntimeProfileDefaults(ctx, request.(GetGlobalRuntimeProfileDefaultsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetGlobalRuntimeProfileDefaults")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetGlobalRuntimeProfileDefaultsResponseObject); ok {
+		if err := validResponse.VisitGetGlobalRuntimeProfileDefaultsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateGlobalRuntimeProfileDefaults operation middleware
+func (sh *strictHandler) UpdateGlobalRuntimeProfileDefaults(w http.ResponseWriter, r *http.Request, params UpdateGlobalRuntimeProfileDefaultsParams) {
+	var request UpdateGlobalRuntimeProfileDefaultsRequestObject
+
+	request.Params = params
+
+	var body UpdateGlobalRuntimeProfileDefaultsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateGlobalRuntimeProfileDefaults(ctx, request.(UpdateGlobalRuntimeProfileDefaultsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateGlobalRuntimeProfileDefaults")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateGlobalRuntimeProfileDefaultsResponseObject); ok {
+		if err := validResponse.VisitUpdateGlobalRuntimeProfileDefaultsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteGlobalRuntimeProfileDefaultEntry operation middleware
+func (sh *strictHandler) DeleteGlobalRuntimeProfileDefaultEntry(w http.ResponseWriter, r *http.Request, key RuntimeProfileKey, params DeleteGlobalRuntimeProfileDefaultEntryParams) {
+	var request DeleteGlobalRuntimeProfileDefaultEntryRequestObject
+
+	request.Key = key
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteGlobalRuntimeProfileDefaultEntry(ctx, request.(DeleteGlobalRuntimeProfileDefaultEntryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteGlobalRuntimeProfileDefaultEntry")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteGlobalRuntimeProfileDefaultEntryResponseObject); ok {
+		if err := validResponse.VisitDeleteGlobalRuntimeProfileDefaultEntryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetGlobalRuntimeProfileDefaultSecret operation middleware
+func (sh *strictHandler) SetGlobalRuntimeProfileDefaultSecret(w http.ResponseWriter, r *http.Request, key RuntimeProfileKey, params SetGlobalRuntimeProfileDefaultSecretParams) {
+	var request SetGlobalRuntimeProfileDefaultSecretRequestObject
+
+	request.Key = key
+	request.Params = params
+
+	var body SetGlobalRuntimeProfileDefaultSecretJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetGlobalRuntimeProfileDefaultSecret(ctx, request.(SetGlobalRuntimeProfileDefaultSecretRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetGlobalRuntimeProfileDefaultSecret")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetGlobalRuntimeProfileDefaultSecretResponseObject); ok {
+		if err := validResponse.VisitSetGlobalRuntimeProfileDefaultSecretResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetGlobalRuntimeProfileDefaultVariable operation middleware
+func (sh *strictHandler) SetGlobalRuntimeProfileDefaultVariable(w http.ResponseWriter, r *http.Request, key RuntimeProfileKey, params SetGlobalRuntimeProfileDefaultVariableParams) {
+	var request SetGlobalRuntimeProfileDefaultVariableRequestObject
+
+	request.Key = key
+	request.Params = params
+
+	var body SetGlobalRuntimeProfileDefaultVariableJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetGlobalRuntimeProfileDefaultVariable(ctx, request.(SetGlobalRuntimeProfileDefaultVariableRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetGlobalRuntimeProfileDefaultVariable")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetGlobalRuntimeProfileDefaultVariableResponseObject); ok {
+		if err := validResponse.VisitSetGlobalRuntimeProfileDefaultVariableResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetWorkspaceRuntimeProfileDefaults operation middleware
+func (sh *strictHandler) GetWorkspaceRuntimeProfileDefaults(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params GetWorkspaceRuntimeProfileDefaultsParams) {
+	var request GetWorkspaceRuntimeProfileDefaultsRequestObject
+
+	request.WorkspaceName = workspaceName
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetWorkspaceRuntimeProfileDefaults(ctx, request.(GetWorkspaceRuntimeProfileDefaultsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetWorkspaceRuntimeProfileDefaults")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetWorkspaceRuntimeProfileDefaultsResponseObject); ok {
+		if err := validResponse.VisitGetWorkspaceRuntimeProfileDefaultsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateWorkspaceRuntimeProfileDefaults operation middleware
+func (sh *strictHandler) UpdateWorkspaceRuntimeProfileDefaults(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params UpdateWorkspaceRuntimeProfileDefaultsParams) {
+	var request UpdateWorkspaceRuntimeProfileDefaultsRequestObject
+
+	request.WorkspaceName = workspaceName
+	request.Params = params
+
+	var body UpdateWorkspaceRuntimeProfileDefaultsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateWorkspaceRuntimeProfileDefaults(ctx, request.(UpdateWorkspaceRuntimeProfileDefaultsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateWorkspaceRuntimeProfileDefaults")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateWorkspaceRuntimeProfileDefaultsResponseObject); ok {
+		if err := validResponse.VisitUpdateWorkspaceRuntimeProfileDefaultsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteWorkspaceRuntimeProfileDefaultEntry operation middleware
+func (sh *strictHandler) DeleteWorkspaceRuntimeProfileDefaultEntry(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, key RuntimeProfileKey, params DeleteWorkspaceRuntimeProfileDefaultEntryParams) {
+	var request DeleteWorkspaceRuntimeProfileDefaultEntryRequestObject
+
+	request.WorkspaceName = workspaceName
+	request.Key = key
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteWorkspaceRuntimeProfileDefaultEntry(ctx, request.(DeleteWorkspaceRuntimeProfileDefaultEntryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteWorkspaceRuntimeProfileDefaultEntry")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteWorkspaceRuntimeProfileDefaultEntryResponseObject); ok {
+		if err := validResponse.VisitDeleteWorkspaceRuntimeProfileDefaultEntryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetWorkspaceRuntimeProfileDefaultSecret operation middleware
+func (sh *strictHandler) SetWorkspaceRuntimeProfileDefaultSecret(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, key RuntimeProfileKey, params SetWorkspaceRuntimeProfileDefaultSecretParams) {
+	var request SetWorkspaceRuntimeProfileDefaultSecretRequestObject
+
+	request.WorkspaceName = workspaceName
+	request.Key = key
+	request.Params = params
+
+	var body SetWorkspaceRuntimeProfileDefaultSecretJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetWorkspaceRuntimeProfileDefaultSecret(ctx, request.(SetWorkspaceRuntimeProfileDefaultSecretRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetWorkspaceRuntimeProfileDefaultSecret")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetWorkspaceRuntimeProfileDefaultSecretResponseObject); ok {
+		if err := validResponse.VisitSetWorkspaceRuntimeProfileDefaultSecretResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetWorkspaceRuntimeProfileDefaultVariable operation middleware
+func (sh *strictHandler) SetWorkspaceRuntimeProfileDefaultVariable(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, key RuntimeProfileKey, params SetWorkspaceRuntimeProfileDefaultVariableParams) {
+	var request SetWorkspaceRuntimeProfileDefaultVariableRequestObject
+
+	request.WorkspaceName = workspaceName
+	request.Key = key
+	request.Params = params
+
+	var body SetWorkspaceRuntimeProfileDefaultVariableJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetWorkspaceRuntimeProfileDefaultVariable(ctx, request.(SetWorkspaceRuntimeProfileDefaultVariableRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetWorkspaceRuntimeProfileDefaultVariable")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetWorkspaceRuntimeProfileDefaultVariableResponseObject); ok {
+		if err := validResponse.VisitSetWorkspaceRuntimeProfileDefaultVariableResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteRuntimeProfile operation middleware
+func (sh *strictHandler) DeleteRuntimeProfile(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, params DeleteRuntimeProfileParams) {
+	var request DeleteRuntimeProfileRequestObject
+
+	request.ProfileName = profileName
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteRuntimeProfile(ctx, request.(DeleteRuntimeProfileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteRuntimeProfile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteRuntimeProfileResponseObject); ok {
+		if err := validResponse.VisitDeleteRuntimeProfileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetRuntimeProfile operation middleware
+func (sh *strictHandler) GetRuntimeProfile(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, params GetRuntimeProfileParams) {
+	var request GetRuntimeProfileRequestObject
+
+	request.ProfileName = profileName
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetRuntimeProfile(ctx, request.(GetRuntimeProfileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetRuntimeProfile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetRuntimeProfileResponseObject); ok {
+		if err := validResponse.VisitGetRuntimeProfileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateRuntimeProfile operation middleware
+func (sh *strictHandler) UpdateRuntimeProfile(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, params UpdateRuntimeProfileParams) {
+	var request UpdateRuntimeProfileRequestObject
+
+	request.ProfileName = profileName
+	request.Params = params
+
+	var body UpdateRuntimeProfileJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateRuntimeProfile(ctx, request.(UpdateRuntimeProfileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateRuntimeProfile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateRuntimeProfileResponseObject); ok {
+		if err := validResponse.VisitUpdateRuntimeProfileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteRuntimeProfileEntry operation middleware
+func (sh *strictHandler) DeleteRuntimeProfileEntry(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, key RuntimeProfileKey, params DeleteRuntimeProfileEntryParams) {
+	var request DeleteRuntimeProfileEntryRequestObject
+
+	request.ProfileName = profileName
+	request.Key = key
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteRuntimeProfileEntry(ctx, request.(DeleteRuntimeProfileEntryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteRuntimeProfileEntry")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteRuntimeProfileEntryResponseObject); ok {
+		if err := validResponse.VisitDeleteRuntimeProfileEntryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetRuntimeProfileSecret operation middleware
+func (sh *strictHandler) SetRuntimeProfileSecret(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, key RuntimeProfileKey, params SetRuntimeProfileSecretParams) {
+	var request SetRuntimeProfileSecretRequestObject
+
+	request.ProfileName = profileName
+	request.Key = key
+	request.Params = params
+
+	var body SetRuntimeProfileSecretJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetRuntimeProfileSecret(ctx, request.(SetRuntimeProfileSecretRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetRuntimeProfileSecret")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetRuntimeProfileSecretResponseObject); ok {
+		if err := validResponse.VisitSetRuntimeProfileSecretResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetRuntimeProfileVariable operation middleware
+func (sh *strictHandler) SetRuntimeProfileVariable(w http.ResponseWriter, r *http.Request, profileName RuntimeProfileName, key RuntimeProfileKey, params SetRuntimeProfileVariableParams) {
+	var request SetRuntimeProfileVariableRequestObject
+
+	request.ProfileName = profileName
+	request.Key = key
+	request.Params = params
+
+	var body SetRuntimeProfileVariableJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetRuntimeProfileVariable(ctx, request.(SetRuntimeProfileVariableRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetRuntimeProfileVariable")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetRuntimeProfileVariableResponseObject); ok {
+		if err := validResponse.VisitSetRuntimeProfileVariableResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -25879,6 +38610,241 @@ func (sh *strictHandler) SearchDocMatches(w http.ResponseWriter, r *http.Request
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SearchDocMatchesResponseObject); ok {
 		if err := validResponse.VisitSearchDocMatchesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListSecrets operation middleware
+func (sh *strictHandler) ListSecrets(w http.ResponseWriter, r *http.Request, params ListSecretsParams) {
+	var request ListSecretsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSecrets(ctx, request.(ListSecretsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSecrets")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSecretsResponseObject); ok {
+		if err := validResponse.VisitListSecretsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateSecret operation middleware
+func (sh *strictHandler) CreateSecret(w http.ResponseWriter, r *http.Request, params CreateSecretParams) {
+	var request CreateSecretRequestObject
+
+	request.Params = params
+
+	var body CreateSecretJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateSecret(ctx, request.(CreateSecretRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateSecret")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateSecretResponseObject); ok {
+		if err := validResponse.VisitCreateSecretResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteSecret operation middleware
+func (sh *strictHandler) DeleteSecret(w http.ResponseWriter, r *http.Request, secretId string, params DeleteSecretParams) {
+	var request DeleteSecretRequestObject
+
+	request.SecretId = secretId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteSecret(ctx, request.(DeleteSecretRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteSecret")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteSecretResponseObject); ok {
+		if err := validResponse.VisitDeleteSecretResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSecret operation middleware
+func (sh *strictHandler) GetSecret(w http.ResponseWriter, r *http.Request, secretId string, params GetSecretParams) {
+	var request GetSecretRequestObject
+
+	request.SecretId = secretId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSecret(ctx, request.(GetSecretRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSecret")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSecretResponseObject); ok {
+		if err := validResponse.VisitGetSecretResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateSecret operation middleware
+func (sh *strictHandler) UpdateSecret(w http.ResponseWriter, r *http.Request, secretId string, params UpdateSecretParams) {
+	var request UpdateSecretRequestObject
+
+	request.SecretId = secretId
+	request.Params = params
+
+	var body UpdateSecretJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateSecret(ctx, request.(UpdateSecretRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateSecret")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateSecretResponseObject); ok {
+		if err := validResponse.VisitUpdateSecretResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DisableSecret operation middleware
+func (sh *strictHandler) DisableSecret(w http.ResponseWriter, r *http.Request, secretId string, params DisableSecretParams) {
+	var request DisableSecretRequestObject
+
+	request.SecretId = secretId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DisableSecret(ctx, request.(DisableSecretRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DisableSecret")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DisableSecretResponseObject); ok {
+		if err := validResponse.VisitDisableSecretResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// EnableSecret operation middleware
+func (sh *strictHandler) EnableSecret(w http.ResponseWriter, r *http.Request, secretId string, params EnableSecretParams) {
+	var request EnableSecretRequestObject
+
+	request.SecretId = secretId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.EnableSecret(ctx, request.(EnableSecretRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "EnableSecret")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(EnableSecretResponseObject); ok {
+		if err := validResponse.VisitEnableSecretResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// WriteSecretVersion operation middleware
+func (sh *strictHandler) WriteSecretVersion(w http.ResponseWriter, r *http.Request, secretId string, params WriteSecretVersionParams) {
+	var request WriteSecretVersionRequestObject
+
+	request.SecretId = secretId
+	request.Params = params
+
+	var body WriteSecretVersionJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.WriteSecretVersion(ctx, request.(WriteSecretVersionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "WriteSecretVersion")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(WriteSecretVersionResponseObject); ok {
+		if err := validResponse.VisitWriteSecretVersionResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -26747,6 +39713,67 @@ func (sh *strictHandler) UpdateBaseConfig(w http.ResponseWriter, r *http.Request
 	}
 }
 
+// GetWorkspaceBaseConfig operation middleware
+func (sh *strictHandler) GetWorkspaceBaseConfig(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params GetWorkspaceBaseConfigParams) {
+	var request GetWorkspaceBaseConfigRequestObject
+
+	request.WorkspaceName = workspaceName
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetWorkspaceBaseConfig(ctx, request.(GetWorkspaceBaseConfigRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetWorkspaceBaseConfig")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetWorkspaceBaseConfigResponseObject); ok {
+		if err := validResponse.VisitGetWorkspaceBaseConfigResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateWorkspaceBaseConfig operation middleware
+func (sh *strictHandler) UpdateWorkspaceBaseConfig(w http.ResponseWriter, r *http.Request, workspaceName WorkspaceName, params UpdateWorkspaceBaseConfigParams) {
+	var request UpdateWorkspaceBaseConfigRequestObject
+
+	request.WorkspaceName = workspaceName
+	request.Params = params
+
+	var body UpdateWorkspaceBaseConfigJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateWorkspaceBaseConfig(ctx, request.(UpdateWorkspaceBaseConfigRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateWorkspaceBaseConfig")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateWorkspaceBaseConfigResponseObject); ok {
+		if err := validResponse.VisitUpdateWorkspaceBaseConfigResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // SyncCleanup operation middleware
 func (sh *strictHandler) SyncCleanup(w http.ResponseWriter, r *http.Request, params SyncCleanupParams) {
 	var request SyncCleanupRequestObject
@@ -27365,6 +40392,153 @@ func (sh *strictHandler) ResetUserPassword(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+// ListViews operation middleware
+func (sh *strictHandler) ListViews(w http.ResponseWriter, r *http.Request, params ListViewsParams) {
+	var request ListViewsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListViews(ctx, request.(ListViewsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListViews")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListViewsResponseObject); ok {
+		if err := validResponse.VisitListViewsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateView operation middleware
+func (sh *strictHandler) CreateView(w http.ResponseWriter, r *http.Request, params CreateViewParams) {
+	var request CreateViewRequestObject
+
+	request.Params = params
+
+	var body CreateViewJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateView(ctx, request.(CreateViewRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateView")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateViewResponseObject); ok {
+		if err := validResponse.VisitCreateViewResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteView operation middleware
+func (sh *strictHandler) DeleteView(w http.ResponseWriter, r *http.Request, viewId string, params DeleteViewParams) {
+	var request DeleteViewRequestObject
+
+	request.ViewId = viewId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteView(ctx, request.(DeleteViewRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteView")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteViewResponseObject); ok {
+		if err := validResponse.VisitDeleteViewResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetView operation middleware
+func (sh *strictHandler) GetView(w http.ResponseWriter, r *http.Request, viewId string, params GetViewParams) {
+	var request GetViewRequestObject
+
+	request.ViewId = viewId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetView(ctx, request.(GetViewRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetView")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetViewResponseObject); ok {
+		if err := validResponse.VisitGetViewResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateView operation middleware
+func (sh *strictHandler) UpdateView(w http.ResponseWriter, r *http.Request, viewId string, params UpdateViewParams) {
+	var request UpdateViewRequestObject
+
+	request.ViewId = viewId
+	request.Params = params
+
+	var body UpdateViewJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateView(ctx, request.(UpdateViewRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateView")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateViewResponseObject); ok {
+		if err := validResponse.VisitUpdateViewResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListWebhooks operation middleware
 func (sh *strictHandler) ListWebhooks(w http.ResponseWriter, r *http.Request, params ListWebhooksParams) {
 	var request ListWebhooksRequestObject
@@ -27601,564 +40775,825 @@ func (sh *strictHandler) UpdateWorkspace(w http.ResponseWriter, r *http.Request,
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

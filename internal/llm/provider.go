@@ -40,6 +40,8 @@ const (
 	ProviderLocal ProviderType = "local"
 	// ProviderZAI is the Z.AI provider (GLM models).
 	ProviderZAI ProviderType = "zai"
+	// ProviderOpenCode is the OpenCode provider (Kimi, DeepSeek, GLM, etc. via opencode.ai).
+	ProviderOpenCode ProviderType = "opencode"
 )
 
 // ParseProviderType converts a string to a ProviderType.
@@ -59,6 +61,8 @@ func ParseProviderType(s string) (ProviderType, error) {
 		return ProviderLocal, nil
 	case "zai", "zhipu", "zhipuai", "glm":
 		return ProviderZAI, nil
+	case "opencode":
+		return ProviderOpenCode, nil
 	default:
 		return "", fmt.Errorf("%w: %s", ErrInvalidProvider, s)
 	}
@@ -82,6 +86,8 @@ func DefaultAPIKeyEnvVar(providerType ProviderType) string {
 		return "" // Local providers typically don't need an API key
 	case ProviderZAI:
 		return "ZAI_API_KEY"
+	case ProviderOpenCode:
+		return "OPENCODE_API_KEY"
 	default:
 		return ""
 	}
@@ -104,6 +110,8 @@ func DefaultBaseURL(providerType ProviderType) string {
 		return "http://localhost:11434/v1" // Default Ollama endpoint
 	case ProviderZAI:
 		return "https://api.z.ai/api/paas/v4"
+	case ProviderOpenCode:
+		return "https://opencode.ai/zen/go/v1"
 	default:
 		return ""
 	}
@@ -139,7 +147,9 @@ func NewProvider(providerType ProviderType, cfg Config) (Provider, error) {
 	}
 
 	// Apply defaults
-	if cfg.Timeout == 0 {
+	if cfg.DisableRequestTimeout {
+		cfg.Timeout = 0
+	} else if cfg.Timeout == 0 {
 		cfg.Timeout = DefaultConfig().Timeout
 	}
 	if cfg.MaxRetries == 0 {
@@ -165,7 +175,11 @@ func NewProvider(providerType ProviderType, cfg Config) (Provider, error) {
 		cfg.BaseURL = DefaultBaseURL(providerType)
 	}
 
-	return factory(cfg)
+	provider, err := factory(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return normalizedProvider{Provider: provider}, nil
 }
 
 // NewProviderWithAPIKey creates a new Provider with the given API key.

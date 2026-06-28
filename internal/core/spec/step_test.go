@@ -5,6 +5,7 @@ package spec
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -40,20 +41,40 @@ func TestMain(m *testing.M) {
 	// jq and http: support command and script
 	core.RegisterExecutorCapabilities("jq", core.ExecutorCapabilities{Command: true, Script: true})
 	core.RegisterExecutorCapabilities("http", core.ExecutorCapabilities{Command: true, Script: true})
+	// SQL executors: support query command and script execution
+	for _, t := range []string{"postgres", "sqlite"} {
+		core.RegisterExecutorCapabilities(t, core.ExecutorCapabilities{Command: true, Script: true})
+	}
 	// kubernetes: supports a single command only
 	for _, t := range []string{"kubernetes", "k8s"} {
 		core.RegisterExecutorCapabilities(t, core.ExecutorCapabilities{Command: true})
 	}
 	// archive: supports command only
 	core.RegisterExecutorCapabilities("archive", core.ExecutorCapabilities{Command: true})
-	// dag/subworkflow/parallel: support SubDAG and WorkerSelector
-	for _, t := range []string{"dag", "subworkflow", "parallel"} {
+	// artifact: supports command only
+	core.RegisterExecutorCapabilities("artifact", core.ExecutorCapabilities{Command: true})
+	// file: supports command only
+	core.RegisterExecutorCapabilities("file", core.ExecutorCapabilities{Command: true})
+	// data: supports operation commands only
+	core.RegisterExecutorCapabilities("data", core.ExecutorCapabilities{Command: true})
+	// wait: supports command only
+	core.RegisterExecutorCapabilities("wait", core.ExecutorCapabilities{Command: true})
+	// git: supports command only
+	core.RegisterExecutorCapabilities("git", core.ExecutorCapabilities{Command: true})
+	// dag/subworkflow/parallel/dag_enqueue: support SubDAG and WorkerSelector
+	for _, t := range []string{"dag", "subworkflow", "parallel", core.ExecutorTypeDAGEnqueue} {
 		core.RegisterExecutorCapabilities(t, core.ExecutorCapabilities{
 			SubDAG: true, WorkerSelector: true,
 		})
 	}
 	// mail: no command support
 	core.RegisterExecutorCapabilities("mail", core.ExecutorCapabilities{})
+	// log: no command support
+	core.RegisterExecutorCapabilities("log", core.ExecutorCapabilities{})
+	// outputs: supports write command
+	core.RegisterExecutorCapabilities("outputs", core.ExecutorCapabilities{Command: true})
+	// state: supports operation commands only
+	core.RegisterExecutorCapabilities("state", core.ExecutorCapabilities{Command: true})
 	// chat: LLM executor
 	core.RegisterExecutorCapabilities("chat", core.ExecutorCapabilities{LLM: true})
 
@@ -212,7 +233,7 @@ func TestBuildStepScript(t *testing.T) {
 	}{
 		{name: "SimpleScript", input: "echo hello", expected: "echo hello"},
 		{name: "MultilineScript", input: "echo hello\necho world", expected: "echo hello\necho world"},
-		{name: "Trimmed", input: "  script  ", expected: "script"},
+		{name: "Trimmed", input: "  script  \n", expected: "script"},
 		{name: "Empty", input: "", expected: ""},
 	}
 
@@ -226,16 +247,35 @@ func TestBuildStepScript(t *testing.T) {
 	}
 }
 
+func TestLoadYAMLLogStep(t *testing.T) {
+	t.Parallel()
+
+	dag, err := LoadYAML(context.Background(), []byte(`
+steps:
+  - name: announce
+    action: log.write
+    with:
+      message: "Deploying ${ENVIRONMENT}"
+`))
+	require.NoError(t, err)
+	require.Len(t, dag.Steps, 1)
+	assert.Equal(t, "announce", dag.Steps[0].Name)
+	assert.Equal(t, "log", dag.Steps[0].ExecutorConfig.Type)
+	assert.Equal(t, "Deploying ${ENVIRONMENT}", dag.Steps[0].ExecutorConfig.Config["message"])
+}
+
 func TestBuildStepStdout(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name     string
-		input    string
+		input    any
 		expected string
 	}{
 		{name: "SimplePath", input: "/tmp/output.log", expected: "/tmp/output.log"},
 		{name: "Trimmed", input: "  /tmp/out.log  ", expected: "/tmp/out.log"},
+		{name: "Artifact", input: map[string]any{"artifact": "reports/report.md"}, expected: ""},
+		{name: "TrimmedArtifact", input: map[string]any{"artifact": "  reports/report.md  "}, expected: ""},
 		{name: "Empty", input: "", expected: ""},
 	}
 
@@ -249,16 +289,47 @@ func TestBuildStepStdout(t *testing.T) {
 	}
 }
 
+func TestBuildStepStdoutRejectsInvalidArtifactPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "Empty", path: ""},
+		{name: "Absolute", path: "/tmp/report.md"},
+		{name: "ParentTraversal", path: "../report.md"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &step{Stdout: map[string]any{"artifact": tt.path}}
+			_, err := buildStepStdout(testStepBuildContext(), s)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestBuildStepStdoutArtifact(t *testing.T) {
+	t.Parallel()
+
+	s := &step{Stdout: map[string]any{"artifact": " reports/report.md "}}
+	result, err := buildStepStdoutArtifact(testStepBuildContext(), s)
+	require.NoError(t, err)
+	assert.Equal(t, "reports/report.md", result)
+}
+
 func TestBuildStepStderr(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name     string
-		input    string
+		input    any
 		expected string
 	}{
 		{name: "SimplePath", input: "/tmp/error.log", expected: "/tmp/error.log"},
 		{name: "Trimmed", input: "  /tmp/err.log  ", expected: "/tmp/err.log"},
+		{name: "Artifact", input: map[string]any{"artifact": "reports/errors.txt"}, expected: ""},
 		{name: "Empty", input: "", expected: ""},
 	}
 
@@ -270,6 +341,15 @@ func TestBuildStepStderr(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestBuildStepStderrArtifact(t *testing.T) {
+	t.Parallel()
+
+	s := &step{Stderr: map[string]any{"artifact": " reports/report.err "}}
+	result, err := buildStepStderrArtifact(testStepBuildContext(), s)
+	require.NoError(t, err)
+	assert.Equal(t, "reports/report.err", result)
 }
 
 func TestBuildStepMailOnError(t *testing.T) {
@@ -933,6 +1013,11 @@ func TestBuildStepCommand(t *testing.T) {
 			expectedScript: "echo hello\necho world",
 		},
 		{
+			name:           "MultilineCommandPreservesBoundaryWhitespace",
+			command:        "\n  echo hello  \n",
+			expectedScript: "\n  echo hello  \n",
+		},
+		{
 			name:    "EmptyStringCommand",
 			command: "   ",
 			wantErr: true,
@@ -1133,6 +1218,11 @@ func TestBuildSingleCommand(t *testing.T) {
 			name:           "MultilineBecomesScript",
 			command:        "echo line1\necho line2",
 			expectedScript: "echo line1\necho line2",
+		},
+		{
+			name:           "MultilinePreservesBoundaryWhitespace",
+			command:        "  echo line1\n echo line2\n",
+			expectedScript: "  echo line1\n echo line2\n",
 		},
 		{
 			name:            "CommandOnly",
@@ -1336,7 +1426,39 @@ func TestBuildStepExecutor(t *testing.T) {
 			expected: core.ExecutorConfig{Type: "http", Config: make(map[string]any)},
 		},
 		{
-			name: "TypeAndConfig",
+			name: "SFTPTypeAndWith",
+			step: &step{
+				Type: "sftp",
+				With: map[string]any{
+					"source":      "./backup.tar.gz",
+					"destination": "/srv/backups/backup.tar.gz",
+				},
+			},
+			ctx: testStepBuildContext(),
+			expected: core.ExecutorConfig{
+				Type: "sftp",
+				Config: map[string]any{
+					"source":      "./backup.tar.gz",
+					"destination": "/srv/backups/backup.tar.gz",
+				},
+			},
+		},
+		{
+			name: "TypeAndWith",
+			step: &step{
+				Type: "docker",
+				With: map[string]any{
+					"image": "alpine:latest",
+				},
+			},
+			ctx: testStepBuildContext(),
+			expected: core.ExecutorConfig{
+				Type:   "docker",
+				Config: map[string]any{"image": "alpine:latest"},
+			},
+		},
+		{
+			name: "TypeAndLegacyConfig",
 			step: &step{
 				Type: "docker",
 				Config: map[string]any{
@@ -1348,6 +1470,16 @@ func TestBuildStepExecutor(t *testing.T) {
 				Type:   "docker",
 				Config: map[string]any{"image": "alpine:latest"},
 			},
+		},
+		{
+			name: "RejectWithAndLegacyConfig",
+			step: &step{
+				Type:   "docker",
+				With:   map[string]any{"image": "alpine:latest"},
+				Config: map[string]any{"image": "busybox:latest"},
+			},
+			ctx:     testStepBuildContext(),
+			wantErr: true,
 		},
 		{
 			name: "InheritsContainerExecutor",
@@ -1569,15 +1701,12 @@ func TestBuildStepParallel(t *testing.T) {
 			},
 		},
 		{
-			name: "MaxConcurrentAsFloat64",
+			name: "InvalidMaxConcurrentAsFloat64",
 			parallel: map[string]any{
 				"items":          "${ITEMS}",
 				"max_concurrent": float64(7),
 			},
-			expected: &core.ParallelConfig{
-				Variable:      "${ITEMS}",
-				MaxConcurrent: 7,
-			},
+			wantErr: true,
 		},
 		{
 			name:     "InvalidType",
@@ -1871,6 +2000,16 @@ func TestBuildStepContainer(t *testing.T) {
 				PullPolicy: core.PullPolicyMissing,
 			},
 		},
+		{
+			name: "RuntimeDefaultsToDocker",
+			input: &container{
+				Image: "alpine:3.18",
+			},
+			expected: &core.Container{
+				Image:      "alpine:3.18",
+				PullPolicy: core.PullPolicyMissing,
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -2069,8 +2208,10 @@ func TestValidateMultipleCommands(t *testing.T) {
 
 			if tt.wantErr {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "executor does not support multiple commands")
-				assert.Contains(t, err.Error(), tt.executorType)
+				assert.Contains(t, err.Error(), `action "`+tt.executorType+`" supports only one command`)
+				assert.NotContains(t, err.Error(), "action does not support multiple commands")
+				assert.NotContains(t, err.Error(), "executor")
+				assert.True(t, errors.Is(err, ErrExecutorDoesNotSupportMultipleCmd))
 			} else {
 				assert.NoError(t, err)
 			}
@@ -2387,7 +2528,7 @@ func TestValidateSubDAG(t *testing.T) {
 
 			if tt.wantErr {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "does not support sub-DAG execution")
+				assert.Contains(t, err.Error(), "does not support call field")
 				assert.Contains(t, err.Error(), tt.executorType)
 			} else {
 				assert.NoError(t, err)
@@ -2606,14 +2747,77 @@ func TestValidateWorkerSelector(t *testing.T) {
 	}
 }
 
+func TestStepValidationMessagesUseYAMLTerms(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  func() error
+		want string
+	}{
+		{
+			name: "unsupported command",
+			err: func() error {
+				return validateCommand(&core.Step{
+					Commands:       []core.CommandEntry{{Command: "echo", Args: []string{"hello"}}},
+					ExecutorConfig: core.ExecutorConfig{Type: "dag"},
+				})
+			},
+			want: `action "dag" does not support command field`,
+		},
+		{
+			name: "unsupported multiple commands",
+			err: func() error {
+				return validateMultipleCommands(&core.Step{
+					Commands: []core.CommandEntry{
+						{Command: "GET", Args: []string{"https://example.com"}},
+						{Command: "POST", Args: []string{"https://example.com"}},
+					},
+					ExecutorConfig: core.ExecutorConfig{Type: "http"},
+				})
+			},
+			want: `action "http" supports only one command`,
+		},
+		{
+			name: "unsupported llm",
+			err: func() error {
+				return validateLLM(&core.Step{
+					ExecutorConfig: core.ExecutorConfig{Type: "shell"},
+					LLM:            &core.LLMConfig{Provider: "openai", Model: "gpt-4"},
+				})
+			},
+			want: `action "shell" does not support llm field`,
+		},
+		{
+			name: "unknown type",
+			err: func() error {
+				result := &core.Step{ExecutorConfig: core.ExecutorConfig{Config: make(map[string]any)}}
+				return buildStepExecutor(testStepBuildContext(), &step{Type: "non-existent"}, result)
+			},
+			want: `unknown action "non-existent"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tt.err()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+			assert.NotContains(t, err.Error(), "executor")
+			assert.NotContains(t, err.Error(), "executor_config")
+		})
+	}
+}
+
 func TestUnregisteredExecutorValidation(t *testing.T) {
 	t.Parallel()
 
 	yaml := `
 steps:
   - name: invalid-step
-    type: non-existent
-    command: echo hello
+    action: non-existent
 `
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "test.yaml")
@@ -2622,7 +2826,9 @@ steps:
 
 	_, err = Load(context.Background(), tmpFile)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "executor type \"non-existent\" does not support command field")
+	assert.Contains(t, err.Error(), "unknown action \"non-existent\"")
+	assert.NotContains(t, err.Error(), "does not support command field")
+	assert.NotContains(t, err.Error(), "executor")
 }
 
 func TestBuildStepLogOutput(t *testing.T) {
@@ -2695,11 +2901,13 @@ func TestValidateStdoutStderr(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		stdout      string
-		stderr      string
-		wantErr     bool
-		errContains string
+		name           string
+		stdout         string
+		stderr         string
+		stdoutArtifact string
+		stderrArtifact string
+		wantErr        bool
+		errContains    string
 	}{
 		{
 			name:    "BothEmpty_Valid",
@@ -2746,6 +2954,19 @@ func TestValidateStdoutStderr(t *testing.T) {
 			wantErr:     true,
 			errContains: "log_output: merged",
 		},
+		{
+			name:           "SameArtifact_Error",
+			stdoutArtifact: "reports/combined.log",
+			stderrArtifact: "reports/combined.log",
+			wantErr:        true,
+			errContains:    "stdout.artifact and stderr.artifact cannot point to the same file",
+		},
+		{
+			name:           "DifferentArtifacts_Valid",
+			stdoutArtifact: "reports/stdout.log",
+			stderrArtifact: "reports/stderr.log",
+			wantErr:        false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -2753,8 +2974,10 @@ func TestValidateStdoutStderr(t *testing.T) {
 			t.Parallel()
 
 			step := &core.Step{
-				Stdout: tt.stdout,
-				Stderr: tt.stderr,
+				Stdout:         tt.stdout,
+				Stderr:         tt.stderr,
+				StdoutArtifact: tt.stdoutArtifact,
+				StderrArtifact: tt.stderrArtifact,
 			}
 
 			err := validateStdoutStderr(step)
@@ -2774,7 +2997,7 @@ func TestBuildStep_StdoutStderrSameFile_Error(t *testing.T) {
 
 	data := []byte(`
 name: test-step
-command: echo hello
+run: echo hello
 stdout: /tmp/combined.log
 stderr: /tmp/combined.log
 `)
@@ -2789,260 +3012,26 @@ stderr: /tmp/combined.log
 	assert.Contains(t, err.Error(), "log_output: merged")
 }
 
-func TestParseOutputConfig(t *testing.T) {
+func TestBuildStep_StdoutStderrSameArtifact_Error(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name     string
-		input    any
-		expected *outputConfig
-		wantErr  bool
-	}{
-		{
-			name:     "NilInput",
-			input:    nil,
-			expected: nil,
-		},
-		{
-			name:     "EmptyString",
-			input:    "",
-			expected: nil,
-		},
-		{
-			name:     "SimpleString",
-			input:    "MY_OUTPUT",
-			expected: &outputConfig{Name: "MY_OUTPUT"},
-		},
-		{
-			name:     "StringWithDollarPrefix",
-			input:    "$MY_OUTPUT",
-			expected: &outputConfig{Name: "MY_OUTPUT"},
-		},
-		{
-			name:     "StringWithSpaces",
-			input:    "  MY_OUTPUT  ",
-			expected: &outputConfig{Name: "MY_OUTPUT"},
-		},
-		{
-			name:     "StringWithDollarAndSpaces",
-			input:    "  $MY_OUTPUT  ",
-			expected: &outputConfig{Name: "MY_OUTPUT"},
-		},
-		{
-			name:     "OnlyDollarSign",
-			input:    "$",
-			expected: nil, // After trimming $ prefix, name is empty
-		},
-		{
-			name:     "OnlySpaces",
-			input:    "   ",
-			expected: nil,
-		},
-		{
-			name:  "ObjectWithNameOnly",
-			input: map[string]any{"name": "MY_OUTPUT"},
-			expected: &outputConfig{
-				Name: "MY_OUTPUT",
-			},
-		},
-		{
-			name: "ObjectWithAllFields",
-			input: map[string]any{
-				"name": "MY_OUTPUT",
-				"key":  "customKey",
-				"omit": true,
-			},
-			expected: &outputConfig{
-				Name: "MY_OUTPUT",
-				Key:  "customKey",
-				Omit: true,
-			},
-		},
-		{
-			name: "ObjectWithNameAndKey",
-			input: map[string]any{
-				"name": "$RESULT",
-				"key":  "resultValue",
-			},
-			expected: &outputConfig{
-				Name: "RESULT",
-				Key:  "resultValue",
-			},
-		},
-		{
-			name: "ObjectWithOmitFalse",
-			input: map[string]any{
-				"name": "OUTPUT",
-				"omit": false,
-			},
-			expected: &outputConfig{
-				Name: "OUTPUT",
-				Omit: false,
-			},
-		},
-		{
-			name:    "ObjectWithEmptyName",
-			input:   map[string]any{"name": ""},
-			wantErr: true,
-		},
-		{
-			name:    "ObjectWithMissingName",
-			input:   map[string]any{"key": "customKey"},
-			wantErr: true,
-		},
-		{
-			name: "ObjectWithSpacesInName",
-			input: map[string]any{
-				"name": "  $MY_OUTPUT  ",
-				"key":  "  myKey  ",
-			},
-			expected: &outputConfig{
-				Name: "MY_OUTPUT",
-				Key:  "myKey",
-			},
-		},
-		{
-			name:    "InvalidTypeInteger",
-			input:   123,
-			wantErr: true,
-		},
-		{
-			name:    "InvalidTypeArray",
-			input:   []string{"a", "b"},
-			wantErr: true,
-		},
-	}
+	data := []byte(`
+name: test-step
+run: echo hello
+stdout:
+  artifact: reports/combined.log
+stderr:
+  artifact: reports/combined.log
+`)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result, err := parseOutputConfig(tt.input)
+	var s step
+	err := yaml.Unmarshal(data, &s)
+	require.NoError(t, err)
 
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-
-			require.NoError(t, err)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestBuildStepOutputKey(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		output   any
-		expected string
-	}{
-		{
-			name:     "NilOutput",
-			output:   nil,
-			expected: "",
-		},
-		{
-			name:     "StringOutput_NoKey",
-			output:   "MY_OUTPUT",
-			expected: "",
-		},
-		{
-			name: "ObjectWithKey",
-			output: map[string]any{
-				"name": "MY_OUTPUT",
-				"key":  "customKey",
-			},
-			expected: "customKey",
-		},
-		{
-			name: "ObjectWithoutKey",
-			output: map[string]any{
-				"name": "MY_OUTPUT",
-			},
-			expected: "",
-		},
-		{
-			name: "ObjectWithEmptyKey",
-			output: map[string]any{
-				"name": "MY_OUTPUT",
-				"key":  "",
-			},
-			expected: "",
-		},
-		{
-			name: "ObjectWithKeyAndSpaces",
-			output: map[string]any{
-				"name": "OUTPUT",
-				"key":  "  myCustomKey  ",
-			},
-			expected: "myCustomKey",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			s := &step{Output: tt.output}
-			result, err := buildStepOutputKey(testStepBuildContext(), s)
-			require.NoError(t, err)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestBuildStepOutputOmit(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		output   any
-		expected bool
-	}{
-		{
-			name:     "NilOutput",
-			output:   nil,
-			expected: false,
-		},
-		{
-			name:     "StringOutput_NoOmit",
-			output:   "MY_OUTPUT",
-			expected: false,
-		},
-		{
-			name: "ObjectWithOmitTrue",
-			output: map[string]any{
-				"name": "MY_OUTPUT",
-				"omit": true,
-			},
-			expected: true,
-		},
-		{
-			name: "ObjectWithOmitFalse",
-			output: map[string]any{
-				"name": "MY_OUTPUT",
-				"omit": false,
-			},
-			expected: false,
-		},
-		{
-			name: "ObjectWithoutOmit",
-			output: map[string]any{
-				"name": "MY_OUTPUT",
-			},
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			s := &step{Output: tt.output}
-			result, err := buildStepOutputOmit(testStepBuildContext(), s)
-			require.NoError(t, err)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
+	_, err = s.build(testStepBuildContext())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stdout.artifact and stderr.artifact cannot point to the same file")
+	assert.Contains(t, err.Error(), "log_output: merged")
 }
 
 func TestBuildStepExecutorNewFormat(t *testing.T) {
@@ -3145,12 +3134,12 @@ func TestStepExecutorNewFormat_Integration(t *testing.T) {
 			name: "NewFormat_SSH",
 			yaml: `steps:
   - name: deploy
-    type: ssh
-    config:
+    action: ssh.run
+    with:
+      command: uptime
       host: prod.example.com
       user: deploy
       port: 22
-    command: uptime
 `,
 			wantType: "ssh",
 			wantConfig: map[string]any{
@@ -3163,15 +3152,18 @@ func TestStepExecutorNewFormat_Integration(t *testing.T) {
 			name: "NewFormat_HTTP",
 			yaml: `steps:
   - name: webhook
-    type: http
-    config:
+    action: http.request
+    with:
+      method: POST
+      url: https://api.example.com
       timeout: 30
       headers:
         Authorization: Bearer token123
-    command: POST https://api.example.com
 `,
 			wantType: "http",
 			wantConfig: map[string]any{
+				"method":  "POST",
+				"url":     "https://api.example.com",
 				"timeout": uint64(30),
 				"headers": map[string]any{
 					"Authorization": "Bearer token123",
@@ -3182,10 +3174,10 @@ func TestStepExecutorNewFormat_Integration(t *testing.T) {
 			name: "NewFormat_JQ",
 			yaml: `steps:
   - name: parse
-    type: jq
-    config:
+    action: jq.filter
+    with:
+      filter: .name
       raw: true
-    command: .name
 `,
 			wantType: "jq",
 			wantConfig: map[string]any{
@@ -3196,10 +3188,10 @@ func TestStepExecutorNewFormat_Integration(t *testing.T) {
 			name: "NewFormat_SSH",
 			yaml: `steps:
   - name: ssh-step
-    type: ssh
-    config:
+    action: ssh.run
+    with:
+      command: uptime
       host: example.com
-    command: uptime
 `,
 			wantType: "ssh",
 			wantConfig: map[string]any{

@@ -4,7 +4,13 @@
 package api
 
 import (
+	"encoding/json"
+	"log/slog"
+	"os"
+	"time"
+
 	"github.com/dagucloud/dagu/api/v1"
+	"github.com/dagucloud/dagu/internal/cmn/fileutil"
 	"github.com/dagucloud/dagu/internal/core"
 	"github.com/dagucloud/dagu/internal/core/exec"
 )
@@ -25,6 +31,18 @@ func toSchedule(s core.Schedule) api.Schedule {
 	return schedule
 }
 
+func workspaceResponseNameFromLabels(labels core.Labels) *string {
+	workspaceName, ok := exec.WorkspaceNameFromLabels(labels)
+	if !ok {
+		return nil
+	}
+	return ptrOf(workspaceName)
+}
+
+func workspaceResponseNameFromLabelStrings(labels []string) *string {
+	return workspaceResponseNameFromLabels(core.NewLabels(labels))
+}
+
 func toDAG(dag *core.DAG) api.DAG {
 	schedules := make([]api.Schedule, len(dag.Schedule))
 	for i, s := range dag.Schedule {
@@ -34,11 +52,26 @@ func toDAG(dag *core.DAG) api.DAG {
 	return api.DAG{
 		Name:          dag.Name,
 		Group:         ptrOf(dag.Group),
+		Workspace:     workspaceResponseNameFromLabels(dag.Labels),
 		Description:   ptrOf(dag.Description),
 		Params:        ptrOf(dag.Params),
 		DefaultParams: ptrOf(dag.DefaultParams),
-		Tags:          ptrOf(dag.Tags.Strings()),
+		Resources:     toDAGResources(dag.Resources),
+		Labels:        ptrOf(dag.Labels.Strings()),
+		Tags:          ptrOf(dag.Labels.Strings()),
 		Schedule:      ptrOf(schedules),
+	}
+}
+
+func toDAGResources(resources *core.Resources) *api.DAGResources {
+	if resources == nil || resources.Limits == nil {
+		return nil
+	}
+	return &api.DAGResources{
+		Limits: &api.DAGResourceLimits{
+			Cpu:    ptrOf(resources.Limits.CPU),
+			Memory: ptrOf(resources.Limits.Memory),
+		},
 	}
 }
 
@@ -136,6 +169,7 @@ func toStep(obj core.Step) api.Step {
 			Prompt:   ptrOf(obj.Approval.Prompt),
 			Input:    ptrOf(obj.Approval.Input),
 			Required: ptrOf(obj.Approval.Required),
+			RewindTo: ptrOf(obj.Approval.RewindTo),
 		}
 	}
 
@@ -184,27 +218,40 @@ func toTriggerType(t core.TriggerType) *api.TriggerType {
 	return new(api.TriggerType(t.String()))
 }
 
+func toRuntimeProfileName(name string) *api.RuntimeProfileName {
+	if name == "" {
+		return nil
+	}
+	profileName := api.RuntimeProfileName(name)
+	return &profileName
+}
+
 func toDAGRunSummary(s exec.DAGRunStatus) api.DAGRunSummary {
 	var autoRetryLimit *int
 	if s.AutoRetryLimit > 0 {
 		autoRetryLimit = ptrOf(s.AutoRetryLimit)
 	}
+	artifactsAvailable := hasArtifactEntries(s.ArchiveDir)
 
 	return api.DAGRunSummary{
-		Name:           s.Name,
-		DagRunId:       s.DAGRunID,
-		Params:         ptrOf(s.Params),
-		QueuedAt:       ptrOf(s.QueuedAt),
-		AutoRetryCount: s.AutoRetryCount,
-		AutoRetryLimit: autoRetryLimit,
-		ScheduleTime:   ptrOf(s.ScheduleTime),
-		StartedAt:      s.StartedAt,
-		FinishedAt:     s.FinishedAt,
-		Status:         api.Status(s.Status),
-		StatusLabel:    api.StatusLabel(s.Status.String()),
-		WorkerId:       ptrOf(s.WorkerID),
-		TriggerType:    toTriggerType(s.TriggerType),
-		Tags:           &s.Tags,
+		Name:               s.Name,
+		DagRunId:           s.DAGRunID,
+		Workspace:          workspaceResponseNameFromLabelStrings(s.Labels),
+		Params:             ptrOf(s.Params),
+		ProfileName:        toRuntimeProfileName(s.ProfileName),
+		QueuedAt:           ptrOf(s.QueuedAt),
+		AutoRetryCount:     s.AutoRetryCount,
+		AutoRetryLimit:     autoRetryLimit,
+		ScheduleTime:       ptrOf(s.ScheduleTime),
+		StartedAt:          s.StartedAt,
+		FinishedAt:         s.FinishedAt,
+		ArtifactsAvailable: artifactsAvailable,
+		Status:             api.Status(s.Status),
+		StatusLabel:        api.StatusLabel(s.Status.String()),
+		WorkerId:           ptrOf(s.WorkerID),
+		TriggerType:        toTriggerType(s.TriggerType),
+		Labels:             &s.Labels,
+		Tags:               &s.Labels,
 	}
 }
 
@@ -242,17 +289,20 @@ func ToDAGRunDetails(s exec.DAGRunStatus) api.DAGRunDetails {
 	if s.AutoRetryLimit > 0 {
 		autoRetryLimit = ptrOf(s.AutoRetryLimit)
 	}
+	artifactsAvailable := hasArtifactEntries(s.ArchiveDir)
 
 	return api.DAGRunDetails{
 		RootDAGRunName:     s.Root.Name,
 		RootDAGRunId:       s.Root.ID,
 		ParentDAGRunName:   ptrOf(s.Parent.Name),
 		ParentDAGRunId:     ptrOf(s.Parent.ID),
-		ArtifactsAvailable: s.ArchiveDir != "",
+		ArtifactsAvailable: artifactsAvailable,
 		Log:                s.Log,
 		Name:               s.Name,
 		Params:             ptrOf(s.Params),
 		DagRunId:           s.DAGRunID,
+		Workspace:          workspaceResponseNameFromLabelStrings(s.Labels),
+		ProfileName:        toRuntimeProfileName(s.ProfileName),
 		QueuedAt:           ptrOf(s.QueuedAt),
 		AutoRetryCount:     s.AutoRetryCount,
 		AutoRetryLimit:     autoRetryLimit,
@@ -269,8 +319,32 @@ func ToDAGRunDetails(s exec.DAGRunStatus) api.DAGRunDetails {
 		OnFailure:          ptrOf(toNode(s.OnFailure)),
 		OnAbort:            ptrOf(toNode(s.OnAbort)),
 		OnExit:             ptrOf(toNode(s.OnExit)),
-		Tags:               &s.Tags,
+		Labels:             &s.Labels,
+		Tags:               &s.Labels,
 	}
+}
+
+func hasArtifactEntries(archiveDir string) bool {
+	if archiveDir == "" {
+		return false
+	}
+
+	info, err := os.Stat(archiveDir)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+
+	entries, err := os.ReadDir(archiveDir)
+	if err != nil {
+		return false
+	}
+
+	for _, entry := range entries {
+		if !fileutil.IsSymlinkDirEntry(entry) {
+			return true
+		}
+	}
+	return false
 }
 
 func toNode(node *exec.Node) api.Node {
@@ -294,11 +368,47 @@ func toNode(node *exec.Node) api.Node {
 		ApprovedBy:        ptrOf(node.ApprovedBy),
 		ApprovalInputs:    ptrOf(node.ApprovalInputs),
 		PushBackInputs:    ptrOf(node.PushBackInputs),
+		PushBackHistory:   ptrOf(toPushBackHistory(node)),
 		RejectedAt:        ptrOf(node.RejectedAt),
 		RejectedBy:        ptrOf(node.RejectedBy),
 		RejectionReason:   ptrOf(node.RejectionReason),
 		ApprovalIteration: ptrOf(node.ApprovalIteration),
 	}
+}
+
+func toPushBackHistory(node *exec.Node) []api.PushBackHistoryEntry {
+	if node == nil {
+		return nil
+	}
+
+	var allowedInputs []string
+	if node.Step.Approval != nil {
+		allowedInputs = node.Step.Approval.Input
+	}
+	history := exec.NormalizePushBackHistory(
+		allowedInputs,
+		node.ApprovalIteration,
+		node.PushBackInputs,
+		node.PushBackHistory,
+	)
+	if len(history) == 0 {
+		return nil
+	}
+
+	items := make([]api.PushBackHistoryEntry, len(history))
+	for i, entry := range history {
+		items[i] = api.PushBackHistoryEntry{
+			Iteration: entry.Iteration,
+			By:        ptrOf(entry.By),
+			Inputs:    ptrOf(entry.Inputs),
+		}
+		if entry.At != "" {
+			if at, err := time.Parse(time.RFC3339, entry.At); err == nil {
+				items[i].At = &at
+			}
+		}
+	}
+	return items
 }
 
 func toSubDAGRuns(subDAGRuns []exec.SubDAGRun) []api.SubDAGRun {
@@ -357,6 +467,8 @@ func toDAGDetails(dag *core.DAG) *api.DAGDetails {
 		paramDefs = ptrOf(defs)
 	}
 
+	paramSchema := toJSONObject(dag.ParamSchema)
+
 	var artifacts *api.DAGArtifactsConfig
 	if dag.Artifacts != nil {
 		artifacts = &api.DAGArtifactsConfig{
@@ -375,17 +487,40 @@ func toDAGDetails(dag *core.DAG) *api.DAGDetails {
 		Group:             ptrOf(dag.Group),
 		HandlerOn:         ptrOf(handlerOn),
 		HistRetentionDays: ptrOf(dag.HistRetentionDays),
+		HistRetentionRuns: ptrOf(dag.HistRetentionRuns),
 		LogDir:            ptrOf(dag.LogDir),
 		MaxActiveRuns:     ptrOf(dag.MaxActiveRuns),
 		MaxActiveSteps:    ptrOf(dag.MaxActiveSteps),
 		Params:            ptrOf(dag.Params),
 		ParamDefs:         paramDefs,
+		ParamSchema:       paramSchema,
 		Preconditions:     ptrOf(preconditions),
+		Resources:         toDAGResources(dag.Resources),
 		Schedule:          ptrOf(schedules),
 		Steps:             ptrOf(steps),
-		Tags:              ptrOf(dag.Tags.Strings()),
+		Labels:            ptrOf(dag.Labels.Strings()),
+		Tags:              ptrOf(dag.Labels.Strings()),
 		RunConfig:         runConfig,
 	}
+}
+
+func toJSONObject(raw json.RawMessage) *map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var value map[string]any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		slog.Warn(
+			"Failed to unmarshal DAG param schema produced by buildRenderableParamSchema",
+			"error",
+			err,
+			"length",
+			len(raw),
+		)
+		return nil
+	}
+	return &value
 }
 
 func toParamDefs(defs []core.ParamDef) []api.ParamDef {
