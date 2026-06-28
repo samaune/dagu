@@ -1,5 +1,3 @@
-.dagu/
-dist/
 # frontend assets
 internal/service/frontend/assets/fonts/*
 internal/service/frontend/assets/*

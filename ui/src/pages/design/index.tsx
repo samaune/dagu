@@ -161,6 +161,9 @@ function WorkflowDesignPage() {
   const [isSaving, setIsSaving] = React.useState(false);
   const [leftPanelTab, setLeftPanelTab] =
     React.useState<LeftPanelTab>('workflows');
+  const [mainTab, setMainTab] = React.useState<'diagram' | 'definition'>(
+    'diagram'
+  );
   const [dagSearch, setDagSearch] = React.useState('');
 
   const [cookie, setCookie] = useCookies(['flowchart']);
@@ -685,68 +688,93 @@ function WorkflowDesignPage() {
             ref={contentRef}
             className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(0,1fr)_var(--design-resize-handle-width)_var(--design-right-panel-width)]"
           >
-            <div className="min-h-0 overflow-auto p-4">
-              <div className="space-y-4">
-                <ValidationSummary
-                  validation={validation}
-                  isValidating={isValidating}
-                />
-                <section className="overflow-hidden rounded-lg border border-border bg-surface">
-                  {validation?.dag?.steps?.length && !hasValidationErrors ? (
-                    <Graph
-                      steps={validation.dag.steps}
-                      type="config"
-                      flowchart={flowchart}
-                      onChangeFlowchart={handleFlowchartChange}
-                      onClickNode={handleGraphNodeSelect}
-                      selectOnClick
-                      showIcons={false}
-                      height={360}
-                    />
-                  ) : (
-                    <EmptyPreview
-                      hasErrors={hasValidationErrors}
-                      isLoading={isValidating}
-                    />
-                  )}
-                </section>
+            <div className="flex min-h-0 flex-col overflow-hidden">
+              <div className="flex-shrink-0 border-b border-border px-4 pt-3">
+                <Tabs>
+                  <Tab
+                    isActive={mainTab === 'diagram'}
+                    onClick={() => setMainTab('diagram')}
+                    className="cursor-pointer"
+                  >
+                    Diagram
+                  </Tab>
+                  <Tab
+                    isActive={mainTab === 'definition'}
+                    onClick={() => setMainTab('definition')}
+                    className="cursor-pointer"
+                  >
+                    Definition
+                  </Tab>
+                </Tabs>
+              </div>
 
-                {validation?.dag && (
-                  <section className="space-y-4 rounded-lg border border-border bg-background p-4">
-                    <DAGAttributes dag={validation.dag} />
-                    {validation.dag.steps?.length ? (
-                      <DAGStepTable steps={validation.dag.steps} />
-                    ) : null}
-                  </section>
+              <div className="min-h-0 flex-1 overflow-auto p-4">
+                {mainTab === 'diagram' && (
+                  <div className="space-y-4">
+                    <ValidationSummary
+                      validation={validation}
+                      isValidating={isValidating}
+                    />
+                    <section className="overflow-hidden rounded-lg border border-border bg-surface">
+                      {validation?.dag?.steps?.length && !hasValidationErrors ? (
+                        <Graph
+                          steps={validation.dag.steps}
+                          type="config"
+                          flowchart={flowchart}
+                          onChangeFlowchart={handleFlowchartChange}
+                          onClickNode={handleGraphNodeSelect}
+                          selectOnClick
+                          showIcons={false}
+                          height={360}
+                        />
+                      ) : (
+                        <EmptyPreview
+                          hasErrors={hasValidationErrors}
+                          isLoading={isValidating}
+                        />
+                      )}
+                    </section>
+
+                    {validation?.dag && (
+                      <section className="space-y-4 rounded-lg border border-border bg-background p-4">
+                        <DAGAttributes dag={validation.dag} />
+                        {validation.dag.steps?.length ? (
+                          <DAGStepTable steps={validation.dag.steps} />
+                        ) : null}
+                      </section>
+                    )}
+                  </div>
                 )}
 
-                <section className="min-h-[420px]">
-                  <DAGEditorWithDocs
-                    value={editorValue}
-                    onChange={handleEditorChange}
-                    readOnly={!canWriteInSelectedScope}
-                    className="h-[56vh] min-h-[420px]"
-                    modelUri={editorModelUri}
-                    schema={editorSchema}
-                    headerActions={
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline">
-                          <FileCode className="mr-1 h-3 w-3" />
-                          YAML
-                        </Badge>
-                        {selectedDagFile && isSpecLoading && (
-                          <Badge variant="secondary">
-                            <RefreshCw className="mr-1 h-3 w-3 animate-spin" />
-                            Loading
+                {mainTab === 'definition' && (
+                  <section className="min-h-[420px]">
+                    <DAGEditorWithDocs
+                      value={editorValue}
+                      onChange={handleEditorChange}
+                      readOnly={!canWriteInSelectedScope}
+                      className="h-[56vh] min-h-[420px]"
+                      modelUri={editorModelUri}
+                      schema={editorSchema}
+                      headerActions={
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline">
+                            <FileCode className="mr-1 h-3 w-3" />
+                            YAML
                           </Badge>
-                        )}
-                        {hasUnsavedChanges && (
-                          <Badge variant="secondary">Unsaved</Badge>
-                        )}
-                      </div>
-                    }
-                  />
-                </section>
+                          {selectedDagFile && isSpecLoading && (
+                            <Badge variant="secondary">
+                              <RefreshCw className="mr-1 h-3 w-3 animate-spin" />
+                              Loading
+                            </Badge>
+                          )}
+                          {hasUnsavedChanges && (
+                            <Badge variant="secondary">Unsaved</Badge>
+                          )}
+                        </div>
+                      }
+                    />
+                  </section>
+                )}
               </div>
             </div>
 

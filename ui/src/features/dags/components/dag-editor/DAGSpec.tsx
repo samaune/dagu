@@ -80,6 +80,9 @@ function DAGSpec({ fileName, localDags, editorHints }: Props) {
   const { setHasUnsavedChanges } = useUnsavedChanges();
 
   const [scrollPosition, setScrollPosition] = React.useState(0);
+  const [mainTab, setMainTab] = React.useState<'diagram' | 'definition'>(
+    'diagram'
+  );
   const [activeTab, setActiveTab] = React.useState('parent');
   const [selectedSpecStepName, setSelectedSpecStepName] = React.useState<
     string | null
@@ -577,84 +580,110 @@ function DAGSpec({ fileName, localDags, editorHints }: Props) {
               />
 
               <div
-                className="flex flex-col flex-1 min-h-0 space-y-6 mb-6"
+                className="flex flex-col flex-1 min-h-0 mb-6"
                 ref={containerRef}
               >
-                {hasLocalDags && (
-                  <div className="flex-shrink-0">
-                    <div className="overflow-x-auto -mx-2 px-2 scrollbar-thin scrollbar-thumb-gray-300">
-                      <Tabs className="w-max min-w-full">
-                        <Tab
-                          isActive={activeTab === 'parent'}
-                          onClick={() => handleActiveTabChange('parent')}
-                          className="cursor-pointer whitespace-nowrap"
-                        >
-                          {data?.dag?.name} (Parent)
-                        </Tab>
-                        {localDags?.map(
-                          (localDag: components['schemas']['LocalDag']) => (
+                {/* Top-level Diagram / Definition tabs */}
+                <div className="flex-shrink-0 mb-4">
+                  <Tabs>
+                    <Tab
+                      isActive={mainTab === 'diagram'}
+                      onClick={() => setMainTab('diagram')}
+                      className="cursor-pointer"
+                    >
+                      Diagram
+                    </Tab>
+                    <Tab
+                      isActive={mainTab === 'definition'}
+                      onClick={() => setMainTab('definition')}
+                      className="cursor-pointer"
+                    >
+                      Definition
+                    </Tab>
+                  </Tabs>
+                </div>
+
+                {mainTab === 'diagram' && (
+                  <div className="flex flex-col space-y-6">
+                    {hasLocalDags && (
+                      <div className="flex-shrink-0">
+                        <div className="overflow-x-auto -mx-2 px-2 scrollbar-thin scrollbar-thumb-gray-300">
+                          <Tabs className="w-max min-w-full">
                             <Tab
-                              key={localDag.name}
-                              isActive={activeTab === localDag.name}
-                              onClick={() =>
-                                handleActiveTabChange(localDag.name)
-                              }
+                              isActive={activeTab === 'parent'}
+                              onClick={() => handleActiveTabChange('parent')}
                               className="cursor-pointer whitespace-nowrap"
                             >
-                              {localDag.name}
+                              {data?.dag?.name} (Parent)
                             </Tab>
+                            {localDags?.map(
+                              (localDag: components['schemas']['LocalDag']) => (
+                                <Tab
+                                  key={localDag.name}
+                                  isActive={activeTab === localDag.name}
+                                  onClick={() =>
+                                    handleActiveTabChange(localDag.name)
+                                  }
+                                  className="cursor-pointer whitespace-nowrap"
+                                >
+                                  {localDag.name}
+                                </Tab>
+                              )
+                            )}
+                          </Tabs>
+                        </div>
+                      </div>
+                    )}
+
+                    {(() => {
+                      if (activeTab === 'parent') {
+                        return (
+                          data?.dag && (
+                            <div className="flex-shrink-0">
+                              {renderDAGContent(data.dag, data?.errors)}
+                            </div>
                           )
-                        )}
-                      </Tabs>
-                    </div>
+                        );
+                      }
+                      const selectedLocalDag = localDags?.find(
+                        (ld: components['schemas']['LocalDag']) =>
+                          ld.name === activeTab
+                      );
+                      return (
+                        selectedLocalDag?.dag && (
+                          <div className="flex-shrink-0">
+                            {renderDAGContent(
+                              selectedLocalDag.dag,
+                              selectedLocalDag.errors
+                            )}
+                          </div>
+                        )
+                      );
+                    })()}
                   </div>
                 )}
 
-                {(() => {
-                  if (activeTab === 'parent') {
-                    return (
-                      data?.dag && (
-                        <div className="flex-shrink-0">
-                          {renderDAGContent(data.dag, data?.errors)}
-                        </div>
-                      )
-                    );
-                  }
-                  const selectedLocalDag = localDags?.find(
-                    (ld: components['schemas']['LocalDag']) =>
-                      ld.name === activeTab
-                  );
-                  return (
-                    selectedLocalDag?.dag && (
-                      <div className="flex-shrink-0">
-                        {renderDAGContent(
-                          selectedLocalDag.dag,
-                          selectedLocalDag.errors
-                        )}
-                      </div>
-                    )
-                  );
-                })()}
-
-                <DAGEditorWithDocs
-                  value={
-                    editable
-                      ? (currentValue ?? serverSpec ?? '')
-                      : (serverSpec ?? '')
-                  }
-                  readOnly={!editable}
-                  onChange={
-                    editable
-                      ? (newValue) => {
-                          setCurrentValue(newValue ?? '');
-                        }
-                      : undefined
-                  }
-                  className="min-h-[400px]"
-                  modelUri={editorModelUri}
-                  schema={editorSchema}
-                  headerActions={editorHeaderActions}
-                />
+                {mainTab === 'definition' && (
+                  <DAGEditorWithDocs
+                    value={
+                      editable
+                        ? (currentValue ?? serverSpec ?? '')
+                        : (serverSpec ?? '')
+                    }
+                    readOnly={!editable}
+                    onChange={
+                      editable
+                        ? (newValue) => {
+                            setCurrentValue(newValue ?? '');
+                          }
+                        : undefined
+                    }
+                    className="min-h-[400px]"
+                    modelUri={editorModelUri}
+                    schema={editorSchema}
+                    headerActions={editorHeaderActions}
+                  />
+                )}
               </div>
             </React.Fragment>
           )
