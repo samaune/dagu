@@ -137,7 +137,7 @@ function SidebarButton({
     <button
       onClick={onClick}
       className={cn(
-        'flex items-center gap-3 w-full p-2 rounded-md group',
+        'flex items-center gap-3 w-full p-2 group',
         sidebarItemClassName
       )}
       title={isOpen ? '' : label}
@@ -177,7 +177,7 @@ function NavItem({
     : isNavTargetActive(location, to);
 
   const linkClassName = cn(
-    'flex items-center rounded-md px-2 group relative',
+    'flex items-center px-2 group relative',
     'h-9 gap-3',
     'text-sidebar-foreground',
     isActive
@@ -331,7 +331,7 @@ function NavGroup({
     !unmountChildrenWhenCollapsed || effectivelyExpanded;
 
   const headerClassName = cn(
-    'flex items-center rounded-md px-2 group relative w-full',
+    'flex items-center px-2 group relative w-full',
     'h-9 gap-3',
     'text-sidebar-foreground',
     isChildActive && !effectivelyExpanded
