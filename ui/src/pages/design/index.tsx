@@ -162,7 +162,7 @@ function WorkflowDesignPage() {
   const [leftPanelTab, setLeftPanelTab] =
     React.useState<LeftPanelTab>('workflows');
   const [mainTab, setMainTab] = React.useState<'diagram' | 'definition'>(
-    'diagram'
+    'definition'
   );
   const [dagSearch, setDagSearch] = React.useState('');
 
@@ -692,18 +692,18 @@ function WorkflowDesignPage() {
               <div className="flex-shrink-0 border-b border-border px-4 pt-3">
                 <Tabs>
                   <Tab
-                    isActive={mainTab === 'diagram'}
-                    onClick={() => setMainTab('diagram')}
-                    className="cursor-pointer"
-                  >
-                    Diagram
-                  </Tab>
-                  <Tab
                     isActive={mainTab === 'definition'}
                     onClick={() => setMainTab('definition')}
                     className="cursor-pointer"
                   >
                     Definition
+                  </Tab>
+                  <Tab
+                    isActive={mainTab === 'diagram'}
+                    onClick={() => setMainTab('diagram')}
+                    className="cursor-pointer"
+                  >
+                    Diagram
                   </Tab>
                 </Tabs>
               </div>

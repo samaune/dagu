@@ -81,7 +81,7 @@ function DAGSpec({ fileName, localDags, editorHints }: Props) {
 
   const [scrollPosition, setScrollPosition] = React.useState(0);
   const [mainTab, setMainTab] = React.useState<'diagram' | 'definition'>(
-    'diagram'
+    'definition'
   );
   const [activeTab, setActiveTab] = React.useState('parent');
   const [selectedSpecStepName, setSelectedSpecStepName] = React.useState<
@@ -587,18 +587,18 @@ function DAGSpec({ fileName, localDags, editorHints }: Props) {
                 <div className="flex-shrink-0 mb-4">
                   <Tabs>
                     <Tab
-                      isActive={mainTab === 'diagram'}
-                      onClick={() => setMainTab('diagram')}
-                      className="cursor-pointer"
-                    >
-                      Diagram
-                    </Tab>
-                    <Tab
                       isActive={mainTab === 'definition'}
                       onClick={() => setMainTab('definition')}
                       className="cursor-pointer"
                     >
                       Definition
+                    </Tab>
+                    <Tab
+                      isActive={mainTab === 'diagram'}
+                      onClick={() => setMainTab('diagram')}
+                      className="cursor-pointer"
+                    >
+                      Diagram
                     </Tab>
                   </Tabs>
                 </div>
