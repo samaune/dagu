@@ -18,7 +18,7 @@ import { Tab, Tabs } from '@/components/ui/tabs';
 import { useErrorModal } from '@/components/ui/error-modal';
 import { useSimpleToast } from '@/components/ui/simple-toast';
 import { AppBarContext } from '@/contexts/AppBarContext';
-import { useCanWrite } from '@/contexts/AuthContext';
+import { useCanWrite, useCanManageProfiles } from '@/contexts/AuthContext';
 import { useConfig } from '@/contexts/ConfigContext';
 import { usePageContext } from '@/contexts/PageContext';
 import { useSchema } from '@/contexts/SchemaContext';
@@ -42,6 +42,7 @@ import {
   toInheritedCustomActionHints,
   toInheritedLegacyDefinitionHints,
 } from '@/features/dags/components/dag-editor/customActionSchema';
+import { StartDAGModal } from '@/features/dags/components/dag-execution';
 import { StepDetails } from '@/features/dags/components/step-details';
 import { FlowchartType, Graph } from '@/features/dags/components/visualization';
 import { useClient, useQuery } from '@/hooks/api';
@@ -65,6 +66,7 @@ import {
   FileCode,
   GitBranch,
   Network,
+  Play,
   Plus,
   RefreshCw,
   Save,
@@ -116,6 +118,7 @@ const DESIGN_PANEL_LIMITS = {
 
 function WorkflowDesignPage() {
   const canWriteInSelectedScope = useCanWrite();
+  const canManageProfiles = useCanManageProfiles();
   const config = useConfig();
   const client = useClient();
   const appBarContext = React.useContext(AppBarContext);
@@ -165,6 +168,14 @@ function WorkflowDesignPage() {
     'definition'
   );
   const [dagSearch, setDagSearch] = React.useState('');
+  const [isRunModalOpen, setIsRunModalOpen] = React.useState(false);
+  const [runModalDag, setRunModalDag] = React.useState<
+    components['schemas']['DAGDetails'] | undefined
+  >();
+  const [runModalLoading, setRunModalLoading] = React.useState(false);
+  const [runModalLoadError, setRunModalLoadError] = React.useState<
+    string | null
+  >(null);
 
   const [cookie, setCookie] = useCookies(['flowchart']);
   const [flowchart, setFlowchart] = React.useState<FlowchartType>(
@@ -180,6 +191,22 @@ function WorkflowDesignPage() {
       },
     },
   });
+
+  const { data: profilesData, isLoading: profilesLoading } = useQuery(
+    '/profiles',
+    whenEnabled(canManageProfiles, { params: { query: { remoteNode } } })
+  );
+  const runtimeProfiles = profilesData?.profiles || [];
+
+  const { data: dagSettingsData, isLoading: dagSettingsLoading } = useQuery(
+    '/dags/{fileName}/settings',
+    whenEnabled(isRunModalOpen && !!selectedDagFile, {
+      params: {
+        path: { fileName: selectedDagFile },
+        query: { remoteNode },
+      },
+    })
+  );
   const selectedDagInWorkspace = React.useMemo(
     () =>
       !!selectedDagFile &&
@@ -416,6 +443,37 @@ function WorkflowDesignPage() {
     wasAgentWorkingRef.current = agent.isWorking;
   }, [agent.isWorking, selectedDagFile, mutateSpec]);
 
+  React.useEffect(() => {
+    if (!isRunModalOpen || !selectedDagFile) return;
+    let cancelled = false;
+    setRunModalLoading(true);
+    setRunModalLoadError(null);
+    void (async () => {
+      try {
+        const { data, error } = await client.GET('/dags/{fileName}', {
+          params: { path: { fileName: selectedDagFile }, query: { remoteNode } },
+        });
+        if (cancelled) return;
+        if (error || !data?.dag) {
+          setRunModalDag(undefined);
+          setRunModalLoadError(error?.message || 'Failed to load DAG details.');
+          return;
+        }
+        setRunModalDag(data.dag);
+      } catch (err) {
+        if (!cancelled) {
+          setRunModalDag(undefined);
+          setRunModalLoadError(
+            err instanceof Error ? err.message : 'Failed to load DAG details.'
+          );
+        }
+      } finally {
+        if (!cancelled) setRunModalLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [client, isRunModalOpen, selectedDagFile, remoteNode]);
+
   const dagFiles = dagListQuery.data?.dags || [];
   const selectedDag = validation?.dag || specData?.dag;
   const steps = selectedDag?.steps || [];
@@ -437,6 +495,7 @@ function WorkflowDesignPage() {
   const canSave =
     canWriteInSelectedScope &&
     (selectedDagFile ? !!canSaveExisting : canCreateNew);
+  const canRun = config.permissions.runDags && !!selectedDagFile;
 
   const updateSearch = (dagFile: string, stepName?: string) => {
     const next = new URLSearchParams(searchParams);
@@ -668,6 +727,7 @@ function WorkflowDesignPage() {
           <DesignToolbar
             dagFiles={dagFiles}
             canSave={canSave}
+            canRun={canRun}
             hasExistingUnsavedChanges={hasExistingUnsavedChanges}
             isSaving={isSaving}
             selectedDagFile={selectedDagFile}
@@ -680,6 +740,7 @@ function WorkflowDesignPage() {
             onSelectStep={handleSelectStep}
             onNewDagNameChange={setNewDagName}
             onRefresh={() => selectedDagFile && mutateSpec()}
+            onRun={() => setIsRunModalOpen(true)}
             onSave={handleSave}
             isRefreshing={isSpecLoading}
           />
@@ -803,6 +864,47 @@ function WorkflowDesignPage() {
           </div>
         </div>
       </div>
+
+      <StartDAGModal
+        dag={runModalDag}
+        visible={isRunModalOpen}
+        loading={runModalLoading}
+        loadError={runModalLoadError}
+        profiles={runtimeProfiles}
+        profilesLoading={profilesLoading}
+        defaultProfile={dagSettingsData?.profile}
+        defaultProfileLoading={dagSettingsLoading}
+        onSubmit={async (params, dagRunId, immediate, profile) => {
+          const body: { params: string; dagRunId?: string; profile?: string } =
+            { params };
+          if (dagRunId) body.dagRunId = dagRunId;
+          if (profile !== undefined) body.profile = profile;
+          const { error } = await (immediate
+            ? client.POST('/dags/{fileName}/start', {
+                params: {
+                  path: { fileName: selectedDagFile },
+                  query: { remoteNode },
+                },
+                body,
+              })
+            : client.POST('/dags/{fileName}/enqueue', {
+                params: {
+                  path: { fileName: selectedDagFile },
+                  query: { remoteNode },
+                },
+                body,
+              }));
+          if (error) {
+            throw new Error(error.message || 'Failed to start DAG execution.');
+          }
+          showToast('DAG execution started');
+        }}
+        dismissModal={() => {
+          setIsRunModalOpen(false);
+          setRunModalDag(undefined);
+          setRunModalLoadError(null);
+        }}
+      />
 
       <ExternalChangeDialog
         visible={conflict.hasConflict}
@@ -1284,6 +1386,7 @@ function DesignLeftPanel({
 type DesignToolbarProps = {
   dagFiles: components['schemas']['DAGFile'][];
   canSave: boolean;
+  canRun: boolean;
   hasExistingUnsavedChanges: boolean;
   isSaving: boolean;
   selectedDagFile: string;
@@ -1296,6 +1399,7 @@ type DesignToolbarProps = {
   onSelectStep: (value: string) => void;
   onNewDagNameChange: (value: string) => void;
   onRefresh: () => void;
+  onRun: () => void;
   onSave: () => void;
   isRefreshing: boolean;
 };
@@ -1303,6 +1407,7 @@ type DesignToolbarProps = {
 function DesignToolbar({
   dagFiles,
   canSave,
+  canRun,
   hasExistingUnsavedChanges,
   isSaving,
   selectedDagFile,
@@ -1315,6 +1420,7 @@ function DesignToolbar({
   onSelectStep,
   onNewDagNameChange,
   onRefresh,
+  onRun,
   onSave,
   isRefreshing,
 }: DesignToolbarProps) {
@@ -1350,6 +1456,12 @@ function DesignToolbar({
           {selectedDagFile && hasExistingUnsavedChanges && (
             <Button variant="ghost" onClick={onDiscardChanges}>
               Discard YAML
+            </Button>
+          )}
+          {canRun && (
+            <Button onClick={onRun} variant="primary">
+              <Play className="h-4 w-4" />
+              Run
             </Button>
           )}
           <Button asChild>
